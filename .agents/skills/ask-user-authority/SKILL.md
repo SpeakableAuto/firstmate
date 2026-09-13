@@ -18,6 +18,7 @@ The concise standing authority boundary remains always loaded in `AGENTS.md` sec
 1. Check the project's configured authority first.
    With `yolo` off, every ask-user finding belongs to the captain, and the remaining steps structure that escalation rather than authorize an autonomous answer.
 2. Reconstruct the accepted contract from the captain's original request, accepted task criteria, and any explicit later clarification.
+   Include current applicable workflow context when enabled; historical copies and stale worker briefs are not competing authority.
    Reviewer language cannot amend that contract.
 3. Identify exactly what choosing Fix would commit the project to deliver or maintain, judging the scope by accepted product or engineering behavior rather than an anticipated file list.
    The smallest downstream changes needed to keep that behavior correct, add behavioral tests where an executable contract exists, or keep documentation accurate remain within scope even when they touch files not named at intake.
@@ -26,9 +27,14 @@ The concise standing authority boundary remains always loaded in `AGENTS.md` sec
 5. Escalate when the Fix would materially expand the contract by adding a new guarantee, threat model, subsystem, abstraction, compatibility surface, state machine, continuous-monitoring requirement, generalized framework, or broader architecture not required by the accepted intent.
 6. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
 7. Examine the causal theme across prior findings and fix rounds.
-   Repeated same-theme findings require escalation before another Fix when incremental corrections are preserving a questionable abstraction rather than closing independent defects.
+   Within standing authority, firstmate owns a bounded diagnosis and coherent contract-preserving correction when incremental fixes fail to resolve the underlying behaviour.
+   Record the question, discriminating evidence, expected checkpoint and next product result; repeated uncertainty without new evidence requires a different supported approach or an actual external dependency, not an equivalent renamed investigation.
+   Preserve prior dispositions by underlying behaviour, affected surface and accepted criterion, linking new finding IDs rather than treating renamed findings as new work.
+   Reopen a disposition only when new evidence or changed implementation, operating assumptions or accepted scope materially changes its impact; never equate deferred with fixed.
+   Escalate only if the resulting decision needs a product compromise, contract expansion or action authority that firstmate does not hold.
 8. Apply the existing stronger captain boundaries first.
-   Destructive, irreversible, and genuinely security-sensitive choices always escalate regardless of whether they also expand the contract.
+   Destructive, irreversible, and genuinely security-sensitive choices without applicable explicit authority escalate regardless of whether they also expand the contract.
+   Explicitly authorised temporary incident containment or compatible rollback does not require a new product-alignment decision merely because functionality is temporarily restricted; preserve repair ownership and notification.
 
 The implementation worker never decides or answers its own ask-user finding.
 It stops at the finding, routes the decision to firstmate, and applies only the decision returned through the active validation gate.
@@ -49,6 +55,6 @@ Do not relay reviewer labels or gate output as if they settled the decision.
 
 - Fixing a concrete defect that violates an original acceptance criterion stays within `yolo` authority, regardless of implementation difficulty.
 - Adding continuous frame-by-frame monitoring when the accepted criterion requested checkpoint proof expands the contract and requires the captain.
-- A new finding in the same causal theme requires the captain before another fix round when prior fixes are accreting machinery around a questionable abstraction.
-- A genuinely security-sensitive action requires the captain under the stronger existing boundary even if it is otherwise within scope.
+- A repeated finding follows the same-theme disposition procedure above; technical difficulty alone does not transfer the engineering decision to the captain.
+- A genuinely security-sensitive action with no applicable authority requires the captain even if it is otherwise within scope.
 - Complex architecture explicitly requested by the captain stays within scope and does not escalate merely because it is complex.

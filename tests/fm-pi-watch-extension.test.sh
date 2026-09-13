@@ -64,6 +64,7 @@ test_pi_extension_reports_external_healthy_watcher() {
   repo="$TMP_ROOT/pi-external-healthy-root"
   home="$TMP_ROOT/pi-external-healthy-home"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -142,6 +143,7 @@ test_pi_tool_returns_agent_tool_result() {
   repo="$TMP_ROOT/pi-tool-result-root"
   home="$TMP_ROOT/pi-tool-result-home"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -206,6 +208,7 @@ test_pi_redundant_tool_call_is_owned_noop() {
   log="$TMP_ROOT/pi-redundant-tool.log"
   stop="$TMP_ROOT/pi-redundant-tool.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -268,6 +271,7 @@ test_pi_scheduled_retry_call_is_owned_noop() {
   home="$TMP_ROOT/pi-scheduled-retry-home"
   log="$TMP_ROOT/pi-scheduled-retry.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -326,6 +330,7 @@ test_pi_actionable_close_starts_single_successor_before_delivery() {
   log="$TMP_ROOT/pi-continuous-rearm.log"
   stop="$TMP_ROOT/pi-continuous-rearm.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -415,6 +420,7 @@ test_pi_hung_successor_falls_back_to_typed_wake() {
   home="$TMP_ROOT/pi-hung-successor-home"
   log="$TMP_ROOT/pi-hung-successor.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -482,6 +488,7 @@ test_pi_unretired_successor_falls_back_without_retry() {
   log="$TMP_ROOT/pi-unretired-successor.log"
   release="$TMP_ROOT/pi-unretired-successor.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -557,6 +564,7 @@ test_pi_late_unretired_close_resumes_supervision() {
     release="$TMP_ROOT/pi-late-$kind.release"
     stop="$TMP_ROOT/pi-late-$kind.stop"
     mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
     install_pi_watch_extension_fixture "$repo"
     plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
     cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -650,6 +658,7 @@ test_pi_empty_close_retries_instead_of_disappearing() {
   log="$TMP_ROOT/pi-empty-close.log"
   stop="$TMP_ROOT/pi-empty-close.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -708,6 +717,7 @@ test_pi_established_empty_close_honors_retry_limit() {
   home="$TMP_ROOT/pi-established-empty-close-home"
   log="$TMP_ROOT/pi-established-empty-close.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -760,6 +770,7 @@ test_pi_actionable_close_rechecks_session_lock() {
   log="$TMP_ROOT/pi-close-lock.log"
   release="$TMP_ROOT/pi-close-lock.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -818,6 +829,7 @@ test_pi_arm_distinguishes_session_lock_ownership() {
   home="$TMP_ROOT/pi-lock-ownership-home"
   log="$TMP_ROOT/pi-lock-ownership.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -900,6 +912,7 @@ test_pi_session_transition_generation_owner() {
   child_pid_file="$TMP_ROOT/pi-session-transition-child.pid"
   arm_log="$TMP_ROOT/pi-session-transition-arm.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -1079,6 +1092,7 @@ test_pi_process_exit_cleanup_listener_lifecycle() {
   repo="$TMP_ROOT/pi-exit-listener-root"
   home="$TMP_ROOT/pi-exit-listener-home"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   : > "$repo/bin/fm-watch-arm.sh"
@@ -1124,6 +1138,7 @@ test_pi_process_exit_cleanup_stops_arm_child() {
   cleanup_log="$TMP_ROOT/pi-process-exit-cleaned"
   pid_file="$TMP_ROOT/pi-process-exit-child.pid"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -1216,9 +1231,11 @@ test_opencode_primary_watch_plugin_uses_effective_state_home() {
   home="$TMP_ROOT/opencode-effective-state-home"
   log="$TMP_ROOT/opencode-effective-state.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
-  : > "$home/state/task.meta"
+  mkdir -p "$home/data"
+  printf '## In flight\n- [ ] product-a - Accepted product (repo: alpha) (kind: program)\n' > "$home/data/backlog.md"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'home=%s root=%s\n' "${FM_HOME:-}" "${FM_ROOT_OVERRIDE:-}" >> "${FM_ARM_LOG:?}"
@@ -1256,7 +1273,7 @@ EOF
   status=$?
   expect_code 0 "$status" "OpenCode watch plugin must use FM_HOME state outside the repo root"
   [ -z "$out" ] || fail "OpenCode effective-state test printed output: $out"
-  pass "OpenCode watcher plugin uses the effective FM_HOME state"
+  pass "OpenCode watcher plugin arms an accepted zero-worker program from effective FM_HOME"
 }
 
 test_opencode_primary_watch_plugin_sources_effective_config() {
@@ -1266,6 +1283,7 @@ test_opencode_primary_watch_plugin_sources_effective_config() {
   home="$TMP_ROOT/opencode-effective-config-home"
   log="$TMP_ROOT/opencode-effective-config.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   printf 'export FM_POLL=7\n' > "$home/config/x-mode.env"
@@ -1315,6 +1333,7 @@ test_opencode_primary_watch_plugin_requires_session_lock() {
   home="$TMP_ROOT/opencode-lock-home"
   log="$TMP_ROOT/opencode-lock.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -1369,6 +1388,7 @@ test_opencode_watch_arm_coordinator_respects_primary_scope() {
   log="$TMP_ROOT/opencode-coordinator.log"
   fm_git_worktree "$base" "$repo" fm/opencode-coordinator
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -1415,6 +1435,7 @@ test_opencode_primary_watch_plugin_rearms_after_wake() {
   log="$TMP_ROOT/opencode-rearm.log"
   stop="$TMP_ROOT/opencode-rearm.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -1509,6 +1530,7 @@ test_opencode_pre_ready_actionable_close_preserves_its_successor() {
   retired="$TMP_ROOT/opencode-pre-ready-actionable.retired"
   stop="$TMP_ROOT/opencode-pre-ready-actionable.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -1589,6 +1611,7 @@ test_opencode_hung_successor_falls_back_to_typed_wake() {
   home="$TMP_ROOT/opencode-hung-successor-home"
   log="$TMP_ROOT/opencode-hung-successor.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -1658,6 +1681,7 @@ test_opencode_unretired_successor_falls_back_without_retry() {
   log="$TMP_ROOT/opencode-unretired-successor.log"
   release="$TMP_ROOT/opencode-unretired-successor.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -1735,6 +1759,7 @@ test_opencode_late_unretired_close_resumes_supervision() {
     release="$TMP_ROOT/opencode-late-$kind.release"
     stop="$TMP_ROOT/opencode-late-$kind.stop"
     mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
     git init -q "$repo"
     : > "$repo/AGENTS.md"
     : > "$home/state/task.meta"
@@ -1830,6 +1855,7 @@ test_opencode_empty_close_retries_instead_of_disappearing() {
   log="$TMP_ROOT/opencode-empty-close.log"
   stop="$TMP_ROOT/opencode-empty-close.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -1889,6 +1915,7 @@ test_opencode_established_empty_close_honors_retry_limit() {
   home="$TMP_ROOT/opencode-established-empty-close-home"
   log="$TMP_ROOT/opencode-established-empty-close.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -1943,6 +1970,7 @@ test_opencode_actionable_close_rechecks_session_lock() {
   log="$TMP_ROOT/opencode-close-lock.log"
   release="$TMP_ROOT/opencode-close-lock.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -2009,6 +2037,7 @@ test_opencode_watch_arm_coordinates_with_turnend_guard() {
   log="$TMP_ROOT/opencode-coordinate-arm.log"
   guard_log="$TMP_ROOT/opencode-coordinate-guard.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -2082,6 +2111,7 @@ test_opencode_healthy_arm_output_does_not_suppress_guard() {
   log="$TMP_ROOT/opencode-external-healthy-arm.log"
   guard_log="$TMP_ROOT/opencode-external-healthy-guard.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"

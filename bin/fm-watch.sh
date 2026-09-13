@@ -86,6 +86,8 @@ mkdir -p "$STATE"
 # cheap when no records exist and never scrapes secondmate conversation.
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
+# shellcheck source=bin/fm-programs-lib.sh
+. "$SCRIPT_DIR/fm-programs-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 
@@ -840,6 +842,11 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+
+  # Program continuation is independent of worker/status presence and heartbeat
+  # change filtering. Ordinary check transport also reaches the away daemon.
+  program_wake=$(fm_program_reconcile_tick "$STATE") || exit 1
+  [ -z "$program_wake" ] || wake "$program_wake"
 
   # Parent-owned secondmate pending-reply reconciliation: resolve correlated
   # parent reports, observe backend busy/idle turn completion, send one recovery

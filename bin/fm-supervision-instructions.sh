@@ -159,6 +159,7 @@ repair_line() {
 }
 
 ordinary_wake_line() {
+  printf '%s\n' '- Delivery continuation: after handling a wake or timeout, reconcile every accepted program from bin/fm-programs.sh --json; task completion does not close the product obligation.'
   case "$HARNESS" in
     claude)
       printf '%s\n' '- Ordinary wake: the Stop-owned auto-arm (bin/fm-claude-stop-autoarm.sh) already owns watcher continuity; drain and handle the wake, and do not arm another cycle yourself.'

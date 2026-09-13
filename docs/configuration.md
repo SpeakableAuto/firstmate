@@ -636,3 +636,14 @@ Only after those retries exhaust does it remove the lock, and only when it is pr
 A live lock, a missing `lsof`, any failed check, or any other fetch failure keeps today's behavior.
 Every wait, retry, and removal is printed to stderr, and a successful recovery also prints one `recovered:` summary line to stdout so a session-start refresh - which discards fleet-sync stderr and relays only stdout - still surfaces it.
 The shared staleness proof lives in `bin/fm-lock-lib.sh`, which both `fm-teardown.sh` and `fm-fleet-sync.sh` use.
+
+## Accepted delivery programs
+
+Accepted commissions remain native in-flight `kind=program` backlog records independently of worker metadata.
+`bin/fm-programs-lib.sh` owns their optional body fields, read-only projection and due-check receipt contract; `bin/fm-programs.sh --json` lists every accepted program without a display cap.
+The existing watcher retains future rechecks even with zero workers and emits ordinary durable check events in attended and away mode.
+A check requests engineering reconciliation; it grants no new scope, dispatch, merge or live-action authority.
+Explicit user pauses remain quiet, while technical holds retain their next check and never become implicit completion.
+`state/.program-reconciliation` is disposable debounce state, not a second work database.
+`FM_PROGRAM_RECHECK_SECS` sets unchanged-program recheck spacing (default 900 seconds, minimum 60); pending queue records are not multiplied.
+`tests/fm-watch-checkpoint.test.sh` exercises zero-worker continuation and future waits through the actual checkpoint and watcher.

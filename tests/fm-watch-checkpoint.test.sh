@@ -87,7 +87,106 @@ test_existing_singleton_watcher_is_not_success() {
   pass "checkpoint rejects an existing watcher singleton as unowned"
 }
 
+test_program_continuation_without_workers() {
+  local home out status projection
+  home=$(make_home programs)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] product-a - First accepted product (repo: alpha) (kind: program)
+  children: child-a
+- [ ] product-b - Second accepted product (repo: beta) (kind: program)
+  recheck-at: 2099-01-01T00:00:00Z
+## Queued
+- [ ] uncommissioned - Idea only (repo: gamma) (kind: program)
+## Done
+- [x] child-a - Source ready (repo: alpha) (kind: ship)
+EOF
+  projection=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "program projection failed"
+  printf '%s' "$projection" | jq -e '
+    .supervision_needed and (.programs | length == 2)
+    and (.programs | any(.id == "product-a" and .due and .children[0].state == "done"))
+    and (.programs | any(.id == "product-b" and (.due | not)))
+  ' >/dev/null || fail "accepted programs lost or child completion mistaken for parent completion"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home"     || fail "zero-worker accepted projects do not require supervision"
+  status=0
+  out=$(FM_HOME="$home" FM_POLL=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 4) || status=$?
+  expect_code 0 "$status" "zero-worker program wake"
+  assert_contains "$out" 'check: program-reconcile' "program work did not wake checkpoint"
+  assert_contains "$out" 'product-a' "due project absent from wake"
+  assert_not_contains "$out" 'uncommissioned' "queued idea silently commissioned"
+  # Outstanding event is durable and never multiplied by another tick.
+  FM_HOME="$home" bash -c '. "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"; fm_program_reconcile_tick "$2/state"' _ "$ROOT" "$home" >/dev/null
+  [ "$(awk -F '\t' '$3 == "check" && $4 == "program-reconcile" {n++} END {print n+0}' "$home/state/.wake-queue")" -eq 1 ]     || fail "duplicate program event while unacknowledged"
+  pass "multiple accepted projects survive zero workers and one child finishing, with durable deduplicated wake"
+}
+
+test_program_future_pause_and_parse_failure() {
+  local home status out
+  home=$(make_home future-program)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] future - Future checkpoint (repo: alpha) (kind: program)
+  recheck-at: 2099-01-01T00:00:00Z
+- [ ] paused - Explicit pause (repo: beta) (kind: program)
+  continuation: paused
+EOF
+  FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json | jq -e '.supervision_needed and ([.programs[] | select(.due)] | length == 0)' >/dev/null     || fail "future checkpoint either forgotten or prematurely due"
+  status=0
+  out=$(FM_HOME="$home" FM_POLL=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 1) || status=$?
+  expect_code 124 "$status" "future project quiet wait"
+  assert_contains "$out" 'checkpoint:' "future program should quietly keep checkpointing"
+  printf '  recheck-at: not-a-date\n' >> "$home/data/backlog.md"
+  FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json | jq -e '.supervision_needed and (.errors | length > 0)' >/dev/null     || fail "invalid continuation input silently became completed or inactive"
+  pass "future checks retain supervision, explicit pauses stay quiet, and malformed timing is visible"
+}
+
 test_quiet_checkpoint_exits_124_cleanly
 test_signal_passes_through_and_exits_zero
 test_registered_check_uses_preserved_watcher_environment
 test_existing_singleton_watcher_is_not_success
+
+test_program_continuation_without_workers
+test_program_future_pause_and_parse_failure
+
+test_program_malformed_and_state_override() {
+  local home other json
+  home=$(make_home malformed-program)
+  other=$(make_home unrelated-home)
+  printf '## In flight\n- broken record (kind: program)\n' > "$home/data/backlog.md"
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "malformed program view unavailable"
+  printf '%s' "$json" | jq -e '.supervision_needed and (.errors | length > 0)' >/dev/null     || fail "malformed program silently disappeared"
+  FM_HOME="$other" FM_STATE_OVERRIDE="$home/state" bash -c '
+    . "$1/bin/fm-supervision-lib.sh"
+    fm_supervision_needed "$2/state"
+  ' _ "$ROOT" "$home" || fail "state override read unrelated home backlog"
+  pass "malformed program keeps recovery visible and state override isolates the correct backlog"
+}
+test_program_malformed_and_state_override
+
+test_program_hold_rechecks_after_ack_without_spinning() {
+  local home out seq generation
+  home=$(make_home held-program)
+  printf '## In flight\n- [ ] delivery - Accepted delivery (repo: alpha) (kind: program) (hold: provider unavailable) (hold-kind: external)\n' > "$home/data/backlog.md"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1000 FM_PROGRAM_RECHECK_SECS=60 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "initial held-program check failed"
+  assert_contains "$out" 'program-reconcile' "held obligation disappeared"
+  seq=$(awk -F '\t' 'END {print $2}' "$home/state/.wake-queue")
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2>&1) || fail "program event presentation failed"
+  generation=$(printf '%s\n' "$out" | sed -n 's/.*--recovery-generation \([^ ]*\).*/\1/p' | head -1)
+  FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$generation" >/dev/null 2>&1     || fail "program event acknowledgement failed"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1001 FM_PROGRAM_RECHECK_SECS=60 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "quiet held-program tick failed"
+  [ -z "$out" ] || fail "unchanged held program spun immediately after ack"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1060 FM_PROGRAM_RECHECK_SECS=60 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "due held-program tick failed"
+  assert_contains "$out" 'program-reconcile' "held program had no durable later recheck"
+  [ ! -e "$home/state/delivery.meta" ] || fail "program continuation invented a worker"
+  pass "external hold remains quiet between acknowledged due checks and wakes later without dummy worker"
+}
+test_program_hold_rechecks_after_ack_without_spinning

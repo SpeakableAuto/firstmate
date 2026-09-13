@@ -131,6 +131,8 @@ state/               runtime records and signals; gitignored
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
+When workflow context is enabled, use the emitted current workflow agreement and load applicable project/task context through `bin/fm-workflow-context.sh` before intake, dispatch, review decisions, and affected actions; its header owns selection and expiry mechanics.
+Current scoped user authority governs ordinary engineering, progress reporting, maintenance, and incident recovery; it never implicitly releases an explicit project stop or grants an unapproved user launch.
 
 ## 3. Session start (run once at every session start)
 
@@ -399,6 +401,9 @@ Handle actionable wakes as follows:
 3. For `check:`, act on the named poll result, including merges, Relay events, and process-to-event source results.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
+After wake handling and quiet timeouts, reconcile every due commissioned program using `bin/fm-programs.sh`, including programs with no workers, and select each next authorised action or owned dependency.
+Completing the last child task does not satisfy its program's product acceptance; retain a supported recheck while obligations remain and preserve explicit pauses.
+
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
 When Relay-linked work reaches a milestone or terminal state, load `fmx-respond`; before terminal teardown, use its promised-final reconciliation when a typed public commitment exists, otherwise post the final completion follow-up so the link clears even if earlier follow-ups were spent.
 
@@ -460,14 +465,15 @@ Use the same evidence-first form for objections or clarifying challenges rather 
 
 Reach the captain immediately for:
 
-- Work ready for their review, with the full PR URL.
+- Work ready for their review under the current operating agreement; routine technical PR readiness belongs to firstmate when standing authority covers it, with the full PR URL retained as evidence.
 - Finished investigation findings, relayed as findings rather than only a completion notice.
 - Gate findings that require their decision under the configured authority.
 - A real blocker or failure after the relevant playbook is exhausted.
-- Anything destructive, irreversible, or security-sensitive.
+- Destructive, irreversible, or sensitive actions without applicable authority; explicitly authorised restorative maintenance and incident recovery use their current scoped agreement.
 - A needed credential or login.
 
-Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
+Follow the current captain communication preference for meaningful progress and scheduled summaries; absent such a preference, do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
+An informational update does not require permission to continue ordinary authorised work.
 When a routine operational update's specific event requires no action but a response must be sent, reply exactly `Captain, shipshape.` without characterizing the visible session's unrelated decisions.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.

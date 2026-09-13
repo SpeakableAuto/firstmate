@@ -12,6 +12,9 @@
 # live watcher process means per supervision model. The status fields here retain
 # the beacon-age details used in their messages.
 
+# shellcheck source=bin/fm-programs-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-programs-lib.sh"
+
 # Portable mtime; Linux stat lacks -f, macOS stat lacks -c.
 fm_sup_stat_mtime() {
   if [ "$(uname)" = Darwin ]; then
@@ -25,8 +28,9 @@ fm_sup_stat_mtime() {
 # Populates, for the state dir at $1:
 #   FM_SUP_IN_FLIGHT      count of state/*.meta (in-flight tasks)
 #   FM_SUP_SOURCES        count of registered process-to-event sources
+#   FM_SUP_PROGRAMS       count of non-paused programs, or unknown on read failure
 #   FM_SUP_NEEDED         true/false - in-flight work, an X-mode relay poll, or a
-#                         registered event source (a source is a wait on an
+#                         accepted unfinished program, or registered event source (a source is a wait on an
 #                         external process, not a task, so it has no metadata)
 #   FM_SUP_WATCHER_FRESH  true/false - a watcher beacon within the grace window
 #   FM_SUP_BEACON_DESC    human-readable beacon age, for banners ("never" if absent)
@@ -34,7 +38,7 @@ fm_sup_stat_mtime() {
 # grace-seconds defaults to $FM_GUARD_GRACE, then 300, matching fm-guard.sh.
 # Always returns 0; callers read the vars, or use fm_supervision_unhealthy below.
 fm_supervision_status() {
-  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} meta source beat m age
+  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} meta source beat m age programs
   FM_SUP_IN_FLIGHT=0
   FM_SUP_NEEDED=false
   FM_SUP_WATCHER_FRESH=false
@@ -53,6 +57,27 @@ fm_supervision_status() {
   if [ "$FM_SUP_IN_FLIGHT" -gt 0 ] \
     || [ -f "$state/x-watch.check.sh" ] \
     || [ "$FM_SUP_SOURCES" -gt 0 ]; then
+    FM_SUP_NEEDED=true
+  fi
+
+  # Future checks retain the tokenless watcher; explicit user pauses do not.
+  # shellcheck disable=SC2034 # Public status consumed by guard/stop adapters.
+  FM_SUP_PROGRAMS=0
+  if programs=$(fm_programs_json "$(fm_program_backlog_path "$state")"); then
+    FM_SUP_PROGRAMS=$(printf '%s' "$programs" | jq '[.programs[] | select(.supervision_needed)] | length')
+    [ "$(printf '%s' "$programs" | jq -r '.supervision_needed')" = false ] || FM_SUP_NEEDED=true
+    if [ "$(printf '%s' "$programs" | jq '.errors | length')" -gt 0 ]; then
+      FM_SUP_PROGRAMS=unknown
+    fi
+    if [ -f "$state/.program-reconciliation" ] && [ ! -f "$(fm_program_backlog_path "$state")" ]; then
+      # shellcheck disable=SC2034 # Public status consumed by guard/stop adapters.
+    FM_SUP_PROGRAMS=unknown
+      FM_SUP_NEEDED=true
+    fi
+  else
+    # Unknown input is not proof of an empty portfolio.
+    # shellcheck disable=SC2034 # Public status consumed by guard/stop adapters.
+    FM_SUP_PROGRAMS=unknown
     FM_SUP_NEEDED=true
   fi
 
