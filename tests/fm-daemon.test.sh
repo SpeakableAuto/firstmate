@@ -22,6 +22,9 @@ if [ -z "${FM_TEST_DAEMON_SOURCED:-}" ]; then
 fi
 
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
+[ "$(classify_check 'check: program-reconcile: revisit due programs and surfaced program errors')" = 'escalate|check: program-reconcile: revisit due programs and surfaced program errors' ]   || fail "away supervisor swallowed a due program event as a quiet heartbeat"
+pass "away supervisor forwards due-program checks through existing escalation transport"
+
 FM_DAEMON_PRIMARY_HARNESS=claude
 export FM_DAEMON_PRIMARY_HARNESS
 

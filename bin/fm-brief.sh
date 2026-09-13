@@ -55,6 +55,9 @@
 # over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
 # self-governance section when a touched project AGENTS.md lacks it.
 # Refuses to overwrite an existing brief.
+# Opt-in scoped workflow context is rendered by fm-workflow-context.sh into a
+# separate private operational section; a missing/invalid selected record refuses the
+# scaffold before its brief is written. Secondmate charters load their own home.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -168,6 +171,25 @@ fi
 
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
+WORKFLOW_CONTEXT=
+if [ "$KIND" != secondmate ]; then
+  WORKFLOW_CONTEXT=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" \
+    "$SCRIPT_DIR/fm-workflow-context.sh" project "${POS[1]:-}" --task "$ID") || exit 1
+fi
+PRIVATE_WORKFLOW_CONTEXT=
+if [ -n "$WORKFLOW_CONTEXT" ]; then
+  IFS= read -r -d '' PRIVATE_WORKFLOW_CONTEXT <<EOF || true
+# Private operational context - never publish
+This section is private operating guidance, outside the Task and its publishable implementation intent.
+Do not copy its policy prose, source paths, refresh commands or private references into \`--intent\`, PRs, commits, reports or evidence artifacts.
+Carry only necessary task acceptance semantics, expressed without private policy text or provenance; ask Firstmate for a sanitized requirement if that separation is unclear.
+Apply the guidance while working, but never attach this section or the complete brief to an outbound artifact.
+
+BEGIN PRIVATE WORKFLOW CONTEXT
+$WORKFLOW_CONTEXT
+END PRIVATE WORKFLOW CONTEXT
+EOF
+fi
 mkdir -p "$DATA/$ID"
 
 shell_quote() {
@@ -342,6 +364,8 @@ The report must stand alone: what you did, what you found, the evidence (command
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/decision-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
+
+$PRIVATE_WORKFLOW_CONTEXT
 EOF
 echo "scaffolded: $BRIEF (scout; replace {TASK})"
 exit 0
@@ -391,6 +415,7 @@ Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 You drive no-mistakes by responding to its gates, not by implementing fixes.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
 When starting no-mistakes, make \`--intent\` preserve all relevant content from this brief's \`# Task\` section plus every later accepted Firstmate requirement, clarification, constraint, exclusion, and supersession, carrying only each requirement's current accepted form; retain direct requirements instead of substituting a diff summary, and exclude generic operational, status, delivery, and other scaffold boilerplate unless it is task-specific.
+The private operational context is never part of \`--intent\` or any PR, commit, report or evidence artifact; follow its outbound-content boundary and distill only necessary task acceptance semantics without private details.
 Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
 
 Two firstmate-specific rules layer on top of that guidance:
@@ -460,5 +485,7 @@ If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, ad
 Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
 
 $DOD
+
+$PRIVATE_WORKFLOW_CONTEXT
 EOF
 echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"

@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.js";
 
@@ -104,11 +104,17 @@ async function isPrimaryRoot(root, home) {
 function shouldArm(paths) {
   if (existsSync(`${paths.state}/.afk`)) return false;
   if (existsSync(`${paths.config}/x-mode.env`)) return true;
-  try {
-    return readdirSync(paths.state).some((name) => name.endsWith(".meta"));
-  } catch {
-    return false;
-  }
+  const result = spawnSync("bash", ["-c",
+    '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2"',
+    "firstmate-supervision", paths.root, paths.state], {
+    env: { ...process.env, FM_HOME: paths.home, FM_STATE_OVERRIDE: paths.state },
+    timeout: 2000,
+    encoding: "utf8",
+    maxBuffer: 65536,
+  });
+  // Only a proved false predicate permits sleep. An unavailable read should
+  // retain continuity so the existing recovery path can report the failure.
+  return result.status !== 1;
 }
 
 async function sessionOwnsLock(paths) {

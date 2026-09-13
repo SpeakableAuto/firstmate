@@ -10,9 +10,9 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 
 This section is the single owner of the top-level operational-home layout; producer script headers and their help own exact child-file fields and mutation contracts.
 The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
-`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, and scout reports.
+`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, scout reports, and optional indexed workflow instructions under `data/workflow/`.
 `state/` holds runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, inactive terminal-outcome receipts under `state/terminal-outcomes/`, away-mode state, generated Relay artifacts, private secondmate config-reread generations with their retry and quarantine state, and parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
-`config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
+`config/` holds local gitignored operating choices, including the optional `config/workflow-context` selector, and `projects/` holds the local project clones that Firstmate reads but changes only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
 
 `bin/fm-spawn.sh` owns the base task-metadata fields it emits, while the runtime-backend section below owns backend-specific fields and selector interpretation.
 The producing PR and Relay helpers own the fields they append, `bin/fm-classify-lib.sh` owns status-event vocabulary, and `bin/fm-crew-state.sh` owns current-state reconciliation.
@@ -23,6 +23,33 @@ Wake, watcher, away-mode, and Relay-specific state mechanics remain with their n
 `docs/sessionstart-nudge.md` owns the native session-open adapter tiers that run or nudge the digest command, and the source routing between them.
 `AGENTS.md` retains the run-once and read-once operator rules, lock-refusal safety, installation consent, and direct-report recovery boundaries because those facts apply at every session start.
 Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, while persistent-secondmate recovery is owned by `secondmate-provisioning`.
+
+## Private workflow context (config/workflow-context)
+
+Private workflow context is inert by default.
+An absent `config/workflow-context` file or the exact value `off` emits no context; the exact value `on` enables the private index at `data/workflow/index.md`, and every other value is rejected.
+Enabled workflow context requires `python3`; if it is unavailable, the loader reports the missing prerequisite and emits no context, while absent or disabled configuration remains inert without Python.
+The index contains one Markdown table with exactly these columns:
+
+| Scope | Status | Path | Source | End-check |
+| --- | --- | --- | --- | --- |
+| global | active | operating-agreement.md | approved decision reference | none |
+
+`Scope` is `global`, `project:<name>`, or `task:<id>`, where names contain letters, digits, `.`, `_`, or `-` and start with a letter or digit.
+`Status` is `active`, `stopped`, `superseded`, or `expired`.
+`Path` is a relative `.md` file below `data/workflow/` with no symlink component, `Source` is a nonempty approval or evidence reference, and table fields cannot contain pipes.
+`End-check` is `none`, `until:YYYY-MM-DDTHH:MM:SSZ`, or `condition:<plain-language owner check>`.
+An elapsed `until` withholds active content pending its owner check, while stopped content remains visible and never resumes because a date elapsed.
+Superseded and expired content is indexed for provenance but never emitted as instructions.
+
+`bin/fm-workflow-context.sh startup` emits current global content plus project/task navigation, while `bin/fm-workflow-context.sh project <project-name> [--task <task-id>]` emits global content followed by matching project and task content.
+Selection is atomic: invalid configuration, an invalid index, or unreadable selected content produces no partial context, and unrelated bodies are not read.
+Enabling the loader is not an authority grant; only applicable selected content carrying explicit user authority can change a shared default, and explicit stops or user-launch decisions remain with their owners.
+Session start loads the global selection, and generated ordinary-worker instructions place selected private content and provenance outside the publishable Task section.
+Secondmate charters do not import their parent's selected context; each secondmate loads workflow context from its own home and scope.
+Do not copy private bodies, private paths, or provenance into gate intent, commits, pull requests, reports, or public evidence.
+`FM_DATA_OVERRIDE` and `FM_CONFIG_OVERRIDE` independently select alternate private roots for specialized setups and tests.
+The helper header owns exact selection order, expiry display, and atomic read mechanics.
 
 ## Pi Calm preference (config/calm)
 
@@ -63,9 +90,9 @@ Any value other than `tmux`, `herdr`, `zellij`, `orca`, or `cmux` is rejected un
 The session-start secondmate liveness sweep uses the recovery-grade `fm_backend_agent_state` classifier where verified.
 The comment above that function in `bin/fm-backend.sh` is the single owner of its detailed state contract and recovery authorization.
 The compatibility helper `fm_backend_agent_alive` continues to collapse those detailed results to `alive`, `dead`, or `unknown` for older callers.
-A herdr spawn additionally version-gates against the installed `herdr` binary's protocol and requires `jq`, refusing loudly on an incompatible or missing installation.
-A zellij spawn additionally version-gates against the installed `zellij` binary's version and requires `jq`, refusing loudly when either is missing or the version is older than 0.44.
-A cmux spawn additionally version-gates against the installed `cmux` binary's version, requires `jq`, and requires the control socket to be reachable and accessible (see [`docs/cmux-backend.md`](cmux-backend.md) "Setup" for the one-time socket-access configuration this needs; Automation mode is the recommended socket control mode, with Password mode supported via `config/cmux-socket-password`), refusing loudly and non-retryably on a `cmuxOnly`/unauthenticated socket.
+A herdr spawn additionally version-gates against the installed `herdr` binary's protocol, refusing loudly on an incompatible or missing installation.
+A zellij spawn additionally version-gates against the installed `zellij` binary's version, refusing loudly when it is missing or older than 0.44.
+A cmux spawn additionally version-gates against the installed `cmux` binary's version and requires the control socket to be reachable and accessible (see [`docs/cmux-backend.md`](cmux-backend.md) "Setup" for the one-time socket-access configuration this needs; Automation mode is the recommended socket control mode, with Password mode supported via `config/cmux-socket-password`), refusing loudly and non-retryably on a `cmuxOnly`/unauthenticated socket.
 A backend spawn refusal from a missing dependency, version gate, or unauthenticated socket is terminal for that selected backend; firstmate surfaces it as a blocker instead of silently retrying another backend.
 Task meta records `backend=` only for a non-default backend; an absent `backend=` means `tmux`, preserving existing default-path meta files.
 Every new task records `endpoint_task_id=` as the cleanup binding between the metadata filename and its opaque runtime endpoint.
@@ -293,18 +320,18 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
 It installs automatically supported tools only after you say go; manual-only tools remain for you to install from the printed instructions.
 Required tools come in two parts: a universal toolchain every home needs regardless of backend, and a per-backend delta that follows the runtime backend actually resolved for this home.
-The universal toolchain is node, git, gh with GitHub auth via `gh auth login`, no-mistakes v1.31.2 or newer, compatible gh-axi, chrome-devtools-axi, compatible lavish-axi, compatible tasks-axi per "Backlog backend" above, and compatible quota-axi.
+The universal toolchain is node, git, gh with GitHub auth via `gh auth login`, jq, no-mistakes v1.31.2 or newer, compatible gh-axi, chrome-devtools-axi, compatible lavish-axi, compatible tasks-axi per "Backlog backend" above, and compatible quota-axi.
 [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the axi-family floor policy and the gh-axi and lavish-axi floors, while [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) hold their own tools' floor constants.
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
-In that list, no-mistakes runs the validation pipeline, gh-axi, chrome-devtools-axi, and lavish-axi cover GitHub, browser, and rich-review operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
+In that list, jq supports shared JSON projections and supervision, no-mistakes runs the validation pipeline, gh-axi, chrome-devtools-axi, and lavish-axi cover GitHub, browser, and rich-review operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
 The per-backend delta is required only for the backend resolved from `FM_BACKEND`, then `config/backend`, then runtime auto-detection, then default `tmux`, so a home is never told to install a tool an inactive backend or feature would need.
-That delta is owned in code by `fm_backend_required_tools` in `bin/fm-backend.sh`: the resolved backend's own session-provider CLI (`tmux`, `herdr`, `zellij`, `orca`, or `cmux`), `jq` for the JSON-emitting experimental adapters (`herdr`, `zellij`, `cmux`) whose spawn and liveness paths parse the backend's JSON output, and the `treehouse` worktree provider for every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`).
+That delta is owned in code by `fm_backend_required_tools` in `bin/fm-backend.sh`: the resolved backend's own session-provider CLI (`tmux`, `herdr`, `zellij`, `orca`, or `cmux`) and the `treehouse` worktree provider for every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`).
 Backend tool availability uses the adapter's own executable resolver, so bootstrap and spawn agree on supported non-`PATH` locations such as cmux's bundled CLI.
 An unknown resolved backend emits `BACKEND_INVALID` and blocks dispatch instead of silently dropping its dependency delta or falling back to tmux.
 Orca provides both the task worktree and terminal endpoint (see "Runtime backend" above), so `backend=orca` requires only `orca` on top of the universal toolchain and skips both `treehouse` and every other backend's session CLI.
 A herdr, zellij, or cmux home is therefore never told `tmux` is missing, and the `treehouse` durable-lease upgrade check runs only for the backends that actually use treehouse.
-When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
-When Relay is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
+When `config/crew-dispatch.json` exists, bootstrap uses the universal jq dependency for dispatch profile validation.
+When Relay is opted in, bootstrap additionally requires curl and uses the universal jq dependency before arming the relay poll shim.
 `tasks-axi` and `quota-axi` are required bootstrap tools in every profile, the same class as `lavish-axi`.
 An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap stays silent and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
 An absent or incompatible `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)`.
@@ -636,3 +663,13 @@ Only after those retries exhaust does it remove the lock, and only when it is pr
 A live lock, a missing `lsof`, any failed check, or any other fetch failure keeps today's behavior.
 Every wait, retry, and removal is printed to stderr, and a successful recovery also prints one `recovered:` summary line to stdout so a session-start refresh - which discards fleet-sync stderr and relays only stdout - still surfaces it.
 The shared staleness proof lives in `bin/fm-lock-lib.sh`, which both `fm-teardown.sh` and `fm-fleet-sync.sh` use.
+
+## Accepted delivery programs
+
+Accepted commissions remain native in-flight `kind=program` backlog records independently of worker metadata.
+`bin/fm-programs-lib.sh` owns their optional body fields, read-only projection and due-check receipt contract; `bin/fm-programs.sh --json` lists every accepted program without a display cap.
+The existing watcher retains future rechecks even with zero workers and emits ordinary durable check events in attended and away mode.
+A check requests engineering reconciliation; it grants no new scope, dispatch, merge or live-action authority.
+Explicit user pauses remain quiet, while technical holds retain their next check and never become implicit completion.
+`state/.program-reconciliation` is disposable debounce state rather than task authority; the `bin/fm-programs-lib.sh` header solely owns its encoding, transition detection, retirement, loss limits, and retry mechanics, including `FM_PROGRAM_RECHECK_SECS`.
+`tests/fm-watch-checkpoint.test.sh` exercises zero-worker continuation and future waits through the actual checkpoint and watcher.

@@ -87,7 +87,325 @@ test_existing_singleton_watcher_is_not_success() {
   pass "checkpoint rejects an existing watcher singleton as unowned"
 }
 
+test_program_continuation_without_workers() {
+  local home out status projection
+  home=$(make_home programs)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] product-a - First accepted product (repo: alpha) (kind: program)
+  children: child-a
+- [ ] product-b - Second accepted product (repo: beta) (kind: program)
+  recheck-at: 2099-01-01T00:00:00Z
+## Queued
+- [ ] uncommissioned - Idea only (repo: gamma) (kind: program)
+## Done
+- [x] child-a - Source ready (repo: alpha) (kind: ship)
+EOF
+  projection=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "program projection failed"
+  printf '%s' "$projection" | jq -e '
+    .supervision_needed and (.programs | length == 2)
+    and (.programs | any(.id == "product-a" and .due and .children[0].state == "done"))
+    and (.programs | any(.id == "product-b" and (.due | not)))
+  ' >/dev/null || fail "accepted programs lost or child completion mistaken for parent completion"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home"     || fail "zero-worker accepted projects do not require supervision"
+  status=0
+  out=$(FM_HOME="$home" FM_POLL=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 4) || status=$?
+  expect_code 0 "$status" "zero-worker program wake"
+  assert_contains "$out" 'check: program-reconcile' "program work did not wake checkpoint"
+  assert_contains "$out" 'revisit due programs and surfaced program errors' "program wake did not preserve due-only reconciliation"
+  assert_not_contains "$out" 'revisit all unfinished programs' "program wake invited a future-only reconciliation"
+  assert_contains "$out" 'product-a' "due project absent from wake"
+  assert_not_contains "$out" 'uncommissioned' "queued idea silently commissioned"
+  # Outstanding event is durable and never multiplied by another tick.
+  FM_HOME="$home" bash -c '. "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"; fm_program_reconcile_tick "$2/state"' _ "$ROOT" "$home" >/dev/null
+  [ "$(awk -F '\t' '$3 == "check" && $4 == "program-reconcile" {n++} END {print n+0}' "$home/state/.wake-queue")" -eq 1 ]     || fail "duplicate program event while unacknowledged"
+  pass "multiple accepted projects survive zero workers and one child finishing, with durable deduplicated wake"
+}
+
+test_program_future_pause_and_parse_failure() {
+  local home parse_home status out projection
+  home=$(make_home future-program)
+  parse_home=$(make_home malformed-commissioning)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] future - Future checkpoint (repo: alpha) (kind: program)
+  recheck-at: 2099-01-01T00:00:00Z
+- [ ] paused - Explicit pause (repo: beta) (kind: program)
+  continuation: paused
+EOF
+  FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json | jq -e '.supervision_needed and ([.programs[] | select(.due)] | length == 0)' >/dev/null     || fail "future checkpoint either forgotten or prematurely due"
+  status=0
+  out=$(FM_HOME="$home" FM_POLL=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 1) || status=$?
+  expect_code 124 "$status" "future project quiet wait"
+  assert_contains "$out" 'checkpoint:' "future program should quietly keep checkpointing"
+  printf '  recheck-at: not-a-date\n' >> "$home/data/backlog.md"
+  FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json | jq -e '.supervision_needed and (.errors | length > 0)' >/dev/null     || fail "invalid continuation input silently became completed or inactive"
+  cat > "$parse_home/data/backlog.md" <<'EOF'
+## In flight
+Accepted programmer note (kind: programmer)
+## Queued
+Uncommissioned idea (kind: program)
+EOF
+  projection=$(FM_HOME="$parse_home" "$ROOT/bin/fm-programs.sh" --json) || fail "non-program projection failed"
+  printf '%s' "$projection" | jq -e '
+    (.supervision_needed | not) and (.programs | length == 0) and (.errors | length == 0)
+  ' >/dev/null || fail "queued or prefix-matched non-program text created commissioned work"
+  cat > "$parse_home/data/backlog.md" <<'EOF'
+## In flight
+Malformed accepted commission (kind: program)
+Accepted programmer note (kind: programmer)
+## Queued
+Uncommissioned idea (kind: program)
+EOF
+  projection=$(FM_HOME="$parse_home" "$ROOT/bin/fm-programs.sh" --json) || fail "malformed program projection failed"
+  printf '%s' "$projection" | jq -e '
+    .supervision_needed and (.programs | length == 0)
+    and (.errors == [{"id":"unparseable-program","errors":["malformed program backlog row"]}])
+  ' >/dev/null || fail "exact in-flight malformed program commissioning was not isolated"
+  pass "future, pause, timing, and exact malformed commissioning boundaries remain visible"
+}
+
 test_quiet_checkpoint_exits_124_cleanly
 test_signal_passes_through_and_exits_zero
 test_registered_check_uses_preserved_watcher_environment
 test_existing_singleton_watcher_is_not_success
+
+test_program_continuation_without_workers
+test_program_future_pause_and_parse_failure
+
+test_program_malformed_transition_and_overrides() {
+  local home terminal isolated unrelated json out seq generation
+  home=$(make_home malformed-program)
+  terminal=$(make_home terminal-program)
+  isolated=$(make_home isolated-state)
+  unrelated=$(make_home unrelated-home)
+
+  printf '## In flight\n- [ ] delivery - Accepted delivery (repo: alpha) (kind: program)\n' > "$home/data/backlog.md"
+  FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home" >/dev/null || fail "valid program did not emit"
+  seq=$(awk -F '\t' 'END {print $2}' "$home/state/.wake-queue")
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2>&1) || fail "valid program event did not present"
+  generation=$(printf '%s\n' "$out" | sed -n 's/.*--recovery-generation \([^ ]*\).*/\1/p' | head -1)
+  FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$generation" >/dev/null 2>&1 \
+    || fail "valid program event did not acknowledge"
+
+  printf '## In flight\n- [ ] delivery - Accepted delivery (repo: alpha) (kind: mystery)\n' > "$home/data/backlog.md"
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "malformed transition projection unavailable"
+  printf '%s' "$json" | jq -e '
+    .supervision_needed
+    and (.errors | any(.id == "delivery" and (.errors | length) > 0))
+  ' >/dev/null || fail "previously emitted program disappeared after an unrecognized kind transition"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home" \
+    || fail "malformed transition stopped zero-worker supervision"
+  out=$(FM_HOME="$home" FM_POLL=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 4) \
+    || fail "malformed transition did not wake checkpoint"
+  assert_contains "$out" 'check: program-reconcile' "malformed transition had no durable reconciliation wake"
+
+  printf '## In flight\n- [ ] release - Accepted release (repo: beta) (kind: program)\n' > "$terminal/data/backlog.md"
+  FM_HOME="$terminal" FM_PROGRAM_NOW_EPOCH=1000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$terminal" >/dev/null || fail "terminal fixture did not emit"
+  printf '## In flight\n- [ ] release - Accepted release (repo: beta) (kind: program)\n  continuation: paused\n' > "$terminal/data/backlog.md"
+  json=$(FM_HOME="$terminal" "$ROOT/bin/fm-programs.sh" --json) || fail "paused transition projection unavailable"
+  printf '%s' "$json" | jq -e '(.supervision_needed | not) and (.errors | length == 0)' >/dev/null \
+    || fail "explicit pause became a continuity alarm"
+  printf '## Done\n- [x] release - Accepted release (repo: beta) (kind: program)\n' > "$terminal/data/backlog.md"
+  FM_HOME="$terminal" bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$terminal" >/dev/null || fail "terminal transition did not reconcile"
+  json=$(FM_HOME="$terminal" "$ROOT/bin/fm-programs.sh" --json) || fail "terminal projection unavailable"
+  printf '%s' "$json" | jq -e '(.supervision_needed | not) and (.errors | length == 0)' >/dev/null \
+    || fail "legitimate Done transition became a continuity alarm"
+  [ ! -e "$terminal/state/.program-reconciliation" ] || fail "terminal transition retained an unfinished receipt"
+
+  printf '## In flight\n- [ ] state-root - State override program (repo: gamma) (kind: program)\n' > "$home/data/backlog.md"
+  printf '## In flight\n' > "$unrelated/data/backlog.md"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$isolated/state" bash -c '
+    . "$1/bin/fm-supervision-lib.sh"
+    fm_supervision_needed "$2/state"
+  ' _ "$ROOT" "$isolated" || fail "state-only override redirected the effective data root"
+  FM_HOME="$unrelated" FM_STATE_OVERRIDE="$isolated/state" FM_DATA_OVERRIDE="$home/data" bash -c '
+    . "$1/bin/fm-supervision-lib.sh"
+    fm_supervision_needed "$2/state"
+  ' _ "$ROOT" "$isolated" || fail "explicit data override did not independently select the backlog"
+  pass "program receipts expose malformed transitions while pauses, Done, and independent roots remain valid"
+}
+test_program_malformed_transition_and_overrides
+
+test_future_program_receipt_surfaces_malformed_transition() {
+  local home json bearings out
+  home=$(make_home future-malformed-program)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] future-delivery - Future accepted delivery (repo: alpha) (kind: program)
+  recheck-at: 2099-01-01T00:00:00Z
+EOF
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "future-only quiet tick failed"
+  [ -z "$out" ] || fail "future-only program reconciled before its due time"
+  [ ! -s "$home/state/.wake-queue" ] || fail "future-only program emitted an early wake"
+
+  printf '## In flight\n- [ ] future-delivery - Future accepted delivery (repo: alpha) (kind: mystery)\n' > "$home/data/backlog.md"
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "future malformed CLI projection unavailable"
+  printf '%s' "$json" | jq -e '
+    .supervision_needed
+    and (.programs | length == 0)
+    and (.errors | any(.id == "future-delivery" and (.errors | length) > 0))
+  ' >/dev/null || fail "future-only receipt lost its malformed transition in the full CLI"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home" \
+    || fail "future-only malformed transition stopped shared zero-worker supervision"
+  bearings=$(FM_HOME="$home" FM_SNAPSHOT_NOW=2026-09-13T00:00:01Z FM_SNAPSHOT_NOW_EPOCH=1001 \
+    "$ROOT/bin/fm-bearings-snapshot.sh" --json) || fail "future malformed Bearings projection unavailable"
+  printf '%s' "$bearings" | jq -e '
+    (.programs | length == 0)
+    and (.program_errors | any(.id == "future-delivery" and (.errors | contains("previously observed unfinished program"))))
+  ' >/dev/null || fail "compact Bearings dropped the canonical continuity error"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1001 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "future malformed transition did not reconcile"
+  assert_contains "$out" 'program-reconcile' "future malformed transition emitted no durable wake"
+  printf '## Done\n- [x] future-delivery - Future accepted delivery (repo: alpha) (kind: mystery)\n' > "$home/data/backlog.md"
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "malformed Done CLI projection unavailable"
+  printf '%s' "$json" | jq -e '
+    .supervision_needed
+    and (.programs | length == 0)
+    and (.errors | any(.id == "future-delivery" and (.errors | length) > 0))
+    and (.observed_unfinished_program_ids | contains(["future-delivery"]))
+  ' >/dev/null || fail "malformed Done row silently retired a previously observed program"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home" \
+    || fail "malformed Done row stopped shared supervision"
+  [ -e "$home/state/.program-reconciliation" ] || fail "malformed Done row discarded its continuity receipt"
+  pass "future receipts preserve malformed in-flight and Done continuity through every projection"
+}
+test_future_program_receipt_surfaces_malformed_transition
+
+test_program_receipt_sync_transitions() {
+  local home concurrent lost duplicate json out first_emission second_emission
+  home=$(make_home receipt-cleanup)
+  concurrent=$(make_home receipt-concurrent)
+  lost=$(make_home receipt-loss)
+  duplicate=$(make_home receipt-duplicate)
+
+  printf '## In flight\n- [ ] release - Accepted release (repo: alpha) (kind: program)\n' > "$home/data/backlog.md"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "cleanup fixture did not queue its due wake"
+  assert_contains "$out" 'program-reconcile' "cleanup fixture emitted no due wake"
+  printf '## Done\n- [x] release - Accepted release (repo: alpha) (kind: program)\n' > "$home/data/backlog.md"
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "observed Done projection failed"
+  printf '%s' "$json" | jq -e '
+    .receipt_sync_needed and .supervision_needed
+    and (.programs | length == 0) and (.errors | length == 0)
+  ' >/dev/null || fail "observed valid Done did not request receipt cleanup"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home" \
+    || fail "shared supervision went idle before Done receipt cleanup"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1001 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "Done receipt cleanup tick failed"
+  [ -z "$out" ] || fail "Done receipt cleanup emitted a duplicate wake"
+  [ ! -e "$home/state/.program-reconciliation" ] || fail "Done receipt cleanup retained stale identity"
+  printf '## Done\n' > "$home/data/backlog.md"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1002 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "pruned Done tick failed"
+  [ -z "$out" ] || fail "ordinary Done pruning emitted an alarm"
+  if FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home"; then
+    fail "ordinary Done pruning left permanent supervision"
+  fi
+
+  printf '## In flight\n- [ ] primary - Primary delivery (repo: alpha) (kind: program)\n' > "$concurrent/data/backlog.md"
+  FM_HOME="$concurrent" FM_PROGRAM_NOW_EPOCH=2000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$concurrent" >/dev/null || fail "concurrent fixture did not queue its first wake"
+  first_emission=$(cut -f1-2 "$concurrent/state/.program-reconciliation")
+  cat > "$concurrent/data/backlog.md" <<'EOF'
+## In flight
+- [ ] primary - Primary delivery (repo: alpha) (kind: program)
+- [ ] future - Future delivery (repo: beta) (kind: program)
+  recheck-at: 2099-01-01T00:00:00Z
+EOF
+  out=$(FM_HOME="$concurrent" FM_PROGRAM_NOW_EPOCH=2001 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$concurrent") || fail "queued-event observation tick failed"
+  [ -z "$out" ] || fail "queued-event observation duplicated its wake"
+  second_emission=$(cut -f1-2 "$concurrent/state/.program-reconciliation")
+  [ "$second_emission" = "$first_emission" ] || fail "identity bookkeeping changed the emission receipt"
+  cut -f3 "$concurrent/state/.program-reconciliation" | jq -e 'contains(["primary","future"])' >/dev/null \
+    || fail "queued-event dedupe lost a newly observed future program"
+  cat > "$concurrent/data/backlog.md" <<'EOF'
+## In flight
+- [ ] future - Future delivery (repo: beta) (kind: mystery)
+## Done
+- [x] primary - Primary delivery (repo: alpha) (kind: program)
+EOF
+  json=$(FM_HOME="$concurrent" "$ROOT/bin/fm-programs.sh" --json) || fail "concurrent malformed projection failed"
+  printf '%s' "$json" | jq -e '
+    .supervision_needed
+    and (.errors | any(.id == "future" and (.errors | length) > 0))
+    and (.observed_unfinished_program_ids == ["future"])
+  ' >/dev/null || fail "queued-event identity sync lost the later malformed program"
+
+  cat > "$lost/data/backlog.md" <<'EOF'
+## In flight
+- [ ] future - Future delivery (repo: gamma) (kind: program)
+  recheck-at: 2099-01-01T00:00:00Z
+EOF
+  FM_HOME="$lost" FM_PROGRAM_NOW_EPOCH=3000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$lost" >/dev/null || fail "receipt-loss fixture observation failed"
+  rm -f "$lost/state/.program-reconciliation"
+  printf '## In flight\n- [ ] future - Future delivery (repo: gamma) (kind: mystery)\n' > "$lost/data/backlog.md"
+  json=$(FM_HOME="$lost" "$ROOT/bin/fm-programs.sh" --json) || fail "receipt-loss projection failed"
+  printf '%s' "$json" | jq -e '
+    (.supervision_needed | not) and (.programs | length == 0) and (.errors | length == 0)
+  ' >/dev/null || fail "receipt loss invented historical program evidence"
+
+  printf '## In flight\n- [ ] same - First (repo: delta) (kind: program)\n- [ ] same - Second (repo: delta) (kind: program)\n' > "$duplicate/data/backlog.md"
+  json=$(FM_HOME="$duplicate" "$ROOT/bin/fm-programs.sh" --json) || fail "duplicate program projection failed"
+  printf '%s' "$json" | jq -e '
+    .supervision_needed and (.errors | any(.id == "same" and (.errors | contains(["duplicate program id"]))))
+  ' >/dev/null || fail "duplicate program IDs did not remain visible"
+  pass "program receipts synchronize Done, queued-event, loss, and duplicate transitions"
+}
+test_program_receipt_sync_transitions
+
+test_program_hold_rechecks_after_ack_without_spinning() {
+  local home out seq generation
+  home=$(make_home held-program)
+  printf '## In flight\n- [ ] delivery - Accepted delivery (repo: alpha) (kind: program) (hold: provider unavailable) (hold-kind: external)\n' > "$home/data/backlog.md"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1000 FM_PROGRAM_RECHECK_SECS=60 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "initial held-program check failed"
+  assert_contains "$out" 'program-reconcile' "held obligation disappeared"
+  seq=$(awk -F '\t' 'END {print $2}' "$home/state/.wake-queue")
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2>&1) || fail "program event presentation failed"
+  generation=$(printf '%s\n' "$out" | sed -n 's/.*--recovery-generation \([^ ]*\).*/\1/p' | head -1)
+  FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$generation" >/dev/null 2>&1     || fail "program event acknowledgement failed"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1001 FM_PROGRAM_RECHECK_SECS=60 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "quiet held-program tick failed"
+  [ -z "$out" ] || fail "unchanged held program spun immediately after ack"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1060 FM_PROGRAM_RECHECK_SECS=60 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "due held-program tick failed"
+  assert_contains "$out" 'program-reconcile' "held program had no durable later recheck"
+  [ ! -e "$home/state/delivery.meta" ] || fail "program continuation invented a worker"
+  pass "external hold remains quiet between acknowledged due checks and wakes later without dummy worker"
+}
+test_program_hold_rechecks_after_ack_without_spinning

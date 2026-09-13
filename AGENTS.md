@@ -76,11 +76,13 @@ config/trace-context  optional presence flag enabling default-off native W3C tra
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
+config/workflow-context  private scoped workflow-context opt-in; LOCAL, gitignored; see docs/configuration.md "Private workflow context"
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update
   captain-shared.md  main-authoritative shared captain preferences propagated read-only to secondmate homes; LOCAL, gitignored, owned by secondmate-provisioning
   learnings.md       fleet-local operational facts and gotchas; LOCAL, gitignored; dated, evidence-backed, curated, and updated with inspect-then-update - rewrite and prune rather than append forever, the same contract as captain.md; created lazily, absent until this home has a learning to store
+  workflow/          optional indexed private workflow instructions; LOCAL, gitignored; see docs/configuration.md "Private workflow context"
   projects.md        thin fleet navigation registry recording each project's standing delivery posture; firstmate-private, parsed for mechanical sync and seeding by fm-project-mode.sh (section 6)
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
@@ -131,6 +133,8 @@ state/               runtime records and signals; gitignored
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
+When enabled, valid, applicable workflow context is emitted, use its current workflow agreement and load matching project/task context through `bin/fm-workflow-context.sh` before intake, dispatch, review decisions, and affected actions; `docs/configuration.md` owns its setup and schema, while the script header owns selection and expiry mechanics.
+Opting in grants no authority by itself; only selected current context that explicitly grants a named authority may change the shared defaults for engineering dispositions, progress reporting, maintenance, or incident recovery, and it never implicitly releases an explicit project stop or grants an unapproved user launch.
 
 ## 3. Session start (run once at every session start)
 
@@ -164,7 +168,7 @@ When that section reports its checks still in progress it names exactly what is 
    When the lock could not be acquired and verified, the queue is left untouched because no session mutation is authorized, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
 4. **Supervision operating instructions** - after the wake queue and before both digests, the digest emits exactly one operating block for the detected primary harness, followed by the read-once contract that governs them.
    The script itself never starts supervision; the emitted harness protocol owns the exact wait or wake mechanism.
-5. **Fleet-state digest** - after that read-once contract and ahead of the context digest, the compact backlog listing owned by `bin/fm-session-start.sh`; every `state/<id>.meta`; a bounded tail of each task's `state/<id>.status` (labeled as wake-EVENT history, not current state, with the full log path printed for a deeper read); the `state/.afk` flag; and one cheap alive/dead read of each task's recorded backend endpoint.
+5. **Fleet-state digest** - after that read-once contract and ahead of the context digest, the compact backlog listing and accepted-program projection owned by `bin/fm-session-start.sh`; every `state/<id>.meta`; a bounded tail of each task's `state/<id>.status` (labeled as wake-EVENT history, not current state, with the full log path printed for a deeper read); the `state/.afk` flag; and one cheap alive/dead read of each task's recorded backend endpoint.
    That liveness line is a fast presence check only, not a full state read - when you need a crew's actual current state (a run-step, not just "is the pane there"), read it with `bin/fm-crew-state.sh <id>` as before; the digest deliberately skips that deeper, slower read for every task so it stays fast and bounded.
 6. **Network checks** - after the fleet-state digest, the deferred stage's result, or an explicit statement of what it has not confirmed yet.
    A read-only session runs no network checks at all and says so.
@@ -399,6 +403,9 @@ Handle actionable wakes as follows:
 3. For `check:`, act on the named poll result, including merges, Relay events, and process-to-event source results.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
+After wake handling and quiet timeouts, reconcile every due commissioned program using `bin/fm-programs.sh`, including programs with no workers, and select each next authorised action or owned dependency.
+Completing the last child task does not satisfy its program's product acceptance; retain a supported recheck while obligations remain and preserve explicit pauses.
+
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
 When Relay-linked work reaches a milestone or terminal state, load `fmx-respond`; before terminal teardown, use its promised-final reconciliation when a typed public commitment exists, otherwise post the final completion follow-up so the link clears even if earlier follow-ups were spent.
 
@@ -460,14 +467,15 @@ Use the same evidence-first form for objections or clarifying challenges rather 
 
 Reach the captain immediately for:
 
-- Work ready for their review, with the full PR URL.
+- Work ready for their review, with the full PR URL, unless enabled, valid, applicable workflow context explicitly grants firstmate routine technical PR-readiness disposition.
 - Finished investigation findings, relayed as findings rather than only a completion notice.
 - Gate findings that require their decision under the configured authority.
 - A real blocker or failure after the relevant playbook is exhausted.
-- Anything destructive, irreversible, or security-sensitive.
+- Anything destructive, irreversible, or security-sensitive, unless enabled, valid, applicable workflow context explicitly grants that exact class of action.
 - A needed credential or login.
 
-Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
+Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics unless enabled, valid, applicable workflow context explicitly sets a different communication preference.
+Only when selected current context explicitly grants continuation after informational updates does such an update not require separate permission; accepted-program reconciliation remains the generic continuation mechanism.
 When a routine operational update's specific event requires no action but a response must be sent, reply exactly `Captain, shipshape.` without characterizing the visible session's unrelated decisions.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.

@@ -51,6 +51,7 @@
 #                       step 1, harvested WITHOUT waiting for it.
 #   8. context digest - data/projects.md, data/secondmates.md, data/captain.md,
 #                       data/captain-shared.md, data/learnings.md: read-only,
+#                       plus opt-in fm-workflow-context.sh startup output
 #                       always safe, always runs.
 #   9. closing reminder - prints the context-specific watcher next step; this
 #                       script points back to the emitted harness supervision
@@ -786,6 +787,11 @@ EOF
 stage fleet-state
 section "FLEET STATE"
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
+subsection "Accepted delivery programs (not worker state)"
+if ! FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-programs.sh" --json; then
+  printf 'PROGRAMS: unreadable - reconcile the native backlog before declaring delivery complete.\n'
+fi
+
 
 subsection "Work under way (state/*.meta)"
 META_FOUND=0
@@ -885,6 +891,10 @@ print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
 print_file_or_absent "$DATA/captain.md" "data/captain.md"
 print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
 print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+if ! FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+  "$SCRIPT_DIR/fm-workflow-context.sh" startup; then
+  printf '%s\n' 'WORKFLOW_CONTEXT: scoped instructions unavailable; resolve this before dependent work.'
+fi
 
 # --- 9. closing reminder -----------------------------------------------
 stage next-step

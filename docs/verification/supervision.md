@@ -459,6 +459,68 @@ tests/fm-claude-stop-autoarm.test.sh
 tests/fm-turnend-guard.test.sh
 ```
 
+### Accepted-program continuation, 2026-09-13
+
+Accepted-program supervision was reverified with synthetic isolated homes and no live services on 2026-09-13.
+The tested source was parent revision `1de10065713963b1b71e419b226e255406ad7d26` plus working behavior-file content identity `7a7b289dccfcab0e9ef214714ff57fa02544df5df4eab80c1f7362165c00403e`.
+The runtime was GNU Bash 3.2.57 on arm64 Apple Darwin 25 with jq 1.7.1-apple.
+The program reconciliation tick runs inside the common watcher, below every supported primary harness adapter.
+Claude, Codex, Cursor, Grok, and Kimi reach the shared shell supervision predicate through their guard or continuation path.
+Pi enters the common watcher through its arm extension, while OpenCode uses the predicate in its passive coordinator.
+No verdict depends on vendor-rendered output, so this behavior is portable rather than harness-dependent; the OpenCode fixture verifies its conditional coordinator against an accepted zero-worker program.
+
+```sh
+git rev-parse HEAD
+for file in bin/fm-programs-lib.sh bin/fm-supervision-lib.sh bin/fm-bearings-snapshot.sh bin/fm-supervision-instructions.sh bin/fm-workflow-context.sh bin/fm-bootstrap.sh bin/fm-backend.sh docs/supervision-protocols/codex.md tests/fm-watch-checkpoint.test.sh tests/fm-supervision-instructions.test.sh tests/fm-workflow-context.test.sh tests/fm-bootstrap.test.sh tests/fm-pi-watch-extension.test.sh; do
+  printf '%s\0' "$file"
+  shasum -a 256 "$file"
+done | shasum -a 256
+bash --version | sed -n '1p'
+jq --version
+```
+
+Observed output:
+
+```text
+1de10065713963b1b71e419b226e255406ad7d26
+7a7b289dccfcab0e9ef214714ff57fa02544df5df4eab80c1f7362165c00403e  -
+GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+jq-1.7.1-apple
+```
+
+```sh
+set -o pipefail
+tests/fm-watch-checkpoint.test.sh |
+  grep -E 'ok - (program receipts expose|future receipts preserve|program receipts synchronize)'
+tests/fm-bootstrap.test.sh |
+  grep -F 'ok - bootstrap requires jq universally and accepts the installed path'
+tests/fm-pi-watch-extension.test.sh |
+  grep -F 'ok - OpenCode watcher plugin arms an accepted zero-worker program from effective FM_HOME'
+tests/fm-supervision-instructions.test.sh |
+  grep -F 'ok - renderer prints exactly the selected harness block'
+bash tests/fm-workflow-context.test.sh |
+  grep -F 'ok - workflow context requires Python only when enabled'
+```
+
+Observed output:
+
+```text
+ok - program receipts expose malformed transitions while pauses, Done, and independent roots remain valid
+ok - future receipts preserve malformed in-flight and Done continuity through every projection
+ok - program receipts synchronize Done, queued-event, loss, and duplicate transitions
+ok - bootstrap requires jq universally and accepts the installed path
+ok - OpenCode watcher plugin arms an accepted zero-worker program from effective FM_HOME
+ok - renderer prints exactly the selected harness block
+ok - workflow context requires Python only when enabled
+```
+
+The transition regressions cover emitted and future-only programs, receipt synchronization before deduplicated returns, observed Done cleanup before pruning, unrecognized in-flight or Done kinds, duplicate IDs, and the honest limit after receipt loss.
+The executable paths expose the canonical error through the full program CLI, shared zero-worker predicate, compact Bearings projection, and durable reconciliation event while retaining explicit pauses, Done retirement, future waits, acknowledgement cooldown, and independent roots.
+The bootstrap regression confirms jq uses the universal missing-tool diagnostic and remains silent when installed.
+The OpenCode fixture confirms its effective-home coordinator arms the shared predicate for an accepted zero-worker program.
+The rendered instruction regression confirms the shared owner selects due programs and surfaced errors without a Codex-specific selection restatement.
+The workflow-context regression confirms missing Python is inert while disabled and produces a named atomic refusal only when enabled.
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

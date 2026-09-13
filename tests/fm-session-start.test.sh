@@ -711,6 +711,16 @@ EOF
   printf '%s\n' '- demo [no-mistakes] - a demo project (added 2026-07-01)' > "$home/data/projects.md"
   : > "$home/data/captain.md"
   # secondmates.md, captain-shared.md, and learnings.md deliberately absent
+  mkdir -p "$home/data/workflow"
+  printf 'on\n' > "$home/config/workflow-context"
+  cat > "$home/data/workflow/index.md" <<'EOF'
+| Scope | Status | Path | Source | End-check |
+| --- | --- | --- | --- | --- |
+| global | active | agreement.md | accepted global | none |
+| project:demo | active | demo.md | accepted demo | none |
+EOF
+  printf 'STARTUP_GLOBAL_WORKFLOW\n' > "$home/data/workflow/agreement.md"
+  printf 'PROJECT_ONLY_WORKFLOW\n' > "$home/data/workflow/demo.md"
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
@@ -723,6 +733,9 @@ EOF
 
   assert_contains "$out" "data/secondmates.md" "digest did not label the secondmates.md section"
   assert_contains "$out" "data/learnings.md" "digest did not label the learnings.md section"
+  assert_contains "$out" STARTUP_GLOBAL_WORKFLOW "startup did not load opt-in workflow agreement"
+  assert_contains "$out" project:demo "startup omitted scoped context discovery"
+  assert_not_contains "$out" PROJECT_ONLY_WORKFLOW "startup loaded unrelated project body"
 
   # Exactly four context ABSENT markers (secondmates.md, captain-shared.md,
   # learnings.md; backlog.md is covered by its own test) - and the
