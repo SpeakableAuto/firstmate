@@ -16,6 +16,8 @@
 # Unacknowledged events suppress duplicates; unchanged content retries after
 # FM_PROGRAM_RECHECK_SECS (default 900, minimum 60), even with no live workers.
 # Runtime receipts are disposable; accepted work remains solely in backlog.md.
+# Current valid programs remain discoverable after receipt loss, but missing or
+# retagged historical program identities cannot be reconstructed after deletion.
 # FM_PROGRAM_NOW_EPOCH is an optional deterministic clock for isolated fixtures.
 
 # shellcheck source=bin/fm-backlog-lib.sh
@@ -47,11 +49,12 @@ fm_programs_json() {
       [$observed[] as $id
        | [.records[] | select(.structured and .id == $id)] as $matches
        | select(($matches | length) != 1
-                or (($matches[0].state == "done" or ($matches[0].state == "in_flight" and $matches[0].kind == "program")) | not))
-       | {id:$id,errors:["previously observed unfinished program no longer has one valid in-flight kind=program record"]}] as $continuity_errors
+                or (($matches[0].kind == "program"
+                     and ($matches[0].state == "done" or $matches[0].state == "in_flight")) | not))
+       | {id:$id,errors:["previously observed unfinished program no longer has one valid current or completed kind=program record"]}] as $continuity_errors
     | [$observed[] as $id
        | [.records[] | select(.structured and .id == $id)] as $matches
-       | select(($matches | length) != 1 or $matches[0].state != "done")
+       | select(($matches | length) != 1 or $matches[0].state != "done" or $matches[0].kind != "program")
        | $id] as $retained_observed
     | [.records[] | select(.structured and .kind == "program" and .state == "in_flight")
        | . as $row
@@ -140,7 +143,7 @@ $queued
 " in *"
 program-reconcile
 "*) return 0 ;; esac
-  reason="check: program-reconcile: revisit all unfinished programs; due: $due. Reconcile scope, blockers, children and acceptance before dispatch; a child finishing is not product completion."
+  reason="check: program-reconcile: revisit due programs and surfaced program errors; due: $due. Reconcile scope, blockers, children and acceptance before dispatch; a child finishing is not product completion."
   fm_wake_append check program-reconcile "$reason" || return 1
   fm_program_receipt_write "$prior" "$now" "$fingerprint" "$observed" || return 1
   printf '%s\n' "$reason"

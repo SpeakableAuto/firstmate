@@ -41,6 +41,9 @@
 #                          inspection only - never an automatic interrupt,
 #                          signal, or restart of the worker or its tool process.
 #   check: <script>: <out> authenticated check output, always actionable
+#   check: program-reconcile: <out>
+#                          internally generated accepted-program reconciliation
+#                          request, always actionable and never dispatch authority
 #   check: process-event result captured: <keys>
 #                          a durably captured process-to-event result is queued
 #                          and has not been surfaced yet; reported once per

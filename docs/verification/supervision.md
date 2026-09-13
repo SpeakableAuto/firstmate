@@ -462,7 +462,7 @@ tests/fm-turnend-guard.test.sh
 ### Accepted-program continuation, 2026-09-13
 
 Accepted-program supervision was reverified with synthetic isolated homes and no live services on 2026-09-13.
-The tested source was parent revision `9e87f58ea9544a22f995e5d1d913f8ed0673e2f9` plus working behavior-file content identity `08ef97d94da8582bda6a2402c02a5f6596724ba96ee1cef17c3cac15b6bdd9a6`.
+The tested source was parent revision `c2766862c9b209fda609d5f1394f8d009d50d26c` plus working behavior-file content identity `133e9bafbf3e69b58fce71c566fb2e60c32125aab9cb14bd36d23b5dcea16885`.
 The runtime was GNU Bash 3.2.57 on arm64 Apple Darwin 25 with jq 1.7.1-apple.
 The program reconciliation tick runs inside the common watcher, below every supported primary harness adapter.
 Claude, Codex, Cursor, Grok, and Kimi reach the shared shell supervision predicate through their guard or continuation path, while Pi and OpenCode also use that predicate from their passive extension coordinators.
@@ -481,8 +481,8 @@ jq --version
 Observed output:
 
 ```text
-9e87f58ea9544a22f995e5d1d913f8ed0673e2f9
-08ef97d94da8582bda6a2402c02a5f6596724ba96ee1cef17c3cac15b6bdd9a6  -
+c2766862c9b209fda609d5f1394f8d009d50d26c
+133e9bafbf3e69b58fce71c566fb2e60c32125aab9cb14bd36d23b5dcea16885  -
 GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
 jq-1.7.1-apple
 ```
@@ -501,12 +501,12 @@ Observed output:
 
 ```text
 ok - program receipts expose malformed transitions while pauses, Done, and independent roots remain valid
-ok - future quiet receipts preserve malformed continuity through CLI, supervision, Bearings, and wake
+ok - future receipts preserve malformed in-flight and Done continuity through every projection
 ok - renderer prints exactly the selected harness block
 ok - workflow context requires Python only when enabled
 ```
 
-The transition regressions cover both an emitted due program and a future-only quiet observation before changing the same unfinished native row to an unrecognized kind.
+The transition regressions cover both an emitted due program and a future-only quiet observation before changing the same native row to an unrecognized in-flight or Done kind.
 The executable paths expose the canonical error through the full program CLI, shared zero-worker predicate, compact Bearings projection, and durable reconciliation event while retaining the explicit-pause, Done-retirement, and independent-root cases.
 The rendered instruction regression confirms the shared owner selects due programs and surfaced errors without a Codex-specific selection restatement.
 The workflow-context regression confirms missing Python is inert while disabled and produces a named atomic refusal only when enabled.

@@ -112,6 +112,8 @@ EOF
   out=$(FM_HOME="$home" FM_POLL=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 4) || status=$?
   expect_code 0 "$status" "zero-worker program wake"
   assert_contains "$out" 'check: program-reconcile' "program work did not wake checkpoint"
+  assert_contains "$out" 'revisit due programs and surfaced program errors' "program wake did not preserve due-only reconciliation"
+  assert_not_contains "$out" 'revisit all unfinished programs' "program wake invited a future-only reconciliation"
   assert_contains "$out" 'product-a' "due project absent from wake"
   assert_not_contains "$out" 'uncommissioned' "queued idea silently commissioned"
   # Outstanding event is durable and never multiplied by another tick.
@@ -246,7 +248,18 @@ EOF
     fm_program_reconcile_tick "$2/state"
   ' _ "$ROOT" "$home") || fail "future malformed transition did not reconcile"
   assert_contains "$out" 'program-reconcile' "future malformed transition emitted no durable wake"
-  pass "future quiet receipts preserve malformed continuity through CLI, supervision, Bearings, and wake"
+  printf '## Done\n- [x] future-delivery - Future accepted delivery (repo: alpha) (kind: mystery)\n' > "$home/data/backlog.md"
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "malformed Done CLI projection unavailable"
+  printf '%s' "$json" | jq -e '
+    .supervision_needed
+    and (.programs | length == 0)
+    and (.errors | any(.id == "future-delivery" and (.errors | length) > 0))
+    and (.observed_unfinished_program_ids | contains(["future-delivery"]))
+  ' >/dev/null || fail "malformed Done row silently retired a previously observed program"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home" \
+    || fail "malformed Done row stopped shared supervision"
+  [ -e "$home/state/.program-reconciliation" ] || fail "malformed Done row discarded its continuity receipt"
+  pass "future receipts preserve malformed in-flight and Done continuity through every projection"
 }
 test_future_program_receipt_surfaces_malformed_transition
 
