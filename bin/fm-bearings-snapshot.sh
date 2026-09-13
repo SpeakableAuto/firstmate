@@ -20,8 +20,9 @@
 # absence is never ambiguous.
 #
 # This wrapper consumes canonical status decisions plus canonically normalized
-# backlog roles, unresolved blockers, and captain actionability. It never infers
-# decisions from report or visual-review prose or reimplements snapshot semantics.
+# backlog roles, unresolved blockers, captain actionability, and program errors.
+# It never infers decisions from report or visual-review prose or reimplements
+# snapshot semantics.
 #
 # Main-home inventory validity comes from the canonical snapshot's main_inventory
 # object (orphan structured in-flight without meta, unstructured current rows).
@@ -108,7 +109,9 @@ Default is LOCAL-ONLY (no network); --include-prs is the only path that fetches.
 Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
-  gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
+  programs{id,repo,title,continuation,recheck_at,due,children,blockers,hold,agreement,errors},
+  program_errors{id,errors}, gates{id,title,blocked_by,reason,owner},
+  reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 landed merges this home's Done with registered secondmate homes' Done, bounded by
   a per-home cap (FM_BEARINGS_LANDED_PER_HOME) and an overall cap (FM_BEARINGS_LANDED),
@@ -427,6 +430,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         children:(.children | map(.id + "=" + .state) | join(", ")),
         blockers:(.unresolved_blocker_ids | join(", ")),hold:(.hold_reason // "-"),
         agreement:(.agreement // "-"),errors:(.errors | join("; "))}],
+      program_errors: [($snap.programs.errors // [])[] | {id,errors:(.errors | join("; "))}],
       in_flight: (if $all_in_flight == 1 then $in_flight_all else $in_flight_all[:$in_flight_n] end),
       secondmates: (if $all_secondmates == 1 then $secondmates_all else $secondmates_all[:$secondmates_n] end),
       decisions_open: (if $all_decisions == 1 then $decisions_all else $decisions_all[:$decisions_n] end),

@@ -28,6 +28,7 @@ Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, whil
 
 Private workflow context is inert by default.
 An absent `config/workflow-context` file or the exact value `off` emits no context; the exact value `on` enables the private index at `data/workflow/index.md`, and every other value is rejected.
+Enabled workflow context requires `python3`; if it is unavailable, the loader reports the missing prerequisite and emits no context, while absent or disabled configuration remains inert without Python.
 The index contains one Markdown table with exactly these columns:
 
 | Scope | Status | Path | Source | End-check |
@@ -669,9 +670,5 @@ Accepted commissions remain native in-flight `kind=program` backlog records inde
 The existing watcher retains future rechecks even with zero workers and emits ordinary durable check events in attended and away mode.
 A check requests engineering reconciliation; it grants no new scope, dispatch, merge or live-action authority.
 Explicit user pauses remain quiet, while technical holds retain their next check and never become implicit completion.
-`state/.program-reconciliation` is disposable debounce state, not a second work database; it retains only the last emission time, a content fingerprint, and ids of unfinished programs observed when a reconciliation event was emitted.
-That receipt lets a later projection report an observed unfinished id whose native row became malformed, changed to an unrecognized kind, moved out of in-flight work, became duplicated, or disappeared without one observed Done transition.
-A valid Done transition retires the id, and an explicit paused program remains valid without requesting supervision.
-If the disposable receipt is deleted, current malformed rows that still identify themselves as programs remain detectable, but the runtime cannot infer that an otherwise unseen or differently typed row used to be an accepted program.
-`FM_PROGRAM_RECHECK_SECS` sets unchanged-program recheck spacing (default 900 seconds, minimum 60); pending queue records are not multiplied.
+`state/.program-reconciliation` is disposable debounce state rather than task authority; the `bin/fm-programs-lib.sh` header solely owns its encoding, transition detection, retirement, loss limits, and retry mechanics, including `FM_PROGRAM_RECHECK_SECS`.
 `tests/fm-watch-checkpoint.test.sh` exercises zero-worker continuation and future waits through the actual checkpoint and watcher.

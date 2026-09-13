@@ -211,6 +211,45 @@ test_program_malformed_transition_and_overrides() {
 }
 test_program_malformed_transition_and_overrides
 
+test_future_program_receipt_surfaces_malformed_transition() {
+  local home json bearings out
+  home=$(make_home future-malformed-program)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] future-delivery - Future accepted delivery (repo: alpha) (kind: program)
+  recheck-at: 2099-01-01T00:00:00Z
+EOF
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "future-only quiet tick failed"
+  [ -z "$out" ] || fail "future-only program reconciled before its due time"
+  [ ! -s "$home/state/.wake-queue" ] || fail "future-only program emitted an early wake"
+
+  printf '## In flight\n- [ ] future-delivery - Future accepted delivery (repo: alpha) (kind: mystery)\n' > "$home/data/backlog.md"
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "future malformed CLI projection unavailable"
+  printf '%s' "$json" | jq -e '
+    .supervision_needed
+    and (.programs | length == 0)
+    and (.errors | any(.id == "future-delivery" and (.errors | length) > 0))
+  ' >/dev/null || fail "future-only receipt lost its malformed transition in the full CLI"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home" \
+    || fail "future-only malformed transition stopped shared zero-worker supervision"
+  bearings=$(FM_HOME="$home" FM_SNAPSHOT_NOW=2026-09-13T00:00:01Z FM_SNAPSHOT_NOW_EPOCH=1001 \
+    "$ROOT/bin/fm-bearings-snapshot.sh" --json) || fail "future malformed Bearings projection unavailable"
+  printf '%s' "$bearings" | jq -e '
+    (.programs | length == 0)
+    and (.program_errors | any(.id == "future-delivery" and (.errors | contains("previously observed unfinished program"))))
+  ' >/dev/null || fail "compact Bearings dropped the canonical continuity error"
+  out=$(FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1001 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home") || fail "future malformed transition did not reconcile"
+  assert_contains "$out" 'program-reconcile' "future malformed transition emitted no durable wake"
+  pass "future quiet receipts preserve malformed continuity through CLI, supervision, Bearings, and wake"
+}
+test_future_program_receipt_surfaces_malformed_transition
+
 test_program_hold_rechecks_after_ack_without_spinning() {
   local home out seq generation
   home=$(make_home held-program)

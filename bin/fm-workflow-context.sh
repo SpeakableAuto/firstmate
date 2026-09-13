@@ -24,6 +24,27 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 if [ ! -e "$CONFIG/workflow-context" ] && [ ! -L "$CONFIG/workflow-context" ]; then
   exit 0
 fi
+if [ -L "$CONFIG" ] || [ -L "$CONFIG/workflow-context" ]; then
+  printf '%s\n' 'WORKFLOW_CONTEXT: symlinked workflow configuration' >&2
+  exit 1
+fi
+if [ ! -f "$CONFIG/workflow-context" ] || ! workflow_context_setting=$(< "$CONFIG/workflow-context"); then
+  printf 'WORKFLOW_CONTEXT: missing regular workflow input: %s\n' "$CONFIG/workflow-context" >&2
+  exit 1
+fi
+case "$workflow_context_setting" in
+  off) exit 0 ;;
+  on)
+    if ! command -v python3 >/dev/null 2>&1; then
+      printf '%s\n' 'WORKFLOW_CONTEXT: python3 is required when config/workflow-context is on' >&2
+      exit 1
+    fi
+    ;;
+  *)
+    printf '%s\n' 'WORKFLOW_CONTEXT: config/workflow-context must be on or off' >&2
+    exit 1
+    ;;
+esac
 exec python3 - "$SCRIPT_DIR" "$FM_HOME" "${FM_DATA_OVERRIDE:-$FM_HOME/data}" "$CONFIG" "$@" <<'PY'
 import datetime as dt
 import pathlib

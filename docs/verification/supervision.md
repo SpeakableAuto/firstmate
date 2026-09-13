@@ -462,30 +462,54 @@ tests/fm-turnend-guard.test.sh
 ### Accepted-program continuation, 2026-09-13
 
 Accepted-program supervision was reverified with synthetic isolated homes and no live services on 2026-09-13.
+The tested source was parent revision `9e87f58ea9544a22f995e5d1d913f8ed0673e2f9` plus working behavior-file content identity `08ef97d94da8582bda6a2402c02a5f6596724ba96ee1cef17c3cac15b6bdd9a6`.
+The runtime was GNU Bash 3.2.57 on arm64 Apple Darwin 25 with jq 1.7.1-apple.
 The program reconciliation tick runs inside the common watcher, below every supported primary harness adapter.
 Claude, Codex, Cursor, Grok, and Kimi reach the shared shell supervision predicate through their guard or continuation path, while Pi and OpenCode also use that predicate from their passive extension coordinators.
 No verdict depends on vendor-rendered output, so this behavior is portable rather than harness-dependent; the Pi/OpenCode fixture pass verifies the two passive coordinators still install and consume the shared libraries.
 
 ```sh
-set -o pipefail
-tests/fm-watch-checkpoint.test.sh |
-  grep -E 'ok - (multiple accepted|future checks|program receipts|external hold)'
-tests/fm-pi-watch-extension.test.sh |
-  grep -F 'ok - OpenCode watcher plugin arms an accepted zero-worker program from effective FM_HOME'
+git rev-parse HEAD
+for file in bin/fm-programs-lib.sh bin/fm-bearings-snapshot.sh bin/fm-supervision-instructions.sh bin/fm-workflow-context.sh docs/supervision-protocols/codex.md tests/fm-watch-checkpoint.test.sh tests/fm-supervision-instructions.test.sh tests/fm-workflow-context.test.sh; do
+  printf '%s\0' "$file"
+  shasum -a 256 "$file"
+done | shasum -a 256
+bash --version | sed -n '1p'
+jq --version
 ```
 
 Observed output:
 
 ```text
-ok - multiple accepted projects survive zero workers and one child finishing, with durable deduplicated wake
-ok - future checks retain supervision, explicit pauses stay quiet, and malformed timing is visible
-ok - program receipts expose malformed transitions while pauses, Done, and independent roots remain valid
-ok - external hold remains quiet between acknowledged due checks and wakes later without dummy worker
-ok - OpenCode watcher plugin arms an accepted zero-worker program from effective FM_HOME
+9e87f58ea9544a22f995e5d1d913f8ed0673e2f9
+08ef97d94da8582bda6a2402c02a5f6596724ba96ee1cef17c3cac15b6bdd9a6  -
+GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+jq-1.7.1-apple
 ```
 
-The transition regression emits a valid program event, acknowledges it, changes the same unfinished native row to an unrecognized kind, and then observes both the public projection error and a new zero-worker reconciliation event.
-The same executable path proves an explicit pause stays quiet, a Done transition retires the disposable receipt, a state-only override keeps reading `FM_HOME/data`, and `FM_DATA_OVERRIDE` independently selects another isolated data root.
+```sh
+set -o pipefail
+tests/fm-watch-checkpoint.test.sh |
+  grep -E 'ok - (program receipts|future quiet receipts)'
+tests/fm-supervision-instructions.test.sh |
+  grep -F 'ok - renderer prints exactly the selected harness block'
+bash tests/fm-workflow-context.test.sh |
+  grep -F 'ok - workflow context requires Python only when enabled'
+```
+
+Observed output:
+
+```text
+ok - program receipts expose malformed transitions while pauses, Done, and independent roots remain valid
+ok - future quiet receipts preserve malformed continuity through CLI, supervision, Bearings, and wake
+ok - renderer prints exactly the selected harness block
+ok - workflow context requires Python only when enabled
+```
+
+The transition regressions cover both an emitted due program and a future-only quiet observation before changing the same unfinished native row to an unrecognized kind.
+The executable paths expose the canonical error through the full program CLI, shared zero-worker predicate, compact Bearings projection, and durable reconciliation event while retaining the explicit-pause, Done-retirement, and independent-root cases.
+The rendered instruction regression confirms the shared owner selects due programs and surfaced errors without a Codex-specific selection restatement.
+The workflow-context regression confirms missing Python is inert while disabled and produces a named atomic refusal only when enabled.
 
 ## Wedge-alarm channels
 

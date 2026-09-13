@@ -12,7 +12,7 @@
 # fm_program_reconcile_tick <state> runs under the existing singleton watcher.
 # It appends one check/program-reconcile event using fm-wake-lib, then records
 # only a content fingerprint, emission time and observed unfinished ids in
-# state/.program-reconciliation.
+# state/.program-reconciliation as epoch<TAB>fingerprint-or-unemitted<TAB>JSON ids.
 # Unacknowledged events suppress duplicates; unchanged content retries after
 # FM_PROGRAM_RECHECK_SECS (default 900, minimum 60), even with no live workers.
 # Runtime receipts are disposable; accepted work remains solely in backlog.md.
@@ -98,7 +98,7 @@ fm_program_receipt_write() {
 
 fm_program_reconcile_tick() {
   local state=$1 now=${FM_PROGRAM_NOW_EPOCH:-$(date +%s)} interval=${FM_PROGRAM_RECHECK_SECS:-900}
-  local snapshot due fingerprint prior last=0 stored='' recorded='[]' observed queued reason
+  local snapshot due fingerprint prior last=0 stored='unemitted' recorded='[]' observed queued reason
   case "$interval" in ''|*[!0-9]*) interval=900 ;; esac
   [ "$interval" -ge 60 ] || interval=60
   local backlog

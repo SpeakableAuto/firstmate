@@ -9,6 +9,24 @@ mkdir -p "$CONTEXT_HOME/config" "$CONTEXT_HOME/data/workflow/projects"
 context() {
   FM_HOME="$CONTEXT_HOME" "$ROOT/bin/fm-workflow-context.sh" "$@"
 }
+
+NO_PY_HOME="$TMP_ROOT/no-python-home"
+NO_PY_BIN=$(fm_fakebin "$TMP_ROOT/no-python-bin")
+mkdir -p "$NO_PY_HOME/config"
+ln -s "$(command -v dirname)" "$NO_PY_BIN/dirname"
+out=$(PATH="$NO_PY_BIN" FM_HOME="$NO_PY_HOME" /bin/bash "$ROOT/bin/fm-workflow-context.sh" startup)
+[ -z "$out" ] || fail "unconfigured context required Python"
+printf 'off\n' > "$NO_PY_HOME/config/workflow-context"
+out=$(PATH="$NO_PY_BIN" FM_HOME="$NO_PY_HOME" /bin/bash "$ROOT/bin/fm-workflow-context.sh" startup)
+[ -z "$out" ] || fail "disabled context required Python"
+printf 'on\n' > "$NO_PY_HOME/config/workflow-context"
+if PATH="$NO_PY_BIN" FM_HOME="$NO_PY_HOME" /bin/bash "$ROOT/bin/fm-workflow-context.sh" startup > "$TMP_ROOT/no-python-out" 2> "$TMP_ROOT/no-python-err"; then
+  fail "enabled context continued without Python"
+fi
+[ ! -s "$TMP_ROOT/no-python-out" ] || fail "missing Python emitted partial context"
+assert_contains "$(cat "$TMP_ROOT/no-python-err")" "python3 is required when config/workflow-context is on" "missing Python prerequisite was not named"
+pass "workflow context requires Python only when enabled"
+
 out=$(context startup)
 [ -z "$out" ] || fail "unconfigured context should be inert"
 printf 'on\n' > "$CONTEXT_HOME/config/workflow-context"
