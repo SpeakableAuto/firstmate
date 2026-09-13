@@ -459,6 +459,34 @@ tests/fm-claude-stop-autoarm.test.sh
 tests/fm-turnend-guard.test.sh
 ```
 
+### Accepted-program continuation, 2026-09-13
+
+Accepted-program supervision was reverified with synthetic isolated homes and no live services on 2026-09-13.
+The program reconciliation tick runs inside the common watcher, below every supported primary harness adapter.
+Claude, Codex, Cursor, Grok, and Kimi reach the shared shell supervision predicate through their guard or continuation path, while Pi and OpenCode also use that predicate from their passive extension coordinators.
+No verdict depends on vendor-rendered output, so this behavior is portable rather than harness-dependent; the Pi/OpenCode fixture pass verifies the two passive coordinators still install and consume the shared libraries.
+
+```sh
+set -o pipefail
+tests/fm-watch-checkpoint.test.sh |
+  grep -E 'ok - (multiple accepted|future checks|program receipts|external hold)'
+tests/fm-pi-watch-extension.test.sh |
+  grep -F 'ok - OpenCode watcher plugin arms an accepted zero-worker program from effective FM_HOME'
+```
+
+Observed output:
+
+```text
+ok - multiple accepted projects survive zero workers and one child finishing, with durable deduplicated wake
+ok - future checks retain supervision, explicit pauses stay quiet, and malformed timing is visible
+ok - program receipts expose malformed transitions while pauses, Done, and independent roots remain valid
+ok - external hold remains quiet between acknowledged due checks and wakes later without dummy worker
+ok - OpenCode watcher plugin arms an accepted zero-worker program from effective FM_HOME
+```
+
+The transition regression emits a valid program event, acknowledges it, changes the same unfinished native row to an unrecognized kind, and then observes both the public projection error and a new zero-worker reconciliation event.
+The same executable path proves an explicit pause stays quiet, a Done transition retires the disposable receipt, a state-only override keeps reading `FM_HOME/data`, and `FM_DATA_OVERRIDE` independently selects another isolated data root.
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

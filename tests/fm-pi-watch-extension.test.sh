@@ -23,6 +23,7 @@ install_pi_watch_extension_fixture() {
   cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$repo/.pi/extensions/lib/fm-calm-visibility.ts"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
   mkdir -p "$repo/bin"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
   chmod +x "$repo/bin/fm-operational-input.sh"
   cat > "$repo/node_modules/@earendil-works/pi-coding-agent/package.json" <<'JSON'
@@ -64,7 +65,6 @@ test_pi_extension_reports_external_healthy_watcher() {
   repo="$TMP_ROOT/pi-external-healthy-root"
   home="$TMP_ROOT/pi-external-healthy-home"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -143,7 +143,6 @@ test_pi_tool_returns_agent_tool_result() {
   repo="$TMP_ROOT/pi-tool-result-root"
   home="$TMP_ROOT/pi-tool-result-home"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -208,7 +207,6 @@ test_pi_redundant_tool_call_is_owned_noop() {
   log="$TMP_ROOT/pi-redundant-tool.log"
   stop="$TMP_ROOT/pi-redundant-tool.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -271,7 +269,6 @@ test_pi_scheduled_retry_call_is_owned_noop() {
   home="$TMP_ROOT/pi-scheduled-retry-home"
   log="$TMP_ROOT/pi-scheduled-retry.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -330,7 +327,6 @@ test_pi_actionable_close_starts_single_successor_before_delivery() {
   log="$TMP_ROOT/pi-continuous-rearm.log"
   stop="$TMP_ROOT/pi-continuous-rearm.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -420,7 +416,6 @@ test_pi_hung_successor_falls_back_to_typed_wake() {
   home="$TMP_ROOT/pi-hung-successor-home"
   log="$TMP_ROOT/pi-hung-successor.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -488,7 +483,6 @@ test_pi_unretired_successor_falls_back_without_retry() {
   log="$TMP_ROOT/pi-unretired-successor.log"
   release="$TMP_ROOT/pi-unretired-successor.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -564,7 +558,6 @@ test_pi_late_unretired_close_resumes_supervision() {
     release="$TMP_ROOT/pi-late-$kind.release"
     stop="$TMP_ROOT/pi-late-$kind.stop"
     mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
     install_pi_watch_extension_fixture "$repo"
     plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
     cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -658,7 +651,6 @@ test_pi_empty_close_retries_instead_of_disappearing() {
   log="$TMP_ROOT/pi-empty-close.log"
   stop="$TMP_ROOT/pi-empty-close.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -717,7 +709,6 @@ test_pi_established_empty_close_honors_retry_limit() {
   home="$TMP_ROOT/pi-established-empty-close-home"
   log="$TMP_ROOT/pi-established-empty-close.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -770,7 +761,6 @@ test_pi_actionable_close_rechecks_session_lock() {
   log="$TMP_ROOT/pi-close-lock.log"
   release="$TMP_ROOT/pi-close-lock.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -829,7 +819,6 @@ test_pi_arm_distinguishes_session_lock_ownership() {
   home="$TMP_ROOT/pi-lock-ownership-home"
   log="$TMP_ROOT/pi-lock-ownership.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -912,7 +901,6 @@ test_pi_session_transition_generation_owner() {
   child_pid_file="$TMP_ROOT/pi-session-transition-child.pid"
   arm_log="$TMP_ROOT/pi-session-transition-arm.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -1092,7 +1080,6 @@ test_pi_process_exit_cleanup_listener_lifecycle() {
   repo="$TMP_ROOT/pi-exit-listener-root"
   home="$TMP_ROOT/pi-exit-listener-home"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   : > "$repo/bin/fm-watch-arm.sh"
@@ -1138,7 +1125,6 @@ test_pi_process_exit_cleanup_stops_arm_child() {
   cleanup_log="$TMP_ROOT/pi-process-exit-cleaned"
   pid_file="$TMP_ROOT/pi-process-exit-child.pid"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'

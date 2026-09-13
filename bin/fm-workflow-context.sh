@@ -2,17 +2,9 @@
 # Read this home's opt-in scoped workflow instructions without changing state.
 # Usage: fm-workflow-context.sh startup [--now <UTC timestamp>]
 #        fm-workflow-context.sh project <project-name> [--task <task-id>] [--now <UTC timestamp>]
-# Absent config/workflow-context or the literal "off" means no output; "on"
-# enables data/workflow/index.md. FM_HOME, FM_DATA_OVERRIDE and FM_CONFIG_OVERRIDE
-# select the same private roots as session-start. Nothing is inherited elsewhere.
-# The index contains one Markdown table with these exact columns:
-# | Scope | Status | Path | Source | End-check |
-# | global | active | operating-agreement.md | approved decision reference | none |
-# Scope is global, project:<name>, or task:<id>; names use letters, digits, ._-.
-# Status is active, stopped, superseded, or expired. Path is a relative .md file
-# below data/workflow with no symlink components. Source is a nonempty approval
-# or evidence reference. Fields cannot contain pipes. End-check is none,
-# until:YYYY-MM-DDTHH:MM:SSZ, or condition:<plain-language owner check>.
+# docs/configuration.md "Private workflow context" owns setup and index schema.
+# FM_HOME, FM_DATA_OVERRIDE and FM_CONFIG_OVERRIDE select the same private roots
+# as session-start. Nothing is inherited elsewhere.
 # A condition is displayed, never executed or assumed satisfied. A reached until
 # withholds active content and reports a required owner boundary check. Stopped
 # content remains visible even after its date: expiry never lifts a stop.

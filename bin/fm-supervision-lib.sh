@@ -63,7 +63,7 @@ fm_supervision_status() {
   # Future checks retain the tokenless watcher; explicit user pauses do not.
   # shellcheck disable=SC2034 # Public status consumed by guard/stop adapters.
   FM_SUP_PROGRAMS=0
-  if programs=$(fm_programs_json "$(fm_program_backlog_path "$state")"); then
+  if programs=$(fm_programs_json "$(fm_program_backlog_path "$state")" "" "$state/.program-reconciliation"); then
     FM_SUP_PROGRAMS=$(printf '%s' "$programs" | jq '[.programs[] | select(.supervision_needed)] | length')
     [ "$(printf '%s' "$programs" | jq -r '.supervision_needed')" = false ] || FM_SUP_NEEDED=true
     if [ "$(printf '%s' "$programs" | jq '.errors | length')" -gt 0 ]; then

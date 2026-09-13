@@ -20,6 +20,11 @@
 #     requires_child_metadata, blocked_by_ids, unresolved_blocker_ids, and
 #     captain_actionable fields. Repeated blocker tokens remain ordered; a blocker
 #     resolves only when its structured record is Done, and missing ids stay open.
+#   programs: the complete fm-programs.v1 projection for accepted in-flight
+#     programs, including due/supervision flags, current validation and continuity
+#     errors, and disposable observed_unfinished_program_ids receipt provenance.
+#     Malformed program records remain visible in errors rather than becoming an
+#     empty portfolio. An unreadable backlog aborts the command without JSON.
 #   tasks[]: one row per state/<id>.meta, sorted by id.
 #     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
 #     state, source, detail, and raw line separately.
@@ -1199,7 +1204,7 @@ scout_report_lines() {
 }
 
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
-PROGRAMS_JSON=$(fm_programs_json "$BACKLOG" "$SNAPSHOT_EPOCH") || { echo "fm-fleet-snapshot: program read failed" >&2; exit 1; }
+PROGRAMS_JSON=$(fm_programs_json "$BACKLOG" "$SNAPSHOT_EPOCH" "$STATE/.program-reconciliation") || { echo "fm-fleet-snapshot: program read failed" >&2; exit 1; }
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
 
 if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then

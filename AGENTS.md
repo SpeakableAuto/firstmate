@@ -76,11 +76,13 @@ config/trace-context  optional presence flag enabling default-off native W3C tra
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
+config/workflow-context  private scoped workflow-context opt-in; LOCAL, gitignored; see docs/configuration.md "Private workflow context"
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update
   captain-shared.md  main-authoritative shared captain preferences propagated read-only to secondmate homes; LOCAL, gitignored, owned by secondmate-provisioning
   learnings.md       fleet-local operational facts and gotchas; LOCAL, gitignored; dated, evidence-backed, curated, and updated with inspect-then-update - rewrite and prune rather than append forever, the same contract as captain.md; created lazily, absent until this home has a learning to store
+  workflow/          optional indexed private workflow instructions; LOCAL, gitignored; see docs/configuration.md "Private workflow context"
   projects.md        thin fleet navigation registry recording each project's standing delivery posture; firstmate-private, parsed for mechanical sync and seeding by fm-project-mode.sh (section 6)
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
@@ -131,8 +133,8 @@ state/               runtime records and signals; gitignored
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
-When workflow context is enabled, use the emitted current workflow agreement and load applicable project/task context through `bin/fm-workflow-context.sh` before intake, dispatch, review decisions, and affected actions; its header owns selection and expiry mechanics.
-Current scoped user authority governs ordinary engineering, progress reporting, maintenance, and incident recovery; it never implicitly releases an explicit project stop or grants an unapproved user launch.
+When enabled, valid, applicable workflow context is emitted, use its current workflow agreement and load matching project/task context through `bin/fm-workflow-context.sh` before intake, dispatch, review decisions, and affected actions; `docs/configuration.md` owns its setup and schema, while the script header owns selection and expiry mechanics.
+Opting in grants no authority by itself; only selected current context that explicitly grants a named authority may change the shared defaults for engineering dispositions, progress reporting, maintenance, or incident recovery, and it never implicitly releases an explicit project stop or grants an unapproved user launch.
 
 ## 3. Session start (run once at every session start)
 
@@ -465,15 +467,15 @@ Use the same evidence-first form for objections or clarifying challenges rather 
 
 Reach the captain immediately for:
 
-- Work ready for their review under the current operating agreement; routine technical PR readiness belongs to firstmate when standing authority covers it, with the full PR URL retained as evidence.
+- Work ready for their review, with the full PR URL, unless enabled, valid, applicable workflow context explicitly grants firstmate routine technical PR-readiness disposition.
 - Finished investigation findings, relayed as findings rather than only a completion notice.
 - Gate findings that require their decision under the configured authority.
 - A real blocker or failure after the relevant playbook is exhausted.
-- Destructive, irreversible, or sensitive actions without applicable authority; explicitly authorised restorative maintenance and incident recovery use their current scoped agreement.
+- Anything destructive, irreversible, or security-sensitive, unless enabled, valid, applicable workflow context explicitly grants that exact class of action.
 - A needed credential or login.
 
-Follow the current captain communication preference for meaningful progress and scheduled summaries; absent such a preference, do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
-An informational update does not require permission to continue ordinary authorised work.
+Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics unless enabled, valid, applicable workflow context explicitly sets a different communication preference.
+Only when selected current context explicitly grants continuation after informational updates does such an update not require separate permission; accepted-program reconciliation remains the generic continuation mechanism.
 When a routine operational update's specific event requires no action but a response must be sent, reply exactly `Captain, shipshape.` without characterizing the visible session's unrelated decisions.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.

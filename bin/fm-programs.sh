@@ -12,4 +12,5 @@ case "${1:---json}" in
   *) printf 'usage: fm-programs.sh --json\n' >&2; exit 2 ;;
 esac
 FM_HOME=${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}
-fm_programs_json "${FM_DATA_OVERRIDE:-$FM_HOME/data}/backlog.md"
+STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
+fm_programs_json "${FM_DATA_OVERRIDE:-$FM_HOME/data}/backlog.md" "" "$STATE/.program-reconciliation"

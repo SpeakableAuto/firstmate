@@ -10,9 +10,9 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 
 This section is the single owner of the top-level operational-home layout; producer script headers and their help own exact child-file fields and mutation contracts.
 The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
-`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, and scout reports.
+`data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, scout reports, and optional indexed workflow instructions under `data/workflow/`.
 `state/` holds runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, inactive terminal-outcome receipts under `state/terminal-outcomes/`, away-mode state, generated Relay artifacts, private secondmate config-reread generations with their retry and quarantine state, and parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
-`config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
+`config/` holds local gitignored operating choices, including the optional `config/workflow-context` selector, and `projects/` holds the local project clones that Firstmate reads but changes only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
 
 `bin/fm-spawn.sh` owns the base task-metadata fields it emits, while the runtime-backend section below owns backend-specific fields and selector interpretation.
 The producing PR and Relay helpers own the fields they append, `bin/fm-classify-lib.sh` owns status-event vocabulary, and `bin/fm-crew-state.sh` owns current-state reconciliation.
@@ -23,6 +23,31 @@ Wake, watcher, away-mode, and Relay-specific state mechanics remain with their n
 `docs/sessionstart-nudge.md` owns the native session-open adapter tiers that run or nudge the digest command, and the source routing between them.
 `AGENTS.md` retains the run-once and read-once operator rules, lock-refusal safety, installation consent, and direct-report recovery boundaries because those facts apply at every session start.
 Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, while persistent-secondmate recovery is owned by `secondmate-provisioning`.
+
+## Private workflow context (config/workflow-context)
+
+Private workflow context is inert by default.
+An absent `config/workflow-context` file or the exact value `off` emits no context; the exact value `on` enables the private index at `data/workflow/index.md`, and every other value is rejected.
+The index contains one Markdown table with exactly these columns:
+
+| Scope | Status | Path | Source | End-check |
+| --- | --- | --- | --- | --- |
+| global | active | operating-agreement.md | approved decision reference | none |
+
+`Scope` is `global`, `project:<name>`, or `task:<id>`, where names contain letters, digits, `.`, `_`, or `-` and start with a letter or digit.
+`Status` is `active`, `stopped`, `superseded`, or `expired`.
+`Path` is a relative `.md` file below `data/workflow/` with no symlink component, `Source` is a nonempty approval or evidence reference, and table fields cannot contain pipes.
+`End-check` is `none`, `until:YYYY-MM-DDTHH:MM:SSZ`, or `condition:<plain-language owner check>`.
+An elapsed `until` withholds active content pending its owner check, while stopped content remains visible and never resumes because a date elapsed.
+Superseded and expired content is indexed for provenance but never emitted as instructions.
+
+`bin/fm-workflow-context.sh startup` emits current global content plus project/task navigation, while `bin/fm-workflow-context.sh project <project-name> [--task <task-id>]` emits global content followed by matching project and task content.
+Selection is atomic: invalid configuration, an invalid index, or unreadable selected content produces no partial context, and unrelated bodies are not read.
+Enabling the loader is not an authority grant; only applicable selected content carrying explicit user authority can change a shared default, and explicit stops or user-launch decisions remain with their owners.
+Session start loads the global selection, and generated worker instructions place selected private content and provenance outside the publishable Task section.
+Do not copy private bodies, private paths, or provenance into gate intent, commits, pull requests, reports, or public evidence.
+`FM_DATA_OVERRIDE` and `FM_CONFIG_OVERRIDE` independently select alternate private roots for specialized setups and tests.
+The helper header owns exact selection order, expiry display, and atomic read mechanics.
 
 ## Pi Calm preference (config/calm)
 
@@ -644,6 +669,9 @@ Accepted commissions remain native in-flight `kind=program` backlog records inde
 The existing watcher retains future rechecks even with zero workers and emits ordinary durable check events in attended and away mode.
 A check requests engineering reconciliation; it grants no new scope, dispatch, merge or live-action authority.
 Explicit user pauses remain quiet, while technical holds retain their next check and never become implicit completion.
-`state/.program-reconciliation` is disposable debounce state, not a second work database.
+`state/.program-reconciliation` is disposable debounce state, not a second work database; it retains only the last emission time, a content fingerprint, and ids of unfinished programs observed when a reconciliation event was emitted.
+That receipt lets a later projection report an observed unfinished id whose native row became malformed, changed to an unrecognized kind, moved out of in-flight work, became duplicated, or disappeared without one observed Done transition.
+A valid Done transition retires the id, and an explicit paused program remains valid without requesting supervision.
+If the disposable receipt is deleted, current malformed rows that still identify themselves as programs remain detectable, but the runtime cannot infer that an otherwise unseen or differently typed row used to be an accepted program.
 `FM_PROGRAM_RECHECK_SECS` sets unchanged-program recheck spacing (default 900 seconds, minimum 60); pending queue records are not multiplied.
 `tests/fm-watch-checkpoint.test.sh` exercises zero-worker continuation and future waits through the actual checkpoint and watcher.

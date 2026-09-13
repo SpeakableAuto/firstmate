@@ -148,20 +148,68 @@ test_existing_singleton_watcher_is_not_success
 test_program_continuation_without_workers
 test_program_future_pause_and_parse_failure
 
-test_program_malformed_and_state_override() {
-  local home other json
+test_program_malformed_transition_and_overrides() {
+  local home terminal isolated unrelated json out seq generation
   home=$(make_home malformed-program)
-  other=$(make_home unrelated-home)
-  printf '## In flight\n- broken record (kind: program)\n' > "$home/data/backlog.md"
-  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "malformed program view unavailable"
-  printf '%s' "$json" | jq -e '.supervision_needed and (.errors | length > 0)' >/dev/null     || fail "malformed program silently disappeared"
-  FM_HOME="$other" FM_STATE_OVERRIDE="$home/state" bash -c '
+  terminal=$(make_home terminal-program)
+  isolated=$(make_home isolated-state)
+  unrelated=$(make_home unrelated-home)
+
+  printf '## In flight\n- [ ] delivery - Accepted delivery (repo: alpha) (kind: program)\n' > "$home/data/backlog.md"
+  FM_HOME="$home" FM_PROGRAM_NOW_EPOCH=1000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$home" >/dev/null || fail "valid program did not emit"
+  seq=$(awk -F '\t' 'END {print $2}' "$home/state/.wake-queue")
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2>&1) || fail "valid program event did not present"
+  generation=$(printf '%s\n' "$out" | sed -n 's/.*--recovery-generation \([^ ]*\).*/\1/p' | head -1)
+  FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$generation" >/dev/null 2>&1 \
+    || fail "valid program event did not acknowledge"
+
+  printf '## In flight\n- [ ] delivery - Accepted delivery (repo: alpha) (kind: mystery)\n' > "$home/data/backlog.md"
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "malformed transition projection unavailable"
+  printf '%s' "$json" | jq -e '
+    .supervision_needed
+    and (.errors | any(.id == "delivery" and (.errors | length) > 0))
+  ' >/dev/null || fail "previously emitted program disappeared after an unrecognized kind transition"
+  FM_HOME="$home" bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_needed "$2/state"' _ "$ROOT" "$home" \
+    || fail "malformed transition stopped zero-worker supervision"
+  out=$(FM_HOME="$home" FM_POLL=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 4) \
+    || fail "malformed transition did not wake checkpoint"
+  assert_contains "$out" 'check: program-reconcile' "malformed transition had no durable reconciliation wake"
+
+  printf '## In flight\n- [ ] release - Accepted release (repo: beta) (kind: program)\n' > "$terminal/data/backlog.md"
+  FM_HOME="$terminal" FM_PROGRAM_NOW_EPOCH=1000 bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$terminal" >/dev/null || fail "terminal fixture did not emit"
+  printf '## In flight\n- [ ] release - Accepted release (repo: beta) (kind: program)\n  continuation: paused\n' > "$terminal/data/backlog.md"
+  json=$(FM_HOME="$terminal" "$ROOT/bin/fm-programs.sh" --json) || fail "paused transition projection unavailable"
+  printf '%s' "$json" | jq -e '(.supervision_needed | not) and (.errors | length == 0)' >/dev/null \
+    || fail "explicit pause became a continuity alarm"
+  printf '## Done\n- [x] release - Accepted release (repo: beta) (kind: program)\n' > "$terminal/data/backlog.md"
+  FM_HOME="$terminal" bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-programs-lib.sh"
+    fm_program_reconcile_tick "$2/state"
+  ' _ "$ROOT" "$terminal" >/dev/null || fail "terminal transition did not reconcile"
+  json=$(FM_HOME="$terminal" "$ROOT/bin/fm-programs.sh" --json) || fail "terminal projection unavailable"
+  printf '%s' "$json" | jq -e '(.supervision_needed | not) and (.errors | length == 0)' >/dev/null \
+    || fail "legitimate Done transition became a continuity alarm"
+  [ ! -e "$terminal/state/.program-reconciliation" ] || fail "terminal transition retained an unfinished receipt"
+
+  printf '## In flight\n- [ ] state-root - State override program (repo: gamma) (kind: program)\n' > "$home/data/backlog.md"
+  printf '## In flight\n' > "$unrelated/data/backlog.md"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$isolated/state" bash -c '
     . "$1/bin/fm-supervision-lib.sh"
     fm_supervision_needed "$2/state"
-  ' _ "$ROOT" "$home" || fail "state override read unrelated home backlog"
-  pass "malformed program keeps recovery visible and state override isolates the correct backlog"
+  ' _ "$ROOT" "$isolated" || fail "state-only override redirected the effective data root"
+  FM_HOME="$unrelated" FM_STATE_OVERRIDE="$isolated/state" FM_DATA_OVERRIDE="$home/data" bash -c '
+    . "$1/bin/fm-supervision-lib.sh"
+    fm_supervision_needed "$2/state"
+  ' _ "$ROOT" "$isolated" || fail "explicit data override did not independently select the backlog"
+  pass "program receipts expose malformed transitions while pauses, Done, and independent roots remain valid"
 }
-test_program_malformed_and_state_override
+test_program_malformed_transition_and_overrides
 
 test_program_hold_rechecks_after_ack_without_spinning() {
   local home out seq generation
