@@ -29,7 +29,7 @@ fm_sup_stat_mtime() {
 # Populates, for the state dir at $1:
 #   FM_SUP_IN_FLIGHT      count of state/*.meta (in-flight tasks)
 #   FM_SUP_SOURCES        count of registered process-to-event sources
-#   FM_SUP_PROGRAMS       count of non-paused programs, or unknown on read failure
+#   FM_SUP_PROGRAMS       count of non-paused programs, sync, or unknown
 #   FM_SUP_NEEDED         true/false - in-flight work, an X-mode relay poll, or a
 #                         accepted unfinished program, or registered event source (a source is a wait on an
 #                         external process, not a task, so it has no metadata)
@@ -67,6 +67,9 @@ fm_supervision_status() {
   if programs=$(fm_programs_json "$(fm_program_backlog_path "$state")" "" "$state/.program-reconciliation"); then
     FM_SUP_PROGRAMS=$(printf '%s' "$programs" | jq '[.programs[] | select(.supervision_needed)] | length')
     [ "$(printf '%s' "$programs" | jq -r '.supervision_needed')" = false ] || FM_SUP_NEEDED=true
+    if [ "$FM_SUP_PROGRAMS" -eq 0 ] && [ "$(printf '%s' "$programs" | jq -r '.receipt_sync_needed')" = true ]; then
+      FM_SUP_PROGRAMS=sync
+    fi
     if [ "$(printf '%s' "$programs" | jq '.errors | length')" -gt 0 ]; then
       FM_SUP_PROGRAMS=unknown
     fi

@@ -87,6 +87,7 @@ SH
   chmod +x "$fakebin/no-mistakes"
   add_tasks_axi "$fakebin" "0.2.4"
   add_quota_axi "$fakebin"
+  add_real_jq "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -508,6 +509,36 @@ SH
   expected="MISSING: git (install: brew install git  # or the platform's package manager)"
   [ "$out" = "$expected" ] || fail "missing git should report the supported install instruction, got: $out"
   pass "bootstrap requires git with an install instruction"
+}
+
+test_jq_is_required_by_the_universal_toolchain() {
+  local case_dir fakebin bash_env out expected
+  case_dir="$TMP_ROOT/universal-jq"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "installed universal jq should keep bootstrap silent, got: $out"
+
+  rm -f "$fakebin/jq"
+  bash_env="$case_dir/no-jq.bash"
+  cat > "$bash_env" <<'SH'
+command() {
+  if [ "${1:-}" = -v ] && [ "${2:-}" = jq ]; then
+    return 1
+  fi
+  builtin command "$@"
+}
+jq() {
+  return 127
+}
+SH
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$bash_env" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  expected="MISSING: jq (install: brew install jq  # or the platform's package manager)"
+  [ "$out" = "$expected" ] || fail "missing universal jq should use the supported diagnostic, got: $out"
+  pass "bootstrap requires jq universally and accepts the installed path"
 }
 
 test_orca_backend_gates_orca_tool_only_when_selected() {
@@ -1155,6 +1186,7 @@ test_lavish_axi_min_version
 test_tasks_axi_min_version
 test_quota_axi_min_version
 test_git_is_required_with_supported_install_instruction
+test_jq_is_required_by_the_universal_toolchain
 test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux

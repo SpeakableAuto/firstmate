@@ -13,7 +13,6 @@ Pick Herdr when you want native busy, idle, and blocked state and accept the exp
 Prerequisites:
 
 - Herdr protocol 14 or newer, installed from [herdr.dev](https://herdr.dev).
-- `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 - `python3` only for optional protocol-16 presentation-space ordering and native event subscription.
 
@@ -26,7 +25,7 @@ It is also auto-detected when the primary runs natively under `HERDR_ENV=1` and 
 A tmux pane nested inside Herdr resolves to tmux because the innermost multiplexer wins.
 An auto-detected Herdr spawn prints an opt-out notice.
 
-Spawn stops before creating a Herdr container or acquiring a task worktree when `herdr`, `jq`, or the protocol floor is unavailable.
+Spawn stops before creating a Herdr container or acquiring a task worktree when `herdr` or the protocol floor is unavailable.
 No separate first-run provisioning is required.
 
 The required CI lane uses the pinned installers in `bin/fm-install-herdr.sh` and `bin/fm-install-treehouse.sh`.

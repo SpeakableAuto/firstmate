@@ -11,11 +11,13 @@
 # A due event is an engineering reconciliation request, NEVER dispatch authority.
 # fm_program_reconcile_tick <state> runs under the existing singleton watcher.
 # It appends one check/program-reconcile event using fm-wake-lib, then records
-# only a content fingerprint, emission time and observed unfinished ids in
+# only an emission time, a content fingerprint excluding receipt bookkeeping,
+# and observed unfinished ids in
 # state/.program-reconciliation as epoch<TAB>fingerprint-or-unemitted<TAB>JSON ids.
 # Unacknowledged events suppress duplicates; unchanged content retries after
 # FM_PROGRAM_RECHECK_SECS (default 900, minimum 60), even with no live workers.
 # Runtime receipts are disposable; accepted work remains solely in backlog.md.
+# receipt_sync_needed reports when the watcher must synchronize observed ids.
 # Current valid programs remain discoverable after receipt loss, but missing or
 # retagged historical program identities cannot be reconstructed after deletion.
 # FM_PROGRAM_NOW_EPOCH is an optional deterministic clock for isolated fixtures.
@@ -39,8 +41,8 @@ fm_programs_json() {
   fi
   printf '%s' "$raw" | jq --argjson now "$now" --argjson observed "$observed" '
     . as $backlog
-    | [.records[] | select((.structured | not) and (.state == "in_flight" or .state == "queued")
-        and (.raw | test("kind:[[:space:]]*program")))
+    | [.records[] | select((.structured | not) and .state == "in_flight"
+        and (.raw | test("kind:[[:space:]]*program[[:space:]]*([,)]|$)")))
         | {id:"unparseable-program",errors:["malformed program backlog row"]}] as $parse_errors
     | def values($key): [.body_lines[]? | select(startswith($key + ":")) | sub("^[^:]*:[[:space:]]*"; "")];
       def child($id):
@@ -75,11 +77,14 @@ fm_programs_json() {
           continuation:$continuation,recheck_at:$check,errors:$errors,
           supervision_needed:($continuation != "paused" or ($errors | length) > 0),
           due:(($errors | length) > 0 or ($continuation != "paused" and ($at == null or $at <= $now)))}] as $programs
+    | ($retained_observed + [$programs[].id] | unique) as $next_observed
     | {schema:"fm-programs.v1",path:$backlog.path,present:$backlog.present,
        programs:$programs,
-       observed_unfinished_program_ids:($retained_observed + [$programs[].id] | unique),
+       observed_unfinished_program_ids:$next_observed,
+       receipt_sync_needed:($observed != $next_observed),
        errors:($parse_errors + $continuity_errors + [$programs[] | select(.errors | length > 0) | {id,errors}]),
-       supervision_needed:(($parse_errors | length) > 0 or ($continuity_errors | length) > 0 or any($programs[]; .supervision_needed))}'
+       supervision_needed:(($observed != $next_observed) or ($parse_errors | length) > 0
+         or ($continuity_errors | length) > 0 or any($programs[]; .supervision_needed))}'
 }
 
 fm_program_backlog_path() {
@@ -101,7 +106,7 @@ fm_program_receipt_write() {
 
 fm_program_reconcile_tick() {
   local state=$1 now=${FM_PROGRAM_NOW_EPOCH:-$(date +%s)} interval=${FM_PROGRAM_RECHECK_SECS:-900}
-  local snapshot due fingerprint prior last=0 stored='unemitted' recorded='[]' observed queued reason
+  local snapshot due fingerprint fingerprint_input prior last=0 stored='unemitted' recorded='[]' observed queued reason
   case "$interval" in ''|*[!0-9]*) interval=900 ;; esac
   [ "$interval" -ge 60 ] || interval=60
   local backlog
@@ -119,22 +124,24 @@ fm_program_reconcile_tick() {
   fi
   observed=$(printf '%s' "$snapshot" | jq -c '.observed_unfinished_program_ids // []') || return 1
   due=$(printf '%s' "$snapshot" | jq -r '[.programs[] | select(.due) | .id] | join(", ")') || return 1
+  if [ "$observed" != "$recorded" ]; then
+    if [ "$observed" = '[]' ]; then
+      rm -f "$prior"
+    else
+      fm_program_receipt_write "$prior" "$last" "$stored" "$observed" || return 1
+    fi
+    recorded=$observed
+  fi
   [ -n "$due" ] || {
     if [ "$(printf '%s' "$snapshot" | jq '.errors | length')" -eq 0 ]; then
-      if [ "$observed" != "$recorded" ]; then
-        if [ "$observed" = '[]' ]; then
-          rm -f "$prior"
-        else
-          fm_program_receipt_write "$prior" "$last" "$stored" "$observed" || return 1
-        fi
-      fi
       return 0
     fi
     due='unreadable program records'
   }
   # Include all program state so changes elsewhere in the portfolio trigger a
   # complete reconciliation, not only the most recently discussed project.
-  fingerprint=$(printf '%s' "$snapshot" | cksum) || return 1
+  fingerprint_input=$(printf '%s' "$snapshot" | jq -c 'del(.observed_unfinished_program_ids,.receipt_sync_needed)') || return 1
+  fingerprint=$(printf '%s' "$fingerprint_input" | cksum) || return 1
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
   [ "$stored" != "$fingerprint" ] || [ "$now" -lt "$last" ] || [ $((now - last)) -ge "$interval" ] || return 0
   queued=$(fm_wake_queued_keys check) || return 1

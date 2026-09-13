@@ -11,12 +11,11 @@ Pick Zellij when you already use it as a terminal multiplexer and accept its cur
 Prerequisites:
 
 - Zellij 0.44 or newer.
-- `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 
 Select it with local `config/backend` containing `zellij`, `FM_BACKEND=zellij` for one launch, or an explicit request to Firstmate.
 It is never auto-detected.
-A spawn stops before creating a session or acquiring a worktree when Zellij or `jq` is missing or Zellij is below 0.44.
+A spawn stops before creating a session or acquiring a worktree when Zellij is missing or below 0.44.
 
 Firstmate uses one shared session named `firstmate` by default.
 `FM_ZELLIJ_SESSION` can select another name for isolated verification.
