@@ -1,0 +1,45 @@
+$ FM_HOME=<synthetic-home> bin/fm-programs.sh --json
+{
+  "schema": "fm-programs.v1",
+  "programs": [
+    {
+      "id": "product-a",
+      "continuation": "active",
+      "due": true,
+      "children": [
+        {
+          "id": "child-a",
+          "state": "done"
+        }
+      ],
+      "supervision_needed": true
+    },
+    {
+      "id": "product-b",
+      "continuation": "active",
+      "due": false,
+      "children": [],
+      "supervision_needed": true
+    },
+    {
+      "id": "product-c",
+      "continuation": "paused",
+      "due": false,
+      "children": [],
+      "supervision_needed": false
+    }
+  ],
+  "errors": [],
+  "supervision_needed": true
+}
+
+$ find <synthetic-home>/state -name "*.meta"
+live_worker_records=0
+
+$ fm_program_reconcile_tick (first due check)
+check: program-reconcile: revisit due programs and surfaced program errors; due: product-a. Reconcile scope, blockers, children and acceptance before dispatch; a child finishing is not product completion.
+durable_program_reconcile_events=1
+
+$ fm_program_reconcile_tick (repeat while first event is unacknowledged)
+repeat_output_bytes=0
+durable_program_reconcile_events=1

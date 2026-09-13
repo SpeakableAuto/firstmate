@@ -1,0 +1,18 @@
+$ FM_HOME=<unconfigured-home> bin/fm-workflow-context.sh startup
+stdout_bytes=0 (existing behavior preserved without opt-in)
+
+$ FM_HOME=<synthetic-home> bin/fm-workflow-context.sh startup/project + bin/fm-brief.sh
+global_rule_loaded_at_startup=true
+project_body_withheld_at_startup=true
+matching_project_rule_loaded=true
+expired_allowance_withheld=true
+explicit_stop_retained_after_date=true
+task_section_private_policy_markers=0
+task_section_private_path_markers=0
+private_section_after_definition_of_done=true
+selected_private_context_present_only_in_private_section=true
+
+$ FM_HOME=<synthetic-home> bin/fm-brief.sh rejected-task beta --mode direct-PR
+exit=1
+stdout_bytes=0
+partial_brief_exists=no

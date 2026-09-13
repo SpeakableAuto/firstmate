@@ -1,0 +1,6 @@
+$ ruby -e <parse .github/workflows/ci.yml>
+push_branches=["main"]
+pull_request_branches=["main", "zac-runtime"]
+
+$ git merge-base --is-ancestor <deployed-baseline> <target>
+target_descends_from_existing_deployed_baseline=true
