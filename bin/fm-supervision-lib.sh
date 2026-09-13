@@ -4,7 +4,7 @@
 #
 # Reports whether a firstmate home needs supervision because it has in-flight
 # work (a state/<id>.meta exists), an X-mode relay poll (state/x-watch.check.sh),
-# a registered process-to-event source, or an accepted unfinished program, and
+# a registered process-to-event source, or accepted-program reconciliation state, and
 # whether its watcher has a fresh liveness beacon (state/.last-watcher-beat,
 # touched every poll cycle, within the grace window).
 # bin/fm-turnend-guard.sh uses the PID-strict fm_watcher_healthy from
@@ -29,9 +29,9 @@ fm_sup_stat_mtime() {
 # Populates, for the state dir at $1:
 #   FM_SUP_IN_FLIGHT      count of state/*.meta (in-flight tasks)
 #   FM_SUP_SOURCES        count of registered process-to-event sources
-#   FM_SUP_PROGRAMS       count of non-paused programs, sync, or unknown
+#   FM_SUP_PROGRAMS       count of programs needing supervision, sync, or unknown
 #   FM_SUP_NEEDED         true/false - in-flight work, an X-mode relay poll, or a
-#                         accepted unfinished program, or registered event source (a source is a wait on an
+#                         accepted-program reconciliation, or registered event source (a source is a wait on an
 #                         external process, not a task, so it has no metadata)
 #   FM_SUP_WATCHER_FRESH  true/false - a watcher beacon within the grace window
 #   FM_SUP_BEACON_DESC    human-readable beacon age, for banners ("never" if absent)

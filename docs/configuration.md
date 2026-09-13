@@ -45,7 +45,8 @@ Superseded and expired content is indexed for provenance but never emitted as in
 `bin/fm-workflow-context.sh startup` emits current global content plus project/task navigation, while `bin/fm-workflow-context.sh project <project-name> [--task <task-id>]` emits global content followed by matching project and task content.
 Selection is atomic: invalid configuration, an invalid index, or unreadable selected content produces no partial context, and unrelated bodies are not read.
 Enabling the loader is not an authority grant; only applicable selected content carrying explicit user authority can change a shared default, and explicit stops or user-launch decisions remain with their owners.
-Session start loads the global selection, and generated worker instructions place selected private content and provenance outside the publishable Task section.
+Session start loads the global selection, and generated ordinary-worker instructions place selected private content and provenance outside the publishable Task section.
+Secondmate charters do not import their parent's selected context; each secondmate loads workflow context from its own home and scope.
 Do not copy private bodies, private paths, or provenance into gate intent, commits, pull requests, reports, or public evidence.
 `FM_DATA_OVERRIDE` and `FM_CONFIG_OVERRIDE` independently select alternate private roots for specialized setups and tests.
 The helper header owns exact selection order, expiry display, and atomic read mechanics.

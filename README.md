@@ -47,7 +47,9 @@ Launching a supported harness inside it instantiates your first mate - and makes
 - **Two task shapes** - ship tasks deliver authorized changes; scout tasks leave standalone investigation reports when the intake contract warrants separate research.
 - **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` autonomy flag.
 - **Optional secondmates** - opt in to persistent second mates that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, either locally or as a whole home on an SSH-reachable host, with guarded updates and recovery that never turns an unavailable remote route into a local replacement.
-- **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
+- **Accepted-program continuity** - accepted multi-task outcomes remain supervised through their agreed acceptance point, including between child tasks and when no worker is live, without treating a finished child as approval of its parent outcome.
+- **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when action is due; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
+- **Optional private workflow context** - opt in to indexed global, project, and task guidance that stays private, scope-aware, provenance-labeled, and separate from publishable task and PR content.
 - **Optional Relay** - opt in with one local `.env` pairing token so firstmate can answer your public mentions on X and Discord alike, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-Relay behavior; a final reply promised in a thread becomes durable state that is reconciled from disk, so a restart or a compacted conversation cannot lose it; dry-run preview records would-be replies and dismissals locally before go-live.
 - **Strict project boundary** - the first mate is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), including fleet sync's guarded safe branch pruning; crewmates make every other project change behind the configured merge authority.
 - **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca when explicitly selected); kill the session anytime and the next one reconciles, including confirmed-dead secondmate agents, and carries on.
@@ -60,7 +62,7 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 
 - A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Codex, OpenCode, or Cursor Agent CLI.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
-- The CLI and dependencies for your selected runtime backend; tmux is the reference default.
+- The remaining [universal toolchain and selected runtime-backend dependencies](docs/configuration.md#toolchain); tmux is the reference default.
 
 The first mate detects and offers to install supported missing tools after you approve.
 Backend-specific setup is linked in [Documentation](#documentation).
@@ -159,10 +161,10 @@ Setup guides for tmux (the default) and every other supported backend (herdr, ze
 
 You chat with the first mate.
 It routes each request to a crewmate in its own session endpoint and git worktree, supervises the fleet with a zero-token event-driven watcher, and brings you finished PRs, approved local merges, or investigation reports.
-Optional secondmates extend this to persistent local or whole-home remote second mates, dispatch profiles let you steer which harness handles which task, and opt-in Relay lets the same fleet answer public mentions.
+Accepted programs preserve multi-task outcomes between workers, optional private workflow context supplies scoped operating guidance, secondmates extend the fleet to persistent local or whole-home remote homes, dispatch profiles steer which harness handles each task, and opt-in Relay lets the same fleet answer public mentions.
 `codex-app` is not a runtime backend yet; [docs/codex-app-backend.md](docs/codex-app-backend.md) owns the Codex App boundary.
 
-Full architecture - the supervision engine, worktree isolation, secondmates, dispatch profiles, project modes, optional Relay, fleet sync, and self-update - is in [docs/architecture.md](docs/architecture.md).
+Full architecture - including accepted-program continuation, supervision, worktree isolation, private workflow-context routing, secondmates, dispatch profiles, project modes, optional Relay, fleet sync, and self-update - is in [docs/architecture.md](docs/architecture.md).
 
 ## Built-in skills
 
@@ -199,7 +201,7 @@ Firstmate's skills live in two separate places with different audiences:
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) - maintainer architecture for the crew, supervision, worktrees, secondmates, and project modes.
-- [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional Relay and its X and Discord setup steps, the files you set, and harness support.
+- [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, private workflow context, accepted programs, optional Relay setup, and harness support.
 - [docs/remote-secondmates.md](docs/remote-secondmates.md) - current setup, routing, transfer, recovery, and safety behavior for whole-home remote second mates.
 - [docs/calm.md](docs/calm.md) - current Pi `/calm` behavior and supported presentation limits.
 - [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure the active alert for an away-mode escalation delivery that gets stuck.
