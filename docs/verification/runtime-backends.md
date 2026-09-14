@@ -19,12 +19,13 @@ FM_PI_NATIVE_QUEUE=1 FM_PI_PACKAGE_ROOT="$pi_package_root" bash tests/fm-pi-prim
 Observed output:
 
 ```text
-ok - Pi 0.84.2 native SDK: 10 busy + 10 handling wakes, steering, abort with restored queue, 21 durable rows and recovery confirmations
+ok - Pi 0.84.2 native SDK: busy batching, consumed/rejected input retry, replacement preflight, 29 durable rows and 5 consumed recovery confirmations
 ```
 
 Ten watcher events while the first response was held produced one queued hint, and ten more during its handling produced one successor hint.
 A captain steering message reached the intervening native turn without releasing that hint, and clearing the queued hint into the editor before abort allowed the next wake without another captain message.
-All 21 durable fixture rows remained intact and each successor recovery delivery was confirmed.
+Consumed and rejected extension input was retried by later watcher events without premature confirmation, and reloading the session while input preflight was blocked did not let the replaced generation confirm delivery.
+All 29 durable fixture rows remained intact, and five consumed hints confirmed only the latest live successor for their recovery generation.
 This proves the Pi queue bridge rather than model response speed or product completion; [`../watcher-continuity.md`](../watcher-continuity.md#pi-notification-batching) owns the runtime contract and portable failure/lifecycle coverage.
 Other primary harnesses and runtime backends do not consume this Pi extension; the existing shared Pi/OpenCode regression also passed without changing OpenCode behavior.
 

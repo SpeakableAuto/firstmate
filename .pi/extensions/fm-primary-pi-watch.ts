@@ -56,7 +56,9 @@ type SessionGeneration = {
   seq: number;
   wakeId: string;
   wakeSeq: number;
-  pendingWake: { content: string; accepted: Promise<void>; isDiscarded?: () => boolean } | null;
+  agentActive: boolean;
+  recoveryDeliveries: Map<string, string>;
+  pendingWake: { content: string; deliveryObserved: boolean; isDiscarded?: () => boolean } | null;
 };
 
 function refreshWatchToolShell(
@@ -199,6 +201,8 @@ function createGeneration(): SessionGeneration {
     seq: 0,
     wakeId: randomUUID(),
     wakeSeq: 0,
+    agentActive: false,
+    recoveryDeliveries: new Map(),
     pendingWake: null,
   };
 }
@@ -214,6 +218,7 @@ function generationIsLive(generation: SessionGeneration): boolean {
 function stopGeneration(generation: SessionGeneration): void {
   generation.stopping = true;
   generation.pendingWake = null;
+  generation.recoveryDeliveries.clear();
   if (generation.retryTimer) clearTimeout(generation.retryTimer);
   generation.retryTimer = null;
   if (generation.child) generation.child.kill("SIGTERM");
@@ -247,8 +252,24 @@ export default function (pi: ExtensionAPI) {
 
   // Coalesce only notification hints, never durable queue rows or failure text.
   // One exact ordinary hint may wait in Pi's follow-up queue per live generation.
-  // message_start releases that slot before handling begins, so later events can
-  // request one more drain without queuing one conversation turn per watcher close.
+  // Its matching message_start releases that slot and confirms the latest live
+  // successor identity for every coalesced recovery generation.
+  function confirmRecoveryDeliveries(owner: SessionGeneration): void {
+    for (const [recoveryGeneration, watcherPid] of owner.recoveryDeliveries) {
+      if (!generationIsLive(owner) || lockOwnership() !== "owned") return;
+      const result = spawnSync(
+        "bash",
+        [armScript, "--handling-delivered", recoveryGeneration, "--watcher-pid", watcherPid],
+        {
+          cwd: fmRoot,
+          env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot },
+        },
+      );
+      if (result.status !== 0) throw new Error("watcher recovery delivery could not be confirmed");
+      owner.recoveryDeliveries.delete(recoveryGeneration);
+    }
+  }
+
   async function sendWake(
     owner: SessionGeneration,
     message: string,
@@ -256,38 +277,23 @@ export default function (pi: ExtensionAPI) {
     coalesce = false,
   ): Promise<void> {
     if (!generationIsLive(owner)) return;
+    if (coalesce && recovery) owner.recoveryDeliveries.set(recovery.generation, recovery.watcherPid);
     if (owner.pendingWake?.isDiscarded?.()) owner.pendingWake = null;
     let pending = coalesce ? owner.pendingWake : null;
+    if (pending && (pending.deliveryObserved || owner.agentActive || pending.isDiscarded)) return;
     if (!pending) {
       const content = encodeFirstmateOperationalInput(
         "watcher",
         `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh once and handle its current batch, then acknowledge only the wakes actually handled using the printed command. This notification may represent several watcher events; the durable drain is authoritative. Watcher continuity is extension-owned. [wake ${owner.wakeId}.${++owner.wakeSeq}]`,
       );
-      pending = { content, accepted: Promise.resolve() };
+      pending = { content, deliveryObserved: owner.agentActive };
       if (coalesce) owner.pendingWake = pending;
-      const offered = pending;
-      pending.accepted = (async () => {
-        try {
-          await pi.sendUserMessage(content, { deliverAs: "followUp" });
-        } catch (error) {
-          if (owner.pendingWake === offered) owner.pendingWake = null;
-          throw error;
-        }
-      })();
     }
-    await pending.accepted;
-    // A session replacement or lock handoff while delivery was pending must not
-    // confirm recovery on behalf of the new owner.
-    if (recovery && generationIsLive(owner) && lockOwnership() === "owned") {
-      const result = spawnSync(
-        "bash",
-        [armScript, "--handling-delivered", recovery.generation, "--watcher-pid", recovery.watcherPid],
-        {
-          cwd: fmRoot,
-          env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot },
-        },
-      );
-      if (result.status !== 0) throw new Error("watcher recovery delivery could not be confirmed");
+    try {
+      pi.sendUserMessage(pending.content, { deliverAs: "followUp" });
+    } catch (error) {
+      if (owner.pendingWake === pending) owner.pendingWake = null;
+      throw error;
     }
   }
 
@@ -508,18 +514,27 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
+  pi.on?.("agent_start", () => {
+    if (!generationIsLive(generation)) return;
+    generation.agentActive = true;
+    if (generation.pendingWake) generation.pendingWake.deliveryObserved = true;
+  });
   pi.on?.("message_start", (event) => {
     if (!generationIsLive(generation) || event.message.role !== "user") return;
     const content = event.message.content;
     const text = typeof content === "string" ? content : content
       .filter((item) => item.type === "text")
       .map((item) => item.text).join("");
-    if (generation.pendingWake?.content === text) generation.pendingWake = null;
+    if (generation.pendingWake?.content !== text) return;
+    generation.pendingWake = null;
+    confirmRecoveryDeliveries(generation);
   });
   pi.on?.("agent_settled", (_event, ctx) => {
     // Abort can retain queued messages; release only a discarded/empty queue.
     // Clearing a discarded hint allows the durable watcher to offer it again.
-    if (!generationIsLive(generation) || !generation.pendingWake) return;
+    if (!generationIsLive(generation)) return;
+    generation.agentActive = false;
+    if (!generation.pendingWake) return;
     if (!ctx.hasPendingMessages()) generation.pendingWake = null;
     else generation.pendingWake.isDiscarded = () => !ctx.hasPendingMessages();
   });

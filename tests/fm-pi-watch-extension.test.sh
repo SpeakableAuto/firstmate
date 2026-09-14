@@ -70,12 +70,17 @@ test_pi_busy_wakes_coalesce_without_consuming_work() {
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --handling-delivered ]; then
+  latest=$(tail -n 1 "$FM_HOME/state/watcher-pids")
+  [ "$4" = "$latest" ] || exit 9
   printf '%s %s\n' "$2" "$4" >> "$FM_HOME/state/confirmations"
   exit 0
 fi
 printf 'arm\n' >> "$FM_HOME/state/arms"
 count=$(wc -l < "$FM_HOME/state/arms" | tr -d '[:space:]')
-printf 'watcher: started pid=%s (beacon fresh) recovery-generation=batch-%s\n' "$$" "$count"
+printf '%s\n' "$$" >> "$FM_HOME/state/watcher-pids"
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=batch-generation\n' "$$"
+sleep 0.02
+printf 'ready\n' >> "$FM_HOME/state/readies"
 trap 'exit 0' TERM INT
 while [ ! -e "$FM_HOME/state/fire-$count" ]; do sleep 0.02; done
 printf 'signal: event %s\n' "$count"
@@ -87,19 +92,15 @@ import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 const handlers = new Map();
 let tool;
-let failDelivery = false;
-let blockDelivery;
 const prompts = [];
 const root = `${process.env.FM_HOME}/state`;
 const pi = {
   on(name, handler) { handlers.set(name, handler); },
   registerCommand() {},
   registerTool(candidate) { tool = candidate; },
-  async sendUserMessage(content, options) {
-    if (failDelivery) throw new Error("synthetic transport failure");
+  sendUserMessage(content, options) {
     if (options.deliverAs !== "followUp") throw new Error("watcher stole user steering priority");
     prompts.push(content);
-    if (blockDelivery) await blockDelivery;
   },
 };
 const rows = (name) => existsSync(`${root}/${name}`) ? readFileSync(`${root}/${name}`, "utf8").trim().split("\n").filter(Boolean) : [];
@@ -111,22 +112,21 @@ async function waitFor(test, label) {
   throw new Error(label);
 }
 let event = 0;
-async function fire(confirm = true) {
+async function fire() {
   const cycle = rows("arms").length;
-  const previous = rows("confirmations").length;
   event++;
   // These fixture rows represent the durable work; the extension has no queue mutation authority.
   const queue = rows(".wake-queue");
   writeFileSync(`${root}/.wake-queue`, [...queue, `1\t${event}\tsignal\tjob-${event}\tpayload-${event}`].join("\n") + "\n");
   writeFileSync(`${root}/fire-${cycle}`, "fire\n");
-  await waitFor(() => rows("arms").length > cycle, "successor missing");
-  if (confirm) await waitFor(() => rows("confirmations").length > previous, "recovery delivery was lost in batch");
+  await waitFor(() => rows("arms").length > cycle && rows("readies").length > cycle, "ready successor missing");
 }
 writeFileSync(`${root}/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute();
 await waitFor(() => rows("arms").length === 1, "first arm missing");
+handlers.get("agent_start")({});
 for (let i = 0; i < 12; i++) await fire();
 if (prompts.length !== 1) throw new Error(`busy burst queued ${prompts.length} prompts`);
 const pending = prompts[0];
@@ -135,9 +135,10 @@ handlers.get("message_start")({ message: { role: "assistant", content: pending }
 await fire();
 if (prompts.length !== 1) throw new Error("unrelated user/assistant message released watcher slot");
 handlers.get("message_start")({ message: { role: "user", content: [{ type: "text", text: pending }] } });
+if (rows("confirmations").length !== 1) throw new Error("coalesced recovery was confirmed before its matching message_start");
 for (let i = 0; i < 12; i++) await fire();
 if (prompts.length !== 2) throw new Error(`events during handling queued ${prompts.length - 1} follow-ups`);
-if (rows(".wake-queue").length !== 25 || rows("confirmations").length !== 25) throw new Error("coalescing consumed durable work or dropped recovery confirmation");
+if (rows(".wake-queue").length !== 25 || rows("confirmations").length !== 1) throw new Error("coalescing consumed durable work or prematurely confirmed recovery");
 if (handlers.has("input")) throw new Error("coalescer intercepts user input");
 // An abandoned follow-up at fully settled state cannot suppress later wakes.
 let queueRetained = true;
@@ -147,44 +148,49 @@ if (prompts.length !== 2) throw new Error("settled with retained queue released 
 queueRetained = false;
 await fire();
 if (prompts.length !== 3) throw new Error("settled discarded hint was retained");
-// A rejected delivery releases its slot and never confirms recovery delivery.
+handlers.get("agent_start")({});
 handlers.get("message_start")({ message: { role: "user", content: prompts.at(-1) } });
-failDelivery = true;
-let confirmations = rows("confirmations").length;
-await fire(false);
-await new Promise((resolve) => setTimeout(resolve, 80));
-if (rows("confirmations").length !== confirmations) throw new Error("failed delivery confirmed recovery");
-failDelivery = false;
+if (rows("confirmations").length !== 2) throw new Error("discarded hint lost its recovery identity");
+handlers.get("agent_settled")({}, { hasPendingMessages: () => false });
 await fire();
-if (prompts.length !== 4) throw new Error("failed delivery left a stuck slot");
+const unconsumed = prompts.at(-1);
+await fire();
+if (prompts.length !== 5 || prompts.at(-1) !== unconsumed) throw new Error("consumed input suppressed the next actionable wake");
+await fire();
+if (prompts.length !== 6 || prompts.at(-1) !== unconsumed) throw new Error("rejected input suppressed the next actionable wake");
+handlers.get("agent_start")({});
+handlers.get("message_start")({ message: { role: "user", content: unconsumed } });
+if (rows("confirmations").length !== 3) throw new Error("retried hint lost coalesced recovery delivery");
 // A pending ordinary hint must not swallow a new ownership/continuity failure.
+await fire();
 const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 try {
   writeFileSync(`${root}/.lock`, `${other.pid}\n`);
   writeFileSync(`${root}/fire-${rows("arms").length}`, "fire\n");
-  await waitFor(() => prompts.length === 5, "ownership failure coalesced away");
+  await waitFor(() => prompts.length === 8, "ownership failure coalesced away");
   if (!prompts.at(-1).includes("no longer owns the lock")) throw new Error("failure detail missing");
 } finally { other.kill("SIGTERM"); }
 writeFileSync(`${root}/.lock`, `${process.pid}\n`);
-// Same-process session replacement releases the old queue slot.
+// Same-process session replacement releases an offer before message_start.
 const priorArms = rows("arms").length;
 handlers.get("session_shutdown")({});
 handlers.get("session_start")({});
 await tool.execute();
 await waitFor(() => rows("arms").length === priorArms + 1, "replacement arm missing");
 await fire();
-if (prompts.length !== 6) throw new Error("replacement inherited stale pending hint");
-// Shutdown while send is pending must not confirm recovery for a newer session.
-handlers.get("message_start")({ message: { role: "user", content: prompts.at(-1) } });
-let release;
-blockDelivery = new Promise((resolve) => { release = resolve; });
-confirmations = rows("confirmations").length;
-await fire(false);
-await waitFor(() => prompts.length === 7, "blocked offer missing");
+if (prompts.length !== 9) throw new Error("replacement inherited stale pending hint");
+const confirmations = rows("confirmations").length;
+const secondPriorArms = rows("arms").length;
 handlers.get("session_shutdown")({});
-release();
-await new Promise((resolve) => setTimeout(resolve, 80));
-if (rows("confirmations").length !== confirmations) throw new Error("stale callback confirmed recovery after shutdown");
+handlers.get("session_start")({});
+await tool.execute();
+await waitFor(() => rows("arms").length === secondPriorArms + 1, "second replacement arm missing");
+await fire();
+if (prompts.length !== 10) throw new Error("replacement preflight suppressed the next actionable wake");
+if (rows("confirmations").length !== confirmations) throw new Error("replacement confirmed an unconsumed recovery");
+handlers.get("agent_start")({});
+handlers.get("message_start")({ message: { role: "user", content: prompts.at(-1) } });
+if (rows("confirmations").length !== confirmations + 1) throw new Error("replacement recovery was not confirmed at message_start");
 if (rows(".wake-queue").length !== event) throw new Error("lifecycle reset consumed durable work");
 process.exit(0);
 EOF
@@ -220,7 +226,7 @@ const pi = {
     if (name === "fm-watch-arm-pi") handler = options.handler;
   },
   registerTool() {},
-  sendUserMessage: async (message) => {
+  sendUserMessage: (message) => {
     prompt = message;
   },
 };
@@ -296,7 +302,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async () => {},
+  sendUserMessage: () => {},
 };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
@@ -363,7 +369,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async () => {},
+  sendUserMessage: () => {},
 };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
@@ -423,7 +429,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async () => {},
+  sendUserMessage: () => {},
 };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
@@ -455,7 +461,7 @@ EOF
   pass "Pi scheduled retry remains extension-owned after another tool call"
 }
 
-test_pi_actionable_close_starts_single_successor_before_delivery() {
+test_pi_actionable_close_starts_single_successor_before_consumption() {
   local repo home plugin log stop out status
   repo="$TMP_ROOT/pi-continuous-rearm-root"
   home="$TMP_ROOT/pi-continuous-rearm-home"
@@ -487,24 +493,22 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 let tool = null;
+const handlers = new Map();
 let deliveryStarted = false;
 let rowsAtDelivery = 0;
-let releaseDelivery = () => {};
-const deliveryBlocked = new Promise((resolve) => {
-  releaseDelivery = resolve;
-});
+let deliveryContent = "";
 const pi = {
-  on() {},
+  on(name, handler) { handlers.set(name, handler); },
   registerCommand() {},
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async () => {
+  sendUserMessage: (content) => {
     rowsAtDelivery = existsSync(process.env.FM_ARM_LOG)
       ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length
       : 0;
+    deliveryContent = content;
     deliveryStarted = true;
-    await deliveryBlocked;
   },
 };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
@@ -525,24 +529,24 @@ if (rowsAtDelivery !== 2) throw new Error(`wake delivery began before successor 
 if (!/predecessor=[0-9]+/.test(rows[1])) throw new Error(`successor did not receive predecessor identity: ${rows[1]}`);
 await new Promise((resolve) => setTimeout(resolve, 100));
 const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
-if (stableRows.length !== 2) throw new Error(`delivery was confirmed before the prompt succeeded: ${stableRows.join(" | ")}`);
-releaseDelivery();
+if (stableRows.length !== 2) throw new Error(`delivery was confirmed before message_start: ${stableRows.join(" | ")}`);
+handlers.get("message_start")({ message: { role: "user", content: [{ type: "text", text: deliveryContent }] } });
 for (let i = 0; i < 100; i += 1) {
   if (readFileSync(process.env.FM_ARM_LOG, "utf8").includes("confirmed generation=fixture-generation")) break;
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 const confirmedRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (confirmedRows.filter((row) => row.startsWith("confirmed ")).length !== 1) {
-  throw new Error(`successful prompt delivery was not confirmed exactly once: ${confirmedRows.join(" | ")}`);
+    throw new Error(`consumed prompt delivery was not confirmed exactly once: ${confirmedRows.join(" | ")}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
 EOF
   )
   status=$?
-  expect_code 0 "$status" "Pi actionable close must start one successor before wake delivery settles"
+  expect_code 0 "$status" "Pi actionable close must start one successor before wake consumption"
   [ -z "$out" ] || fail "Pi continuous-rearm test printed output: $out"
-  pass "Pi actionable close starts one successor before wake delivery settles"
+  pass "Pi actionable close starts one successor before wake consumption"
 }
 
 test_pi_hung_successor_falls_back_to_typed_wake() {
@@ -579,7 +583,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async (message) => {
+  sendUserMessage: (message) => {
     prompt += message;
     rowsAtPrompt = existsSync(process.env.FM_ARM_LOG)
       ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length
@@ -651,7 +655,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async (message) => {
+  sendUserMessage: (message) => {
     prompt += message;
     rowsAtPrompt = existsSync(process.env.FM_ARM_LOG)
       ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length
@@ -728,7 +732,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async (message) => {
+  sendUserMessage: (message) => {
     prompts.push(message);
   },
 };
@@ -810,7 +814,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async () => {
+  sendUserMessage: () => {
     prompts += 1;
   },
 };
@@ -865,7 +869,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async (message) => {
+  sendUserMessage: (message) => {
     prompt += message;
   },
 };
@@ -918,7 +922,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async (message) => {
+  sendUserMessage: (message) => {
     prompt += message;
   },
 };
@@ -973,7 +977,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async () => {},
+  sendUserMessage: () => {},
 };
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
@@ -1062,7 +1066,7 @@ function makePi() {
     registerTool(candidate) {
       if (candidate.name === "fm_watch_arm_pi") tool = candidate;
     },
-    sendUserMessage: async () => {},
+    sendUserMessage: () => {},
     events: { on() {} },
   };
   return { pi, handlers, getTool: () => tool };
@@ -1229,7 +1233,7 @@ const pi = {
   },
   registerCommand() {},
   registerTool() {},
-  sendUserMessage: async () => {},
+  sendUserMessage: () => {},
 };
 const before = process.listenerCount("exit");
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
@@ -1283,7 +1287,7 @@ const pi = {
   registerTool(candidate) {
     if (candidate.name === "fm_watch_arm_pi") tool = candidate;
   },
-  sendUserMessage: async () => {},
+  sendUserMessage: () => {},
 };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
@@ -2306,7 +2310,7 @@ test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
 test_pi_scheduled_retry_call_is_owned_noop
-test_pi_actionable_close_starts_single_successor_before_delivery
+test_pi_actionable_close_starts_single_successor_before_consumption
 test_pi_hung_successor_falls_back_to_typed_wake
 test_pi_unretired_successor_falls_back_without_retry
 test_pi_late_unretired_close_resumes_supervision
