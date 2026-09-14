@@ -53,7 +53,7 @@ Continuity failures bypass batching so their diagnostic text remains visible to 
 User input and queue delivery modes are unchanged, and unrelated messages or agent lifecycle events never mark or release the watcher offer.
 Only a matching `message_start` confirms delivery and releases the offer.
 A queued hint discarded without consumption, or a send consumed or rejected before `message_start`, remains unconfirmed until a later actionable close retries it.
-Whether the offer began while idle or busy, it suppresses reoffers for one second before that retry can reuse the same identity and recovery obligations.
+Whether the offer began while idle or busy, it suppresses reoffers until the configured retry deadline before that retry can reuse the same identity and recovery obligations.
 An external input hook that remains unresolved beyond that deadline can therefore admit a later retry, so this boundary does not promise exactly-once submission across arbitrary hooks.
 Session replacement discards the old generation's identity and obligations, and a stale callback never confirms recovery after shutdown or ownership transfer.
 Pi's extension send API accepts a queue offer rather than reporting completed handling; actual work still requires the generation-bound acknowledgement below.
