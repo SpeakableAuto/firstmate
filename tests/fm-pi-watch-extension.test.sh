@@ -585,6 +585,126 @@ EOF
   pass "Pi actionable close refreshes recovery delivery to a replaced successor"
 }
 
+test_pi_new_recovery_generation_supersedes_acknowledged_obligation() {
+  local repo home plugin out status
+  repo="$TMP_ROOT/pi-recovery-supersession-root"
+  home="$TMP_ROOT/pi-recovery-supersession-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then
+  latest=$(tail -n 1 "$FM_HOME/state/watcher-pids")
+  current=$(cat "$FM_HOME/state/current-generation")
+  if [ "$2" != "$current" ] || [ "$4" != "$latest" ]; then
+    printf 'rejected generation=%s watcher=%s current=%s latest=%s\n' "$2" "$4" "$current" "$latest" >> "$FM_HOME/state/rejections"
+    exit 9
+  fi
+  printf 'confirmed generation=%s watcher=%s\n' "$2" "$4" >> "$FM_HOME/state/confirmations"
+  exit 0
+fi
+printf 'arm\n' >> "$FM_HOME/state/arms"
+count=$(wc -l < "$FM_HOME/state/arms" | tr -d '[:space:]')
+printf '%s\n' "$$" >> "$FM_HOME/state/watcher-pids"
+generation=$(cat "$FM_HOME/state/current-generation" 2>/dev/null || true)
+if [ -n "$generation" ]; then
+  printf 'watcher: started pid=%s (beacon fresh) recovery-generation=%s\n' "$$" "$generation"
+else
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+fi
+sleep 0.05
+printf 'ready\n' >> "$FM_HOME/state/readies"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_HOME/state/fire-$count" ]; do sleep 0.02; done
+printf 'signal: recovery event %s\n' "$count"
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const handlers = new Map();
+const prompts = [];
+const root = `${process.env.FM_HOME}/state`;
+let tool = null;
+const pi = {
+  on(name, handler) { handlers.set(name, handler); },
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage(content, options) {
+    if (options.deliverAs !== "followUp") throw new Error("recovery hint changed queue mode");
+    prompts.push(content);
+  },
+};
+const rows = (name) => existsSync(`${root}/${name}`)
+  ? readFileSync(`${root}/${name}`, "utf8").trim().split("\n").filter(Boolean)
+  : [];
+async function waitFor(test, label) {
+  for (let i = 0; i < 500; i += 1) {
+    if (test()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+let event = 0;
+async function fire(generation) {
+  const cycle = rows("arms").length;
+  event += 1;
+  writeFileSync(`${root}/current-generation`, `${generation}\n`);
+  const queue = rows(".wake-queue");
+  writeFileSync(`${root}/.wake-queue`, [...queue, `1\t${event}\tsignal\tjob-${event}\tpayload-${event}`].join("\n") + "\n");
+  writeFileSync(`${root}/fire-${cycle}`, "fire\n");
+  await waitFor(() => rows("arms").length > cycle && rows("readies").length > cycle, `successor ${cycle + 1}`);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+
+writeFileSync(`${root}/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("supersession", {}, undefined, undefined, {});
+await waitFor(() => rows("arms").length === 1 && rows("readies").length === 1, "initial arm");
+
+await fire("G1");
+await waitFor(() => prompts.length === 1, "H1");
+const h1 = prompts[0];
+handlers.get("message_start")({ message: { role: "user", content: h1 } });
+if (rows("confirmations").length !== 1 || !rows("confirmations")[0].includes("generation=G1")) {
+  throw new Error(`H1 did not confirm G1: ${rows("confirmations").join(" | ")}`);
+}
+
+await fire("G1");
+await waitFor(() => prompts.length === 2, "H2");
+const h2 = prompts[1];
+writeFileSync(`${root}/acknowledged-generations`, "G1\n");
+await fire("G2");
+if (prompts.length !== 2 || prompts[1] !== h2) {
+  throw new Error("new recovery generation replaced the retained H2 identity");
+}
+
+handlers.get("message_start")({ message: { role: "user", content: h2 } });
+const confirmations = rows("confirmations");
+if (confirmations.length !== 2 || !confirmations[1].includes("generation=G2")) {
+  throw new Error(`H2 did not confirm current G2: ${confirmations.join(" | ")}`);
+}
+if (rows("rejections").length !== 0) {
+  throw new Error(`superseded G1 blocked G2 confirmation: ${rows("rejections").join(" | ")}`);
+}
+if (rows("acknowledged-generations").join(",") !== "G1" || rows(".wake-queue").length !== 3) {
+  throw new Error("delivery confirmation changed durable acknowledgement state");
+}
+writeFileSync(`${root}/fire-${rows("arms").length}`, "stop\n");
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "Pi matching delivery must confirm the authoritative recovery generation"
+  [ -z "$out" ] || fail "Pi recovery-supersession test printed output: $out"
+  pass "Pi current recovery generation supersedes an acknowledged retained obligation"
+}
+
 test_pi_hung_successor_falls_back_to_typed_wake() {
   local repo home plugin log out status
   repo="$TMP_ROOT/pi-hung-successor-root"
@@ -2360,6 +2480,7 @@ test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
 test_pi_scheduled_retry_call_is_owned_noop
 test_pi_replaced_successor_refreshes_delivery_owner
+test_pi_new_recovery_generation_supersedes_acknowledged_obligation
 test_pi_hung_successor_falls_back_to_typed_wake
 test_pi_unretired_successor_falls_back_without_retry
 test_pi_late_unretired_close_resumes_supervision

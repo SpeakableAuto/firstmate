@@ -467,11 +467,17 @@ export default function (pi: ExtensionAPI) {
         armRecovery.set(armChild, { watcherPid, generation: recoveryGeneration });
         if (
           owner.child === armChild &&
-          owner.recoveryDeliveries.has(recoveryGeneration) &&
           generationIsLive(owner) &&
           lockOwnership() === "owned"
         ) {
-          owner.recoveryDeliveries.set(recoveryGeneration, watcherPid);
+          for (const retainedGeneration of owner.recoveryDeliveries.keys()) {
+            if (retainedGeneration !== recoveryGeneration) {
+              owner.recoveryDeliveries.delete(retainedGeneration);
+            }
+          }
+          if (owner.recoveryDeliveries.has(recoveryGeneration)) {
+            owner.recoveryDeliveries.set(recoveryGeneration, watcherPid);
+          }
         }
       }
       if (/^watcher: (?:started|attached)\b/m.test(combined)) {
