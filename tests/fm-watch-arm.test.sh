@@ -577,6 +577,37 @@ test_recovery_consumption_serializes_queue_publication() {
   pass "watch-arm: publication after recovery handoff is surfaced"
 }
 
+test_repeated_handling_delivery_accepts_only_acked_owner() {
+  local dir home state fakebin armout watcher_pid
+  dir=$(make_case repeated-handling-delivery)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mkdir -p "$home/data"
+  printf 'acked:handling:fixture\n' > "$state/.watcher-down"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$armout"
+  is_live_non_zombie "$ARM_PID" || fail "acknowledged recovery owner did not remain live"
+  watcher_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" --handling-delivered fixture \
+    --watcher-pid "$watcher_pid" \
+    || fail "repeated delivery rejected the acknowledged matching generation"
+  [ "$(cat "$state/.watcher-down" 2>/dev/null || true)" = 'acked:handling:fixture' ] \
+    || fail "repeated delivery changed the acknowledged recovery marker"
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" --handling-delivered unknown \
+    --watcher-pid "$watcher_pid"; then
+    fail "repeated delivery accepted an unknown recovery generation"
+  fi
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" --handling-delivered fixture \
+    --watcher-pid "$$"; then
+    fail "repeated delivery accepted a process without watcher ownership"
+  fi
+  kill -TERM "$watcher_pid" 2>/dev/null || fail "could not stop acknowledged recovery owner"
+  wait "$ARM_PID" 2>/dev/null || true
+  pass "watch-arm: repeated delivery accepts only the acknowledged matching owner"
+}
+
 test_restart_preserves_recovery_across_reused_pid_lock() {
   local dir home state fakebin armout unrelated owner
   dir=$(make_case restart-reused-pid-recovery)
@@ -806,6 +837,7 @@ test_delivery_gap_wake_is_recovered_once
 test_interrupted_handling_is_redrained_on_rearm
 test_malformed_marker_is_quarantined_once
 test_recovery_consumption_serializes_queue_publication
+test_repeated_handling_delivery_accepts_only_acked_owner
 test_restart_preserves_recovery_across_reused_pid_lock
 test_markerless_legacy_queue_is_recovered_on_arm
 test_handling_window_close_keeps_the_acknowledgement_valid

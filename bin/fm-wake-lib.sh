@@ -557,6 +557,7 @@ _fm_recovery_marker_begin_handling() {
   fi
   case "$line" in
     pending:handling:*) ;;
+    acked:handling:*|acked:downtime:*) ;;
     pending:downtime:*)
       if ! _fm_recovery_marker_write_locked "$marker" handling "$generation"; then
         fm_lock_release "$lock"

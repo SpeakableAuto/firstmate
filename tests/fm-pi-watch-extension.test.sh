@@ -97,6 +97,10 @@ const root = `${process.env.FM_HOME}/state`;
 const realNow = Date.now.bind(Date);
 let now = realNow();
 Date.now = () => now;
+const idleSessionContext = {
+  isIdle: () => true,
+  hasPendingMessages: () => false,
+};
 const pi = {
   on(name, handler) { handlers.set(name, handler); },
   registerCommand() {},
@@ -183,7 +187,7 @@ writeFileSync(`${root}/.lock`, `${process.pid}\n`);
 // Same-process session replacement releases an offer before message_start.
 const priorArms = rows("arms").length;
 handlers.get("session_shutdown")({});
-handlers.get("session_start")({});
+handlers.get("session_start")({}, idleSessionContext);
 await tool.execute();
 await waitFor(() => rows("arms").length === priorArms + 1, "replacement arm missing");
 await fire();
@@ -192,7 +196,7 @@ if (prompts.length !== 9) throw new Error("replacement inherited stale pending h
 const confirmations = rows("confirmations").length;
 const secondPriorArms = rows("arms").length;
 handlers.get("session_shutdown")({});
-handlers.get("session_start")({});
+handlers.get("session_start")({}, idleSessionContext);
 await tool.execute();
 await waitFor(() => rows("arms").length === secondPriorArms + 1, "second replacement arm missing");
 await fire();
@@ -471,11 +475,12 @@ EOF
   pass "Pi scheduled retry remains extension-owned after another tool call"
 }
 
-test_pi_actionable_close_starts_single_successor_before_consumption() {
-  local repo home plugin log stop out status
+test_pi_replaced_successor_refreshes_delivery_owner() {
+  local repo home plugin log replace stop out status
   repo="$TMP_ROOT/pi-continuous-rearm-root"
   home="$TMP_ROOT/pi-continuous-rearm-home"
   log="$TMP_ROOT/pi-continuous-rearm.log"
+  replace="$TMP_ROOT/pi-continuous-rearm.replace"
   stop="$TMP_ROOT/pi-continuous-rearm.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   install_pi_watch_extension_fixture "$repo"
@@ -483,6 +488,8 @@ test_pi_actionable_close_starts_single_successor_before_consumption() {
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --handling-delivered ]; then
+  latest=$(sed -n 's/^arm=\([0-9][0-9]*\).*/\1/p' "$FM_ARM_LOG" | tail -n 1)
+  [ "$4" = "$latest" ] || exit 9
   printf 'confirmed generation=%s watcher=%s\n' "$2" "$4" >> "${FM_ARM_LOG:?}"
   exit 0
 fi
@@ -495,10 +502,14 @@ if [ "$count" -eq 1 ]; then
 fi
 printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
 trap 'exit 0' TERM INT
+if [ "$count" -eq 2 ]; then
+  while [ ! -e "$FM_REPLACE_FILE" ]; do sleep 0.02; done
+  exit 1
+fi
 while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_REPLACE_FILE="$replace" FM_STOP_FILE="$stop" FM_WATCH_REARM_RETRY_BASE_MS=5 node --input-type=module 2>&1 <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -540,23 +551,38 @@ if (!/predecessor=[0-9]+/.test(rows[1])) throw new Error(`successor did not rece
 await new Promise((resolve) => setTimeout(resolve, 100));
 const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (stableRows.length !== 2) throw new Error(`delivery was confirmed before message_start: ${stableRows.join(" | ")}`);
+writeFileSync(process.env.FM_REPLACE_FILE, "replace\n");
+for (let i = 0; i < 250; i += 1) {
+  const armRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter((row) => row.startsWith("arm="));
+  if (armRows.length >= 3) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const replacementRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter((row) => row.startsWith("arm="));
+if (replacementRows.length !== 3) throw new Error(`expected one replacement successor, got ${replacementRows.join(" | ")}`);
+if (!/predecessor=[0-9]+/.test(replacementRows[2])) throw new Error(`replacement successor lost predecessor identity: ${replacementRows[2]}`);
+await new Promise((resolve) => setTimeout(resolve, 100));
 handlers.get("message_start")({ message: { role: "user", content: [{ type: "text", text: deliveryContent }] } });
 for (let i = 0; i < 100; i += 1) {
   if (readFileSync(process.env.FM_ARM_LOG, "utf8").includes("confirmed generation=fixture-generation")) break;
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 const confirmedRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
-if (confirmedRows.filter((row) => row.startsWith("confirmed ")).length !== 1) {
+const confirmationRows = confirmedRows.filter((row) => row.startsWith("confirmed "));
+if (confirmationRows.length !== 1) {
     throw new Error(`consumed prompt delivery was not confirmed exactly once: ${confirmedRows.join(" | ")}`);
+}
+const replacementPid = /arm=([0-9]+)/.exec(replacementRows[2])?.[1];
+if (!replacementPid || !confirmationRows[0].endsWith(`watcher=${replacementPid}`)) {
+  throw new Error(`delivery confirmation did not use the replacement successor: ${confirmationRows[0]}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
 EOF
   )
   status=$?
-  expect_code 0 "$status" "Pi actionable close must start one successor before wake consumption"
+  expect_code 0 "$status" "Pi actionable close must retain the current successor through wake consumption"
   [ -z "$out" ] || fail "Pi continuous-rearm test printed output: $out"
-  pass "Pi actionable close starts one successor before wake consumption"
+  pass "Pi actionable close refreshes recovery delivery to a replaced successor"
 }
 
 test_pi_hung_successor_falls_back_to_typed_wake() {
@@ -1082,6 +1108,11 @@ function makePi() {
   return { pi, handlers, getTool: () => tool };
 }
 
+const idleSessionContext = {
+  isIdle: () => true,
+  hasPendingMessages: () => false,
+};
+
 function pidAlive(pid) {
   try {
     process.kill(Number(pid), 0);
@@ -1118,7 +1149,7 @@ const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 
 const startup = makePi();
 mod.default(startup.pi);
-await startup.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, {});
+await startup.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, idleSessionContext);
 const first = await startup.getTool().execute("startup", {}, undefined, undefined, {});
 if (!first.details?.ok || !String(first.details.message).includes("started Pi extension arm child")) {
   throw new Error(`startup arm failed: ${JSON.stringify(first.details)}`);
@@ -1142,7 +1173,7 @@ async function replaceSession(previous, reason) {
     type: "session_start",
     reason,
     previousSessionFile: `/tmp/previous-${reason}.jsonl`,
-  }, {});
+  }, idleSessionContext);
   const armed = await next.getTool().execute(`arm-${reason}`, {}, undefined, undefined, {});
   if (!armed.details?.ok) {
     throw new Error(`${reason} replacement arm failed: ${JSON.stringify(armed.details)}`);
@@ -1169,7 +1200,7 @@ current = await replaceSession(current, "fork");
 // Same bound instance: ordinary shutdown then session_start without a fresh factory.
 const sameInstanceChild = readFileSync(process.env.FM_CHILD_PID_FILE, "utf8").trim();
 await current.handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "new" }, {});
-await current.handlers.get("session_start")?.({ type: "session_start", reason: "new" }, {});
+await current.handlers.get("session_start")?.({ type: "session_start", reason: "new" }, idleSessionContext);
 const sameInstanceArm = await current.getTool().execute("same-instance", {}, undefined, undefined, {});
 if (!sameInstanceArm.details?.ok || String(sameInstanceArm.details.message).includes("shutting down")) {
   throw new Error(`same-instance replacement arm failed: ${JSON.stringify(sameInstanceArm.details)}`);
@@ -1237,6 +1268,10 @@ test_pi_process_exit_cleanup_listener_lifecycle() {
 import { pathToFileURL } from "node:url";
 
 const handlers = new Map();
+const idleSessionContext = {
+  isIdle: () => true,
+  hasPendingMessages: () => false,
+};
 const pi = {
   on(event, handler) {
     handlers.set(event, handler);
@@ -1255,7 +1290,7 @@ await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, {});
 if (process.listenerCount("exit") !== before + 1) {
   throw new Error("session_shutdown removed the process-lifetime exit fallback");
 }
-await handlers.get("session_start")?.({ type: "session_start" }, {});
+await handlers.get("session_start")?.({ type: "session_start" }, idleSessionContext);
 if (process.listenerCount("exit") !== before + 1) {
   throw new Error("replacement activation duplicated the process-exit fallback");
 }
@@ -1289,6 +1324,10 @@ import { pathToFileURL } from "node:url";
 
 let tool = null;
 const handlers = new Map();
+const idleSessionContext = {
+  isIdle: () => true,
+  hasPendingMessages: () => false,
+};
 const pi = {
   on(event, handler) {
     handlers.set(event, handler);
@@ -1309,7 +1348,7 @@ for (let i = 0; i < 250 && !existsSync(process.env.FM_CHILD_PID_FILE); i += 1) {
 if (!existsSync(process.env.FM_CHILD_PID_FILE)) throw new Error("arm child did not start");
 const firstChild = readFileSync(process.env.FM_CHILD_PID_FILE, "utf8").trim();
 await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, {});
-await handlers.get("session_start")?.({ type: "session_start" }, {});
+await handlers.get("session_start")?.({ type: "session_start" }, idleSessionContext);
 await tool.execute("tool-call-replacement", {}, undefined, undefined, {});
 for (let i = 0; i < 250; i += 1) {
   const currentChild = readFileSync(process.env.FM_CHILD_PID_FILE, "utf8").trim();
@@ -2320,7 +2359,7 @@ test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
 test_pi_scheduled_retry_call_is_owned_noop
-test_pi_actionable_close_starts_single_successor_before_consumption
+test_pi_replaced_successor_refreshes_delivery_owner
 test_pi_hung_successor_falls_back_to_typed_wake
 test_pi_unretired_successor_falls_back_without_retry
 test_pi_late_unretired_close_resumes_supervision

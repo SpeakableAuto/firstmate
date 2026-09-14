@@ -461,7 +461,19 @@ export default function (pi: ExtensionAPI) {
     const observeEstablishedArm = (): void => {
       const combined = `${stdout}\n${stderr}`;
       const recovery = combined.match(/^watcher: started pid=([0-9]+).* recovery-generation=([A-Za-z0-9._-]+)$/m);
-      if (recovery) armRecovery.set(armChild, { watcherPid: recovery[1], generation: recovery[2] });
+      if (recovery) {
+        const watcherPid = recovery[1];
+        const recoveryGeneration = recovery[2];
+        armRecovery.set(armChild, { watcherPid, generation: recoveryGeneration });
+        if (
+          owner.child === armChild &&
+          owner.recoveryDeliveries.has(recoveryGeneration) &&
+          generationIsLive(owner) &&
+          lockOwnership() === "owned"
+        ) {
+          owner.recoveryDeliveries.set(recoveryGeneration, watcherPid);
+        }
+      }
       if (/^watcher: (?:started|attached)\b/m.test(combined)) {
         settleReadiness(true);
       }
