@@ -86,7 +86,7 @@ while [ ! -e "$FM_HOME/state/fire-$count" ]; do sleep 0.02; done
 printf 'signal: event %s\n' "$count"
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_PI_WAKE_OFFER_RETRY_MS=100 node --input-type=module 2>&1 <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -155,9 +155,13 @@ handlers.get("agent_settled")({}, { hasPendingMessages: () => false });
 await fire();
 const unconsumed = prompts.at(-1);
 await fire();
-if (prompts.length !== 5 || prompts.at(-1) !== unconsumed) throw new Error("consumed input suppressed the next actionable wake");
+if (prompts.length !== 4) throw new Error("unresolved input preflight admitted a burst reoffer");
+await new Promise((resolve) => setTimeout(resolve, 120));
 await fire();
-if (prompts.length !== 6 || prompts.at(-1) !== unconsumed) throw new Error("rejected input suppressed the next actionable wake");
+if (prompts.length !== 5 || prompts.at(-1) !== unconsumed) throw new Error("consumed input suppressed the bounded retry");
+await new Promise((resolve) => setTimeout(resolve, 120));
+await fire();
+if (prompts.length !== 6 || prompts.at(-1) !== unconsumed) throw new Error("rejected input suppressed the bounded retry");
 handlers.get("agent_start")({});
 handlers.get("message_start")({ message: { role: "user", content: unconsumed } });
 if (rows("confirmations").length !== 3) throw new Error("retried hint lost coalesced recovery delivery");

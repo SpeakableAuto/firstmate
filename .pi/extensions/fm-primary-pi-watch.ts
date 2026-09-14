@@ -58,7 +58,7 @@ type SessionGeneration = {
   wakeSeq: number;
   agentActive: boolean;
   recoveryDeliveries: Map<string, string>;
-  pendingWake: { content: string; identity: string; deliveryObserved: boolean; isDiscarded?: () => boolean } | null;
+  pendingWake: { content: string; identity: string; deliveryObserved: boolean; offerRetryAt: number; isDiscarded?: () => boolean } | null;
 };
 
 function refreshWatchToolShell(
@@ -93,6 +93,7 @@ const extensionVersion = `sha256:${createHash("sha256").update(readFileSync(exte
 const retryBaseMs = positiveInteger("FM_WATCH_REARM_RETRY_BASE_MS", 250);
 const retryMaxMs = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const retryLimit = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
+const wakeOfferRetryMs = positiveInteger("FM_PI_WAKE_OFFER_RETRY_MS", 1000);
 // 35s on Windows so the budget stays above arm's MSYS confirm default (30s in
 // bin/fm-watch-arm.sh): a slow but successful Git Bash cold start must not be
 // SIGTERMed mid-confirmation. Conditioned on win32 so other platforms keep 12s.
@@ -280,17 +281,18 @@ export default function (pi: ExtensionAPI) {
     if (coalesce && recovery) owner.recoveryDeliveries.set(recovery.generation, recovery.watcherPid);
     if (owner.pendingWake?.isDiscarded?.()) owner.pendingWake = null;
     let pending = coalesce ? owner.pendingWake : null;
-    if (pending && (pending.deliveryObserved || owner.agentActive || pending.isDiscarded)) return;
+    if (pending && (pending.deliveryObserved || owner.agentActive || pending.isDiscarded || Date.now() < pending.offerRetryAt)) return;
     if (!pending) {
       const identity = `[wake ${owner.wakeId}.${++owner.wakeSeq}]`;
       const content = encodeFirstmateOperationalInput(
         "watcher",
         `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh once and handle its current batch, then acknowledge only the wakes actually handled using the printed command. This notification may represent several watcher events; the durable drain is authoritative. Watcher continuity is extension-owned. ${identity}`,
       );
-      pending = { content, identity, deliveryObserved: owner.agentActive };
+      pending = { content, identity, deliveryObserved: owner.agentActive, offerRetryAt: 0 };
       if (coalesce) owner.pendingWake = pending;
     }
     try {
+      pending.offerRetryAt = Date.now() + wakeOfferRetryMs;
       pi.sendUserMessage(pending.content, { deliverAs: "followUp" });
     } catch (error) {
       if (owner.pendingWake === pending) owner.pendingWake = null;

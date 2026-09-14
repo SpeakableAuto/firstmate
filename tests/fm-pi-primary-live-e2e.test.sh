@@ -32,7 +32,12 @@ let session;
 let releaseAll = false;
 let inputMode = "continue";
 let inputAttempts = 0;
-let releaseBlockedInput;
+const extensionInputTexts = [];
+const blockedInputReleases = [];
+const offerRetryWaitMs = 1100;
+const releaseBlockedInputs = () => {
+  for (const release of blockedInputReleases.splice(0)) release();
+};
 const streams = [];
 const timeout = setTimeout(() => { console.error("native Pi queue regression timed out"); process.exit(1); }, 60000);
 try {
@@ -70,10 +75,11 @@ printf 'signal: native event %s\\n' "$count"
       pi.on("input", async (event) => {
         if (event.source !== "extension") return;
         inputAttempts++;
+        extensionInputTexts.push(event.text);
         if (inputMode === "transform") return { action: "transform", text: `TRANSFORMED PREFIX\n${event.text}\nTRANSFORMED SUFFIX` };
         if (inputMode === "handled") return { action: "handled" };
         if (inputMode === "blocked") {
-          await new Promise((resolve) => { releaseBlockedInput = resolve; });
+          await new Promise((resolve) => { blockedInputReleases.push(resolve); });
           return { action: "handled" };
         }
       });
@@ -158,9 +164,11 @@ printf 'signal: native event %s\\n' "$count"
   let attempts = inputAttempts;
   await fire();
   await waitFor(() => inputAttempts === attempts + 1, "handled extension input was not attempted");
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
   await fire();
   await waitFor(() => inputAttempts === attempts + 2, "handled extension input suppressed a later wake");
   inputMode = "continue";
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
   await fire();
   await waitFor(() => rows("confirmations").length === 3, "handled input recovery was not confirmed");
   await session.waitForIdle();
@@ -175,21 +183,39 @@ printf 'signal: native event %s\\n' "$count"
     const text = JSON.stringify(message.content);
     return text.includes("TRANSFORMED PREFIX") && text.includes("TRANSFORMED SUFFIX");
   }), "native input transform did not reach message_start");
-  inputMode = "continue";
-  session.state.model = undefined;
-  await fire(1);
-  await waitFor(() => errors.length === 1, "rejected extension input was not reported", 1);
-  await fire(2);
-  await waitFor(() => errors.length === 2, "rejected extension input suppressed a later wake", 2);
-  session.state.model = model;
-  await fire();
-  await waitFor(() => rows("confirmations").length === 5, "rejected input recovery was not confirmed", 2);
-  await session.waitForIdle();
-  assert.equal(rows("confirmations").length, 5, "rejected inputs lost their recovery identity");
   inputMode = "blocked";
   attempts = inputAttempts;
   await fire();
-  await waitFor(() => inputAttempts === attempts + 1 && releaseBlockedInput, "blocked extension preflight did not start", 2);
+  await waitFor(() => inputAttempts === attempts + 1 && blockedInputReleases.length === 1, "delayed extension preflight did not start");
+  for (let i = 0; i < 4; i++) await fire();
+  assert.equal(inputAttempts, attempts + 1, "delayed extension preflight admitted burst reoffers");
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
+  await fire();
+  await waitFor(() => inputAttempts === attempts + 2 && blockedInputReleases.length === 2, "delayed extension preflight did not retry after its deadline");
+  assert.equal(extensionInputTexts.at(-1), extensionInputTexts.at(-2), "delayed extension preflight retry changed wake identity");
+  inputMode = "continue";
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
+  releaseBlockedInputs();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await fire();
+  await waitFor(() => rows("confirmations").length === 5, "delayed preflight recovery was not confirmed");
+  await session.waitForIdle();
+  session.state.model = undefined;
+  await fire(1);
+  await waitFor(() => errors.length === 1, "rejected extension input was not reported", 1);
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
+  await fire(2);
+  await waitFor(() => errors.length === 2, "rejected extension input suppressed a later wake", 2);
+  session.state.model = model;
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
+  await fire();
+  await waitFor(() => rows("confirmations").length === 6, "rejected input recovery was not confirmed", 2);
+  await session.waitForIdle();
+  assert.equal(rows("confirmations").length, 6, "rejected inputs lost their recovery identity");
+  inputMode = "blocked";
+  attempts = inputAttempts;
+  await fire();
+  await waitFor(() => inputAttempts === attempts + 1 && blockedInputReleases.length === 1, "blocked extension preflight did not start", 2);
   const confirmationsBeforeReload = rows("confirmations").length;
   const armsBeforeReload = rows("arms").length;
   await session.reload();
@@ -200,14 +226,14 @@ printf 'signal: native event %s\\n' "$count"
   await waitFor(() => rows("confirmations").length === confirmationsBeforeReload + 1, "replacement recovery was not confirmed", 2);
   await session.waitForIdle();
   assert.equal(rows("confirmations").length, confirmationsBeforeReload + 1, "replacement recovery was not confirmed at message_start");
-  releaseBlockedInput();
+  releaseBlockedInputs();
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(rows("confirmations").length, confirmationsBeforeReload + 1, "replaced preflight confirmed stale recovery");
   assert.equal(rows(".wake-queue").length, event, "native bridge consumed durable work");
   assert(errors.every((error) => error.event === "send_user_message" && error.error.includes("No model selected")), JSON.stringify(errors));
-  console.log(`ok - Pi ${JSON.parse(readFileSync(`${packageRoot}/package.json`, "utf8")).version} native SDK: busy batching, transformed/consumed/rejected input, replacement preflight, ${event} durable rows and ${rows("confirmations").length} consumed recovery confirmations`);
+  console.log(`ok - Pi ${JSON.parse(readFileSync(`${packageRoot}/package.json`, "utf8")).version} native SDK: busy batching, delayed-preflight retry, transformed/consumed/rejected input, replacement preflight, ${event} durable rows and ${rows("confirmations").length} consumed recovery confirmations`);
 } finally {
-  releaseBlockedInput?.();
+  releaseBlockedInputs();
   releaseAll = true;
   for (const finish of streams) finish(true);
   if (session) { await session.abort(); await session.reload(); session.dispose(); }
