@@ -1,0 +1,20 @@
+base_commit=e48397d04901eb32089dbe08ca06cf910c20f8ff
+exit_status=1
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: spaced busy wake 2 produced redundant Pi follow-ups
+
+2 !== 1
+
+    at file:///private/tmp/fm-pi-base.eCgxSn/[eval1]:126:12 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 2,
+  expected: 1,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v25.9.0

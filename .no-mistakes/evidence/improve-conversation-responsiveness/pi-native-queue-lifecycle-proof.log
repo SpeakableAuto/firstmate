@@ -1,0 +1,3 @@
+source_commit=f83b2754a42dc1dc531cc723126e31f643cc2568
+watcher_blob=f29d885111a4ca8c2190eedfa000bbba558f30f2
+ok - Pi 0.84.2 native SDK: busy batching, interleaved and busy-preflight retry, transformed/consumed/rejected input, replacement preflight, 42 durable rows and 8 consumed recovery confirmations
