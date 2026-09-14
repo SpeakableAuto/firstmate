@@ -13,7 +13,7 @@ The guard loads the tracked extension into the actual Pi runtime, uses native fo
 Set `FM_PI_PACKAGE_ROOT` to the installed `@earendil-works/pi-coding-agent` package directory and run:
 
 ```sh
-FM_PI_NATIVE_QUEUE=1 FM_PI_PACKAGE_ROOT="$pi_package_root" bash tests/fm-pi-primary-live-e2e.test.sh
+FM_PI_NATIVE_QUEUE=1 bash tests/fm-pi-primary-live-e2e.test.sh
 ```
 
 Observed output:
