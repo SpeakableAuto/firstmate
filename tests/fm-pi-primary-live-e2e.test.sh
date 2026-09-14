@@ -130,7 +130,11 @@ printf 'signal: native event %s\\n' "$count"
   await waitFor(() => rows("arms").length === 1, "native watcher command did not arm");
   const run = session.prompt("CAPTAIN_FIRST");
   await waitFor(() => streams.length === 1, "local provider did not start");
-  for (let i = 0; i < 10; i++) await fire();
+  for (let i = 0; i < 10; i++) {
+    if (i < 3) await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
+    await fire();
+    assert.equal(session.getFollowUpMessages().length, 1, `spaced busy wake ${i + 1} produced redundant Pi follow-ups`);
+  }
   assert.equal(session.getFollowUpMessages().length, 1, "busy burst produced redundant Pi follow-ups");
   await session.steer("CAPTAIN_STEERING");
   assert.equal(session.getSteeringMessages().length, 1, "captain steering disappeared");
@@ -154,6 +158,14 @@ printf 'signal: native event %s\\n' "$count"
   await aborted;
   await run;
   assert.equal(session.getFollowUpMessages().length, 0);
+  // Restore the unconsumed hint through Pi's native queue API after abort.
+  // Even an idle runtime must retain that exact queued offer beyond its deadline.
+  await session.followUp(removed.followUp[0]);
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
+  await fire();
+  assert.equal(session.getFollowUpMessages().length, 1, "idle retained abort queue admitted a duplicate offer");
+  assert.equal(rows("confirmations").length, 1, "retained abort queue implied watcher consumption");
+  assert.equal(session.clearQueue().followUp.length, 1);
   releaseAll = true;
   await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
   await fire();

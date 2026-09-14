@@ -57,6 +57,7 @@ type SessionGeneration = {
   wakeId: string;
   wakeSeq: number;
   recoveryDeliveries: Map<string, string>;
+  runtimeHasWork: (() => boolean) | null;
   pendingWake: { content: string; identity: string; offerRetryAt: number } | null;
 };
 
@@ -202,6 +203,7 @@ function createGeneration(): SessionGeneration {
     wakeId: randomUUID(),
     wakeSeq: 0,
     recoveryDeliveries: new Map(),
+    runtimeHasWork: null,
     pendingWake: null,
   };
 }
@@ -278,7 +280,9 @@ export default function (pi: ExtensionAPI) {
     if (!generationIsLive(owner)) return;
     if (coalesce && recovery) owner.recoveryDeliveries.set(recovery.generation, recovery.watcherPid);
     let pending = coalesce ? owner.pendingWake : null;
-    if (pending && Date.now() < pending.offerRetryAt) return;
+    // Busy or queued native work defers an offer retry; only matching
+    // message_start confirms delivery and releases the existing identity.
+    if (pending && (Date.now() < pending.offerRetryAt || owner.runtimeHasWork?.())) return;
     if (!pending) {
       const identity = `[wake ${owner.wakeId}.${++owner.wakeSeq}]`;
       const content = encodeFirstmateOperationalInput(
@@ -525,8 +529,9 @@ export default function (pi: ExtensionAPI) {
     confirmRecoveryDeliveries(generation);
   });
 
-  pi.on?.("session_start", () => {
+  pi.on?.("session_start", (_event, ctx) => {
     if (generation.stopping) generation = createGeneration();
+    generation.runtimeHasWork = () => !ctx.isIdle() || ctx.hasPendingMessages();
     activateGeneration(generation);
     markLoaded();
   });
