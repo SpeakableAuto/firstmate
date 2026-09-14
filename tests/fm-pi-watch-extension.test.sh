@@ -60,6 +60,141 @@ export const Type = {
 JS
 }
 
+test_pi_busy_wakes_coalesce_without_consuming_work() {
+  local repo home plugin out status
+  repo="$TMP_ROOT/pi-batched-root"
+  home="$TMP_ROOT/pi-batched-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then
+  printf '%s %s\n' "$2" "$4" >> "$FM_HOME/state/confirmations"
+  exit 0
+fi
+printf 'arm\n' >> "$FM_HOME/state/arms"
+count=$(wc -l < "$FM_HOME/state/arms" | tr -d '[:space:]')
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=batch-%s\n' "$$" "$count"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_HOME/state/fire-$count" ]; do sleep 0.02; done
+printf 'signal: event %s\n' "$count"
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
+const handlers = new Map();
+let tool;
+let failDelivery = false;
+let blockDelivery;
+const prompts = [];
+const root = `${process.env.FM_HOME}/state`;
+const pi = {
+  on(name, handler) { handlers.set(name, handler); },
+  registerCommand() {},
+  registerTool(candidate) { tool = candidate; },
+  async sendUserMessage(content, options) {
+    if (failDelivery) throw new Error("synthetic transport failure");
+    if (options.deliverAs !== "followUp") throw new Error("watcher stole user steering priority");
+    prompts.push(content);
+    if (blockDelivery) await blockDelivery;
+  },
+};
+const rows = (name) => existsSync(`${root}/${name}`) ? readFileSync(`${root}/${name}`, "utf8").trim().split("\n").filter(Boolean) : [];
+async function waitFor(test, label) {
+  for (let i = 0; i < 400; i++) {
+    if (test()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(label);
+}
+let event = 0;
+async function fire(confirm = true) {
+  const cycle = rows("arms").length;
+  const previous = rows("confirmations").length;
+  event++;
+  // These fixture rows represent the durable work; the extension has no queue mutation authority.
+  const queue = rows(".wake-queue");
+  writeFileSync(`${root}/.wake-queue`, [...queue, `1\t${event}\tsignal\tjob-${event}\tpayload-${event}`].join("\n") + "\n");
+  writeFileSync(`${root}/fire-${cycle}`, "fire\n");
+  await waitFor(() => rows("arms").length > cycle, "successor missing");
+  if (confirm) await waitFor(() => rows("confirmations").length > previous, "recovery delivery was lost in batch");
+}
+writeFileSync(`${root}/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute();
+await waitFor(() => rows("arms").length === 1, "first arm missing");
+for (let i = 0; i < 12; i++) await fire();
+if (prompts.length !== 1) throw new Error(`busy burst queued ${prompts.length} prompts`);
+const pending = prompts[0];
+handlers.get("message_start")({ message: { role: "user", content: "Please explain progress" } });
+handlers.get("message_start")({ message: { role: "assistant", content: pending } });
+await fire();
+if (prompts.length !== 1) throw new Error("unrelated user/assistant message released watcher slot");
+handlers.get("message_start")({ message: { role: "user", content: [{ type: "text", text: pending }] } });
+for (let i = 0; i < 12; i++) await fire();
+if (prompts.length !== 2) throw new Error(`events during handling queued ${prompts.length - 1} follow-ups`);
+if (rows(".wake-queue").length !== 25 || rows("confirmations").length !== 25) throw new Error("coalescing consumed durable work or dropped recovery confirmation");
+if (handlers.has("input")) throw new Error("coalescer intercepts user input");
+// An abandoned follow-up at fully settled state cannot suppress later wakes.
+let queueRetained = true;
+handlers.get("agent_settled")({}, { hasPendingMessages: () => queueRetained });
+await fire();
+if (prompts.length !== 2) throw new Error("settled with retained queue released its hint");
+queueRetained = false;
+await fire();
+if (prompts.length !== 3) throw new Error("settled discarded hint was retained");
+// A rejected delivery releases its slot and never confirms recovery delivery.
+handlers.get("message_start")({ message: { role: "user", content: prompts.at(-1) } });
+failDelivery = true;
+let confirmations = rows("confirmations").length;
+await fire(false);
+await new Promise((resolve) => setTimeout(resolve, 80));
+if (rows("confirmations").length !== confirmations) throw new Error("failed delivery confirmed recovery");
+failDelivery = false;
+await fire();
+if (prompts.length !== 4) throw new Error("failed delivery left a stuck slot");
+// A pending ordinary hint must not swallow a new ownership/continuity failure.
+const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+try {
+  writeFileSync(`${root}/.lock`, `${other.pid}\n`);
+  writeFileSync(`${root}/fire-${rows("arms").length}`, "fire\n");
+  await waitFor(() => prompts.length === 5, "ownership failure coalesced away");
+  if (!prompts.at(-1).includes("no longer owns the lock")) throw new Error("failure detail missing");
+} finally { other.kill("SIGTERM"); }
+writeFileSync(`${root}/.lock`, `${process.pid}\n`);
+// Same-process session replacement releases the old queue slot.
+const priorArms = rows("arms").length;
+handlers.get("session_shutdown")({});
+handlers.get("session_start")({});
+await tool.execute();
+await waitFor(() => rows("arms").length === priorArms + 1, "replacement arm missing");
+await fire();
+if (prompts.length !== 6) throw new Error("replacement inherited stale pending hint");
+// Shutdown while send is pending must not confirm recovery for a newer session.
+handlers.get("message_start")({ message: { role: "user", content: prompts.at(-1) } });
+let release;
+blockDelivery = new Promise((resolve) => { release = resolve; });
+confirmations = rows("confirmations").length;
+await fire(false);
+await waitFor(() => prompts.length === 7, "blocked offer missing");
+handlers.get("session_shutdown")({});
+release();
+await new Promise((resolve) => setTimeout(resolve, 80));
+if (rows("confirmations").length !== confirmations) throw new Error("stale callback confirmed recovery after shutdown");
+if (rows(".wake-queue").length !== event) throw new Error("lifecycle reset consumed durable work");
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "Pi must bound busy watcher notifications without losing recovery, user input, failures, or durable work"
+  [ -z "$out" ] || fail "Pi notification batching test printed output: $out"
+  pass "Pi batches busy wakes and preserves handling, failure, ownership, and replacement boundaries"
+}
+
 test_pi_extension_reports_external_healthy_watcher() {
   local repo home plugin out status
   repo="$TMP_ROOT/pi-external-healthy-root"
@@ -2166,6 +2301,7 @@ EOF
   pass "OpenCode healthy arm output does not suppress the turn-end guard"
 }
 
+test_pi_busy_wakes_coalesce_without_consuming_work
 test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop

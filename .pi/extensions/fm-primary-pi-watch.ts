@@ -9,7 +9,7 @@
 // quit leaves the final generation stopped so late callbacks cannot rearm. Stale
 // callbacks from a prior generation are no-ops against the active replacement.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +54,9 @@ type SessionGeneration = {
   retryFailures: number;
   restoring: boolean;
   seq: number;
+  wakeId: string;
+  wakeSeq: number;
+  pendingWake: { content: string; accepted: Promise<void>; isDiscarded?: () => boolean } | null;
 };
 
 function refreshWatchToolShell(
@@ -194,6 +197,9 @@ function createGeneration(): SessionGeneration {
     retryFailures: 0,
     restoring: false,
     seq: 0,
+    wakeId: randomUUID(),
+    wakeSeq: 0,
+    pendingWake: null,
   };
 }
 
@@ -207,6 +213,7 @@ function generationIsLive(generation: SessionGeneration): boolean {
 
 function stopGeneration(generation: SessionGeneration): void {
   generation.stopping = true;
+  generation.pendingWake = null;
   if (generation.retryTimer) clearTimeout(generation.retryTimer);
   generation.retryTimer = null;
   if (generation.child) generation.child.kill("SIGTERM");
@@ -238,18 +245,40 @@ export default function (pi: ExtensionAPI) {
     !calmPresentation.stockExportRendering &&
     !calmTranscriptClassIsVisible(itemClass);
 
+  // Coalesce only notification hints, never durable queue rows or failure text.
+  // One exact ordinary hint may wait in Pi's follow-up queue per live generation.
+  // message_start releases that slot before handling begins, so later events can
+  // request one more drain without queuing one conversation turn per watcher close.
   async function sendWake(
     owner: SessionGeneration,
     message: string,
     recovery?: { generation: string; watcherPid: string },
+    coalesce = false,
   ): Promise<void> {
     if (!generationIsLive(owner)) return;
-    const content = encodeFirstmateOperationalInput(
-      "watcher",
-      `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
-    );
-    await pi.sendUserMessage(content, { deliverAs: "followUp" });
-    if (recovery) {
+    if (owner.pendingWake?.isDiscarded?.()) owner.pendingWake = null;
+    let pending = coalesce ? owner.pendingWake : null;
+    if (!pending) {
+      const content = encodeFirstmateOperationalInput(
+        "watcher",
+        `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh once and handle its current batch, then acknowledge only the wakes actually handled using the printed command. This notification may represent several watcher events; the durable drain is authoritative. Watcher continuity is extension-owned. [wake ${owner.wakeId}.${++owner.wakeSeq}]`,
+      );
+      pending = { content, accepted: Promise.resolve() };
+      if (coalesce) owner.pendingWake = pending;
+      const offered = pending;
+      pending.accepted = (async () => {
+        try {
+          await pi.sendUserMessage(content, { deliverAs: "followUp" });
+        } catch (error) {
+          if (owner.pendingWake === offered) owner.pendingWake = null;
+          throw error;
+        }
+      })();
+    }
+    await pending.accepted;
+    // A session replacement or lock handoff while delivery was pending must not
+    // confirm recovery on behalf of the new owner.
+    if (recovery && generationIsLive(owner) && lockOwnership() === "owned") {
       const result = spawnSync(
         "bash",
         [armScript, "--handling-delivered", recovery.generation, "--watcher-pid", recovery.watcherPid],
@@ -455,7 +484,7 @@ export default function (pi: ExtensionAPI) {
           if (generationIsLive(owner)) owner.restoring = false;
           if (!generationIsLive(owner)) return;
           const message = restoration.failure ? `${classification.message}\n\n${restoration.failure}` : classification.message;
-          await sendWake(owner, message, restoration.recovery);
+          await sendWake(owner, message, restoration.recovery, !restoration.failure);
         })().catch(() => {
         });
         return;
@@ -478,6 +507,22 @@ export default function (pi: ExtensionAPI) {
       message: `watcher: started Pi extension arm child ${id}; future ordinary re-arms are automatic; ${repairOnlyHint}`,
     };
   }
+
+  pi.on?.("message_start", (event) => {
+    if (!generationIsLive(generation) || event.message.role !== "user") return;
+    const content = event.message.content;
+    const text = typeof content === "string" ? content : content
+      .filter((item) => item.type === "text")
+      .map((item) => item.text).join("");
+    if (generation.pendingWake?.content === text) generation.pendingWake = null;
+  });
+  pi.on?.("agent_settled", (_event, ctx) => {
+    // Abort can retain queued messages; release only a discarded/empty queue.
+    // Clearing a discarded hint allows the durable watcher to offer it again.
+    if (!generationIsLive(generation) || !generation.pendingWake) return;
+    if (!ctx.hasPendingMessages()) generation.pendingWake = null;
+    else generation.pendingWake.isDiscarded = () => !ctx.hasPendingMessages();
+  });
 
   pi.on?.("session_start", () => {
     if (generation.stopping) generation = createGeneration();

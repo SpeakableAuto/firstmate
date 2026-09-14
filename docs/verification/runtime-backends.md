@@ -6,6 +6,28 @@ This record contains reusable version-scoped evidence for active runtime guarant
 The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
 
+## Pi watcher notification queue
+
+Pi 0.84.2 on Node 25.9.0 and macOS was verified on 2026-09-14 with an isolated SDK session, a deterministic local provider, and real watcher-arm child processes.
+The guard loads the tracked extension into the actual Pi runtime, uses native follow-up and steering queues, and exercises native message-start and settled events without credentials or network requests.
+Set `FM_PI_PACKAGE_ROOT` to the installed `@earendil-works/pi-coding-agent` package directory and run:
+
+```sh
+FM_PI_NATIVE_QUEUE=1 FM_PI_PACKAGE_ROOT="$pi_package_root" bash tests/fm-pi-primary-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+ok - Pi 0.84.2 native SDK: 10 busy + 10 handling wakes, steering, abort with restored queue, 21 durable rows and recovery confirmations
+```
+
+Ten watcher events while the first response was held produced one queued hint, and ten more during its handling produced one successor hint.
+A captain steering message reached the intervening native turn without releasing that hint, and clearing the queued hint into the editor before abort allowed the next wake without another captain message.
+All 21 durable fixture rows remained intact and each successor recovery delivery was confirmed.
+This proves the Pi queue bridge rather than model response speed or product completion; [`../watcher-continuity.md`](../watcher-continuity.md#pi-notification-batching) owns the runtime contract and portable failure/lifecycle coverage.
+Other primary harnesses and runtime backends do not consume this Pi extension; the existing shared Pi/OpenCode regression also passed without changing OpenCode behavior.
+
 ## tmux
 
 Foreground-process behavior was verified on 2026-07-07 with tmux 3.6a on macOS.

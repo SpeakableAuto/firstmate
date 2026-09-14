@@ -4,6 +4,10 @@
 # copying credentials and pins the captain-approved openai-codex model.
 set -u
 
+if [ "${FM_PI_NATIVE_QUEUE:-0}" = 1 ]; then
+  exec node "$(dirname "${BASH_SOURCE[0]}")/pi-watch-queue-native.mjs"
+fi
+
 if [ "${FM_PI_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_PI_LIVE_E2E=1 to run the isolated interactive Pi regression"
   exit 0
