@@ -1,0 +1,6 @@
+No API key found for openai-codex.
+
+Use /login to log into a provider via OAuth or API key. See:
+  /Users/zachary/.no-mistakes/worktrees/56f977a7ea6a/01M2EWVV6WAVT5J4CBNMG56FNJ/.test-pi-sdk/node_modules/@earendil-works/pi-coding-agent/docs/providers.md
+  /Users/zachary/.no-mistakes/worktrees/56f977a7ea6a/01M2EWVV6WAVT5J4CBNMG56FNJ/.test-pi-sdk/node_modules/@earendil-works/pi-coding-agent/docs/models.md
+not ok - Pi Ahoy legacy-start case exited 1: 
