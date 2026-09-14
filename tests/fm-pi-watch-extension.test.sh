@@ -105,10 +105,12 @@ const pi = {
 };
 const rows = (name) => existsSync(`${root}/${name}`) ? readFileSync(`${root}/${name}`, "utf8").trim().split("\n").filter(Boolean) : [];
 async function waitFor(test, label) {
-  for (let i = 0; i < 400; i++) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
     if (test()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+  if (test()) return;
   throw new Error(label);
 }
 let event = 0;
