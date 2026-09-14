@@ -2430,11 +2430,11 @@ import { pathToFileURL } from "node:url";
 
 const armMod = await import(pathToFileURL(process.env.ARM_PLUGIN).href);
 const guardMod = await import(pathToFileURL(process.env.GUARD_PLUGIN).href);
-let promptBody = "";
+const promptBodies = [];
 const client = {
   session: {
     promptAsync: async (request) => {
-      promptBody = request.body.parts[0].text;
+      promptBodies.push(request.body.parts[0].text);
     },
   },
 };
@@ -2465,8 +2465,8 @@ if (!existsSync(process.env.FM_GUARD_LOG)) {
   console.error("turn-end guard was suppressed by an external healthy watcher");
   process.exit(1);
 }
-if (!promptBody.includes("TURN WOULD END BLIND")) {
-  console.error(`missing blind-turn prompt: ${promptBody}`);
+if (!promptBodies.some((body) => body.includes("TURN WOULD END BLIND"))) {
+  console.error(`missing blind-turn prompt: ${promptBodies.join(" | ")}`);
   process.exit(1);
 }
 EOF
