@@ -86,7 +86,7 @@ while [ ! -e "$FM_HOME/state/fire-$count" ]; do sleep 0.02; done
 printf 'signal: event %s\n' "$count"
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_PI_WAKE_OFFER_RETRY_MS=100 node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_PI_WAKE_OFFER_RETRY_MS=2000 node --input-type=module 2>&1 <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -126,7 +126,6 @@ const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute();
 await waitFor(() => rows("arms").length === 1, "first arm missing");
-handlers.get("agent_start")({});
 for (let i = 0; i < 12; i++) await fire();
 if (prompts.length !== 1) throw new Error(`busy burst queued ${prompts.length} prompts`);
 const pending = prompts[0];
@@ -140,29 +139,23 @@ for (let i = 0; i < 12; i++) await fire();
 if (prompts.length !== 2) throw new Error(`events during handling queued ${prompts.length - 1} follow-ups`);
 if (rows(".wake-queue").length !== 25 || rows("confirmations").length !== 1) throw new Error("coalescing consumed durable work or prematurely confirmed recovery");
 if (handlers.has("input")) throw new Error("coalescer intercepts user input");
-// An abandoned follow-up at fully settled state cannot suppress later wakes.
-let queueRetained = true;
-handlers.get("agent_settled")({}, { hasPendingMessages: () => queueRetained });
 await fire();
-if (prompts.length !== 2) throw new Error("settled with retained queue released its hint");
-queueRetained = false;
+if (prompts.length !== 2) throw new Error("pre-deadline event released a pending hint");
+await new Promise((resolve) => setTimeout(resolve, 2100));
 await fire();
-if (prompts.length !== 3) throw new Error("settled discarded hint was retained");
-handlers.get("agent_start")({});
+if (prompts.length !== 3) throw new Error("discarded hint missed its bounded retry");
 handlers.get("message_start")({ message: { role: "user", content: prompts.at(-1) } });
 if (rows("confirmations").length !== 2) throw new Error("discarded hint lost its recovery identity");
-handlers.get("agent_settled")({}, { hasPendingMessages: () => false });
 await fire();
 const unconsumed = prompts.at(-1);
 await fire();
 if (prompts.length !== 4) throw new Error("unresolved input preflight admitted a burst reoffer");
-await new Promise((resolve) => setTimeout(resolve, 120));
+await new Promise((resolve) => setTimeout(resolve, 2100));
 await fire();
 if (prompts.length !== 5 || prompts.at(-1) !== unconsumed) throw new Error("consumed input suppressed the bounded retry");
-await new Promise((resolve) => setTimeout(resolve, 120));
+await new Promise((resolve) => setTimeout(resolve, 2100));
 await fire();
 if (prompts.length !== 6 || prompts.at(-1) !== unconsumed) throw new Error("rejected input suppressed the bounded retry");
-handlers.get("agent_start")({});
 handlers.get("message_start")({ message: { role: "user", content: unconsumed } });
 if (rows("confirmations").length !== 3) throw new Error("retried hint lost coalesced recovery delivery");
 // A pending ordinary hint must not swallow a new ownership/continuity failure.
@@ -192,7 +185,6 @@ await waitFor(() => rows("arms").length === secondPriorArms + 1, "second replace
 await fire();
 if (prompts.length !== 10) throw new Error("replacement preflight suppressed the next actionable wake");
 if (rows("confirmations").length !== confirmations) throw new Error("replacement confirmed an unconsumed recovery");
-handlers.get("agent_start")({});
 handlers.get("message_start")({ message: { role: "user", content: prompts.at(-1) } });
 if (rows("confirmations").length !== confirmations + 1) throw new Error("replacement recovery was not confirmed at message_start");
 if (rows(".wake-queue").length !== event) throw new Error("lifecycle reset consumed durable work");

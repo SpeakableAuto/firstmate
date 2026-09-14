@@ -56,9 +56,8 @@ type SessionGeneration = {
   seq: number;
   wakeId: string;
   wakeSeq: number;
-  agentActive: boolean;
   recoveryDeliveries: Map<string, string>;
-  pendingWake: { content: string; identity: string; deliveryObserved: boolean; offerRetryAt: number; isDiscarded?: () => boolean } | null;
+  pendingWake: { content: string; identity: string; offerRetryAt: number } | null;
 };
 
 function refreshWatchToolShell(
@@ -202,7 +201,6 @@ function createGeneration(): SessionGeneration {
     seq: 0,
     wakeId: randomUUID(),
     wakeSeq: 0,
-    agentActive: false,
     recoveryDeliveries: new Map(),
     pendingWake: null,
   };
@@ -279,16 +277,15 @@ export default function (pi: ExtensionAPI) {
   ): Promise<void> {
     if (!generationIsLive(owner)) return;
     if (coalesce && recovery) owner.recoveryDeliveries.set(recovery.generation, recovery.watcherPid);
-    if (owner.pendingWake?.isDiscarded?.()) owner.pendingWake = null;
     let pending = coalesce ? owner.pendingWake : null;
-    if (pending && (pending.deliveryObserved || owner.agentActive || pending.isDiscarded || Date.now() < pending.offerRetryAt)) return;
+    if (pending && Date.now() < pending.offerRetryAt) return;
     if (!pending) {
       const identity = `[wake ${owner.wakeId}.${++owner.wakeSeq}]`;
       const content = encodeFirstmateOperationalInput(
         "watcher",
         `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh once and handle its current batch, then acknowledge only the wakes actually handled using the printed command. This notification may represent several watcher events; the durable drain is authoritative. Watcher continuity is extension-owned. ${identity}`,
       );
-      pending = { content, identity, deliveryObserved: owner.agentActive, offerRetryAt: 0 };
+      pending = { content, identity, offerRetryAt: 0 };
       if (coalesce) owner.pendingWake = pending;
     }
     try {
@@ -517,11 +514,6 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
-  pi.on?.("agent_start", () => {
-    if (!generationIsLive(generation)) return;
-    generation.agentActive = true;
-    if (generation.pendingWake) generation.pendingWake.deliveryObserved = true;
-  });
   pi.on?.("message_start", (event) => {
     if (!generationIsLive(generation) || event.message.role !== "user") return;
     const content = event.message.content;
@@ -531,15 +523,6 @@ export default function (pi: ExtensionAPI) {
     if (!generation.pendingWake || !text.includes(generation.pendingWake.identity)) return;
     generation.pendingWake = null;
     confirmRecoveryDeliveries(generation);
-  });
-  pi.on?.("agent_settled", (_event, ctx) => {
-    // Abort can retain queued messages; release only a discarded/empty queue.
-    // Clearing a discarded hint allows the durable watcher to offer it again.
-    if (!generationIsLive(generation)) return;
-    generation.agentActive = false;
-    if (!generation.pendingWake) return;
-    if (!ctx.hasPendingMessages()) generation.pendingWake = null;
-    else generation.pendingWake.isDiscarded = () => !ctx.hasPendingMessages();
   });
 
   pi.on?.("session_start", () => {

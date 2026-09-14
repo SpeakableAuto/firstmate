@@ -45,18 +45,17 @@ The turn-end guard remains the final backstop rather than the normal continuity 
 
 ## Pi notification batching
 
-Pi keeps at most one ordinary watcher hint waiting in its follow-up queue per active session generation.
-Further ordinary watcher closes share that hint while each successor still starts and the latest live successor identity is retained for each recovery generation.
+Pi retains one ordinary watcher offer identity per active session generation.
+Further ordinary watcher closes share that identity and its recovery obligations while each successor still starts, and they cannot resubmit it before the bounded retry deadline.
 The generated message carries a random generation-scoped wake identity, and a `message_start` that preserves that identity through supported text wrapping or augmentation releases the slot, confirms its retained recovery identities, and allows events arriving during handling to request one more drain.
 The hint tells Firstmate to drain the authoritative current batch once; it neither embeds a second work queue nor acknowledges any durable row.
 Continuity failures bypass batching so their diagnostic text remains visible to the agent.
-User input and queue delivery modes are unchanged, and unrelated messages never release the watcher slot.
-Session replacement discards the old generation's slot; `agent_settled` also releases a hint discarded without consumption only when Pi also reports no pending messages, since abort can retain a queue.
-If a retained queue is subsequently cleared while idle, the next wake releases that settled hint after rechecking the same queue predicate without discarding its unconfirmed recovery identity.
-A send consumed or rejected before `message_start` remains unconfirmed and a later actionable close retries it when no active run or retained queue can own it.
-While idle input preflight is unresolved, the retained offer suppresses reoffers for one second before a later actionable close may retry the same identity and recovery obligations.
+User input and queue delivery modes are unchanged, and unrelated messages or agent lifecycle events never mark or release the watcher offer.
+Only a matching `message_start` confirms delivery and releases the offer.
+A queued hint discarded without consumption, or a send consumed or rejected before `message_start`, remains unconfirmed until a later actionable close retries it.
+Whether the offer began while idle or busy, it suppresses reoffers for one second before that retry can reuse the same identity and recovery obligations.
 An external input hook that remains unresolved beyond that deadline can therefore admit a later retry, so this boundary does not promise exactly-once submission across arbitrary hooks.
-Session replacement discards those stale delivery identities, and a stale callback never confirms recovery after shutdown or ownership transfer.
+Session replacement discards the old generation's identity and obligations, and a stale callback never confirms recovery after shutdown or ownership transfer.
 Pi's extension send API accepts a queue offer rather than reporting completed handling; actual work still requires the generation-bound acknowledgement below.
 This bounds redundant notification turns, not response latency, and does not interrupt an active model or tool call.
 

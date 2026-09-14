@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Opt-in credentialed Pi continuity regression on a private tmux socket and
-# isolated project/home state. It uses the existing shared Pi auth store without
-# copying credentials and pins the captain-approved openai-codex model.
+# Opt-in Pi regressions for credential-free native queue/lifecycle behavior and
+# credentialed interactive continuity on a private tmux socket. Both use isolated
+# project/home state; only the interactive mode reads the shared Pi auth store.
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -155,6 +155,7 @@ printf 'signal: native event %s\\n' "$count"
   await run;
   assert.equal(session.getFollowUpMessages().length, 0);
   releaseAll = true;
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
   await fire();
   await waitFor(() => rows("confirmations").length === 2, "discarded hint recovery was not confirmed");
   await session.waitForIdle();
@@ -187,8 +188,10 @@ printf 'signal: native event %s\\n' "$count"
   attempts = inputAttempts;
   await fire();
   await waitFor(() => inputAttempts === attempts + 1 && blockedInputReleases.length === 1, "delayed extension preflight did not start");
-  for (let i = 0; i < 4; i++) await fire();
-  assert.equal(inputAttempts, attempts + 1, "delayed extension preflight admitted burst reoffers");
+  await session.prompt("CAPTAIN_INTERLEAVED");
+  assert(session.state.messages.some((message) => message.role === "user" && JSON.stringify(message.content).includes("CAPTAIN_INTERLEAVED")), "interleaved captain prompt was not preserved");
+  for (let i = 0; i < 2; i++) await fire();
+  assert.equal(inputAttempts, attempts + 1, "interleaved captain lifecycle released idle preflight");
   await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
   await fire();
   await waitFor(() => inputAttempts === attempts + 2 && blockedInputReleases.length === 2, "delayed extension preflight did not retry after its deadline");
@@ -200,6 +203,32 @@ printf 'signal: native event %s\\n' "$count"
   await fire();
   await waitFor(() => rows("confirmations").length === 5, "delayed preflight recovery was not confirmed");
   await session.waitForIdle();
+  releaseAll = false;
+  const streamsBeforeBusyPreflight = streams.length;
+  const busyPreflightRun = session.prompt("CAPTAIN_BUSY_PREFLIGHT");
+  await waitFor(() => streams.length === streamsBeforeBusyPreflight + 1, "busy preflight captain run did not start");
+  inputMode = "blocked";
+  attempts = inputAttempts;
+  await fire();
+  await waitFor(() => inputAttempts === attempts + 1 && blockedInputReleases.length === 1, "busy extension preflight did not start");
+  for (let i = 0; i < 2; i++) await fire();
+  assert.equal(inputAttempts, attempts + 1, "busy extension preflight admitted burst reoffers");
+  streams.at(-1)();
+  await busyPreflightRun;
+  await fire();
+  assert.equal(inputAttempts, attempts + 1, "unrelated busy agent settlement released watcher preflight");
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
+  await fire();
+  await waitFor(() => inputAttempts === attempts + 2 && blockedInputReleases.length === 2, "busy extension preflight did not retry after its deadline");
+  assert.equal(extensionInputTexts.at(-1), extensionInputTexts.at(-2), "busy extension preflight retry changed wake identity");
+  releaseAll = true;
+  inputMode = "continue";
+  await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
+  releaseBlockedInputs();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await fire();
+  await waitFor(() => rows("confirmations").length === 6, "busy preflight recovery was not confirmed");
+  await session.waitForIdle();
   session.state.model = undefined;
   await fire(1);
   await waitFor(() => errors.length === 1, "rejected extension input was not reported", 1);
@@ -209,9 +238,9 @@ printf 'signal: native event %s\\n' "$count"
   session.state.model = model;
   await new Promise((resolve) => setTimeout(resolve, offerRetryWaitMs));
   await fire();
-  await waitFor(() => rows("confirmations").length === 6, "rejected input recovery was not confirmed", 2);
+  await waitFor(() => rows("confirmations").length === 7, "rejected input recovery was not confirmed", 2);
   await session.waitForIdle();
-  assert.equal(rows("confirmations").length, 6, "rejected inputs lost their recovery identity");
+  assert.equal(rows("confirmations").length, 7, "rejected inputs lost their recovery identity");
   inputMode = "blocked";
   attempts = inputAttempts;
   await fire();
@@ -231,7 +260,7 @@ printf 'signal: native event %s\\n' "$count"
   assert.equal(rows("confirmations").length, confirmationsBeforeReload + 1, "replaced preflight confirmed stale recovery");
   assert.equal(rows(".wake-queue").length, event, "native bridge consumed durable work");
   assert(errors.every((error) => error.event === "send_user_message" && error.error.includes("No model selected")), JSON.stringify(errors));
-  console.log(`ok - Pi ${JSON.parse(readFileSync(`${packageRoot}/package.json`, "utf8")).version} native SDK: busy batching, delayed-preflight retry, transformed/consumed/rejected input, replacement preflight, ${event} durable rows and ${rows("confirmations").length} consumed recovery confirmations`);
+  console.log(`ok - Pi ${JSON.parse(readFileSync(`${packageRoot}/package.json`, "utf8")).version} native SDK: busy batching, interleaved and busy-preflight retry, transformed/consumed/rejected input, replacement preflight, ${event} durable rows and ${rows("confirmations").length} consumed recovery confirmations`);
 } finally {
   releaseBlockedInputs();
   releaseAll = true;

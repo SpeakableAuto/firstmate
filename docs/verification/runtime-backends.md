@@ -19,14 +19,15 @@ FM_PI_NATIVE_QUEUE=1 FM_PI_PACKAGE_ROOT="$pi_package_root" bash tests/fm-pi-prim
 Observed output:
 
 ```text
-ok - Pi 0.84.2 native SDK: busy batching, delayed-preflight retry, transformed/consumed/rejected input, replacement preflight, 37 durable rows and 7 consumed recovery confirmations
+ok - Pi 0.84.2 native SDK: busy batching, interleaved and busy-preflight retry, transformed/consumed/rejected input, replacement preflight, 41 durable rows and 8 consumed recovery confirmations
 ```
 
 Ten watcher events while the first response was held produced one queued hint, and ten more during its handling produced one successor hint.
 A captain steering message reached the intervening native turn without releasing that hint, and clearing the queued hint into the editor before abort allowed the next wake without another captain message.
 Transformed extension input retained its stable wake identity, consumed and rejected input was retried without premature confirmation, and reloading the session while input preflight was blocked did not let the replaced generation confirm delivery.
-A delayed idle input preflight admitted one offer during a four-event burst, then permitted one retry after its bounded deadline while retaining the same recovery obligations.
-All 37 durable fixture rows remained intact, and seven consumed hints confirmed only the latest live successor for their recovery generation.
+An idle blocked offer survived an independent captain turn without a pre-deadline reoffer, and an offer initiated during another captain run likewise survived that unrelated run's settlement.
+Both paths reused their retained identity and recovery obligations only after the bounded deadline.
+All 41 durable fixture rows remained intact, and eight consumed hints confirmed only the latest live successor for their recovery generation.
 This proves the Pi queue bridge rather than model response speed or product completion; [`../watcher-continuity.md`](../watcher-continuity.md#pi-notification-batching) owns the runtime contract and portable failure/lifecycle coverage.
 Plain Pi and `pi-signed` load this tracked extension through the same Pi-family engine, while non-Pi-family primary harnesses and runtime backends do not consume it.
 The existing shared Pi/OpenCode regression also passed without changing OpenCode behavior.
