@@ -94,6 +94,9 @@ const handlers = new Map();
 let tool;
 const prompts = [];
 const root = `${process.env.FM_HOME}/state`;
+const realNow = Date.now.bind(Date);
+let now = realNow();
+Date.now = () => now;
 const pi = {
   on(name, handler) { handlers.set(name, handler); },
   registerCommand() {},
@@ -105,8 +108,8 @@ const pi = {
 };
 const rows = (name) => existsSync(`${root}/${name}`) ? readFileSync(`${root}/${name}`, "utf8").trim().split("\n").filter(Boolean) : [];
 async function waitFor(test, label) {
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
+  const deadline = realNow() + 15000;
+  while (realNow() < deadline) {
     if (test()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -145,7 +148,7 @@ if (rows(".wake-queue").length !== 25 || rows("confirmations").length !== 1) thr
 if (handlers.has("input")) throw new Error("coalescer intercepts user input");
 await fire();
 if (prompts.length !== 2) throw new Error("pre-deadline event released a pending hint");
-await new Promise((resolve) => setTimeout(resolve, 2100));
+now += 2100;
 await fire();
 await waitFor(() => prompts.length === 3, "discarded hint retry missing");
 if (prompts.length !== 3) throw new Error("discarded hint missed its bounded retry");
@@ -156,11 +159,11 @@ await waitFor(() => prompts.length === 4, "unconsumed hint missing");
 const unconsumed = prompts.at(-1);
 await fire();
 if (prompts.length !== 4) throw new Error("unresolved input preflight admitted a burst reoffer");
-await new Promise((resolve) => setTimeout(resolve, 2100));
+now += 2100;
 await fire();
 await waitFor(() => prompts.length === 5, "consumed-input retry missing");
 if (prompts.length !== 5 || prompts.at(-1) !== unconsumed) throw new Error("consumed input suppressed the bounded retry");
-await new Promise((resolve) => setTimeout(resolve, 2100));
+now += 2100;
 await fire();
 await waitFor(() => prompts.length === 6, "rejected-input retry missing");
 if (prompts.length !== 6 || prompts.at(-1) !== unconsumed) throw new Error("rejected input suppressed the bounded retry");
