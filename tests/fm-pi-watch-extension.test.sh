@@ -134,8 +134,8 @@ handlers.get("message_start")({ message: { role: "user", content: "Please explai
 handlers.get("message_start")({ message: { role: "assistant", content: pending } });
 await fire();
 if (prompts.length !== 1) throw new Error("unrelated user/assistant message released watcher slot");
-handlers.get("message_start")({ message: { role: "user", content: [{ type: "text", text: pending }] } });
-if (rows("confirmations").length !== 1) throw new Error("coalesced recovery was confirmed before its matching message_start");
+handlers.get("message_start")({ message: { role: "user", content: [{ type: "text", text: `WRAPPED PREFIX\n${pending}\nWRAPPED SUFFIX` }] } });
+if (rows("confirmations").length !== 1) throw new Error("coalesced recovery was not confirmed from its transformed wake identity");
 for (let i = 0; i < 12; i++) await fire();
 if (prompts.length !== 2) throw new Error(`events during handling queued ${prompts.length - 1} follow-ups`);
 if (rows(".wake-queue").length !== 25 || rows("confirmations").length !== 1) throw new Error("coalescing consumed durable work or prematurely confirmed recovery");

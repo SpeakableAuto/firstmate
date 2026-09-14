@@ -58,7 +58,7 @@ type SessionGeneration = {
   wakeSeq: number;
   agentActive: boolean;
   recoveryDeliveries: Map<string, string>;
-  pendingWake: { content: string; deliveryObserved: boolean; isDiscarded?: () => boolean } | null;
+  pendingWake: { content: string; identity: string; deliveryObserved: boolean; isDiscarded?: () => boolean } | null;
 };
 
 function refreshWatchToolShell(
@@ -282,11 +282,12 @@ export default function (pi: ExtensionAPI) {
     let pending = coalesce ? owner.pendingWake : null;
     if (pending && (pending.deliveryObserved || owner.agentActive || pending.isDiscarded)) return;
     if (!pending) {
+      const identity = `[wake ${owner.wakeId}.${++owner.wakeSeq}]`;
       const content = encodeFirstmateOperationalInput(
         "watcher",
-        `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh once and handle its current batch, then acknowledge only the wakes actually handled using the printed command. This notification may represent several watcher events; the durable drain is authoritative. Watcher continuity is extension-owned. [wake ${owner.wakeId}.${++owner.wakeSeq}]`,
+        `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh once and handle its current batch, then acknowledge only the wakes actually handled using the printed command. This notification may represent several watcher events; the durable drain is authoritative. Watcher continuity is extension-owned. ${identity}`,
       );
-      pending = { content, deliveryObserved: owner.agentActive };
+      pending = { content, identity, deliveryObserved: owner.agentActive };
       if (coalesce) owner.pendingWake = pending;
     }
     try {
@@ -525,7 +526,7 @@ export default function (pi: ExtensionAPI) {
     const text = typeof content === "string" ? content : content
       .filter((item) => item.type === "text")
       .map((item) => item.text).join("");
-    if (generation.pendingWake?.content !== text) return;
+    if (!generation.pendingWake || !text.includes(generation.pendingWake.identity)) return;
     generation.pendingWake = null;
     confirmRecoveryDeliveries(generation);
   });
