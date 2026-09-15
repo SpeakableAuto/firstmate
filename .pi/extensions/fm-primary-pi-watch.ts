@@ -9,7 +9,7 @@
 // quit leaves the final generation stopped so late callbacks cannot rearm. Stale
 // callbacks from a prior generation are no-ops against the active replacement.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +54,11 @@ type SessionGeneration = {
   retryFailures: number;
   restoring: boolean;
   seq: number;
+  wakeId: string;
+  wakeSeq: number;
+  recoveryDeliveries: Map<string, string>;
+  runtimeHasWork: (() => boolean) | null;
+  pendingWake: { content: string; identity: string; offerRetryAt: number } | null;
 };
 
 function refreshWatchToolShell(
@@ -88,6 +93,7 @@ const extensionVersion = `sha256:${createHash("sha256").update(readFileSync(exte
 const retryBaseMs = positiveInteger("FM_WATCH_REARM_RETRY_BASE_MS", 250);
 const retryMaxMs = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const retryLimit = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
+const wakeOfferRetryMs = positiveInteger("FM_PI_WAKE_OFFER_RETRY_MS", 1000);
 // 35s on Windows so the budget stays above arm's MSYS confirm default (30s in
 // bin/fm-watch-arm.sh): a slow but successful Git Bash cold start must not be
 // SIGTERMed mid-confirmation. Conditioned on win32 so other platforms keep 12s.
@@ -194,6 +200,11 @@ function createGeneration(): SessionGeneration {
     retryFailures: 0,
     restoring: false,
     seq: 0,
+    wakeId: randomUUID(),
+    wakeSeq: 0,
+    recoveryDeliveries: new Map(),
+    runtimeHasWork: null,
+    pendingWake: null,
   };
 }
 
@@ -207,6 +218,8 @@ function generationIsLive(generation: SessionGeneration): boolean {
 
 function stopGeneration(generation: SessionGeneration): void {
   generation.stopping = true;
+  generation.pendingWake = null;
+  generation.recoveryDeliveries.clear();
   if (generation.retryTimer) clearTimeout(generation.retryTimer);
   generation.retryTimer = null;
   if (generation.child) generation.child.kill("SIGTERM");
@@ -238,27 +251,53 @@ export default function (pi: ExtensionAPI) {
     !calmPresentation.stockExportRendering &&
     !calmTranscriptClassIsVisible(itemClass);
 
-  async function sendWake(
-    owner: SessionGeneration,
-    message: string,
-    recovery?: { generation: string; watcherPid: string },
-  ): Promise<void> {
-    if (!generationIsLive(owner)) return;
-    const content = encodeFirstmateOperationalInput(
-      "watcher",
-      `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
-    );
-    await pi.sendUserMessage(content, { deliverAs: "followUp" });
-    if (recovery) {
+  // Coalesce only notification hints, never durable queue rows or failure text.
+  // One exact ordinary hint may wait in Pi's follow-up queue per live generation.
+  // Its matching message_start releases that slot and confirms the latest live
+  // successor identity for every coalesced recovery generation.
+  function confirmRecoveryDeliveries(owner: SessionGeneration): void {
+    for (const [recoveryGeneration, watcherPid] of owner.recoveryDeliveries) {
+      if (!generationIsLive(owner) || lockOwnership() !== "owned") return;
       const result = spawnSync(
         "bash",
-        [armScript, "--handling-delivered", recovery.generation, "--watcher-pid", recovery.watcherPid],
+        [armScript, "--handling-delivered", recoveryGeneration, "--watcher-pid", watcherPid],
         {
           cwd: fmRoot,
           env: { ...process.env, FM_HOME: fmHome, FM_STATE_OVERRIDE: state, FM_ROOT_OVERRIDE: fmRoot },
         },
       );
       if (result.status !== 0) throw new Error("watcher recovery delivery could not be confirmed");
+      owner.recoveryDeliveries.delete(recoveryGeneration);
+    }
+  }
+
+  async function sendWake(
+    owner: SessionGeneration,
+    message: string,
+    recovery?: { generation: string; watcherPid: string },
+    coalesce = false,
+  ): Promise<void> {
+    if (!generationIsLive(owner)) return;
+    if (coalesce && recovery) owner.recoveryDeliveries.set(recovery.generation, recovery.watcherPid);
+    let pending = coalesce ? owner.pendingWake : null;
+    // Busy or queued native work defers an offer retry; only matching
+    // message_start confirms delivery and releases the existing identity.
+    if (pending && (Date.now() < pending.offerRetryAt || owner.runtimeHasWork?.())) return;
+    if (!pending) {
+      const identity = `[wake ${owner.wakeId}.${++owner.wakeSeq}]`;
+      const content = encodeFirstmateOperationalInput(
+        "watcher",
+        `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh once and handle its current batch, then acknowledge only the wakes actually handled using the printed command. This notification may represent several watcher events; the durable drain is authoritative. Watcher continuity is extension-owned. ${identity}`,
+      );
+      pending = { content, identity, offerRetryAt: 0 };
+      if (coalesce) owner.pendingWake = pending;
+    }
+    try {
+      pending.offerRetryAt = Date.now() + wakeOfferRetryMs;
+      pi.sendUserMessage(pending.content, { deliverAs: "followUp" });
+    } catch (error) {
+      if (owner.pendingWake === pending) owner.pendingWake = null;
+      throw error;
     }
   }
 
@@ -422,7 +461,25 @@ export default function (pi: ExtensionAPI) {
     const observeEstablishedArm = (): void => {
       const combined = `${stdout}\n${stderr}`;
       const recovery = combined.match(/^watcher: started pid=([0-9]+).* recovery-generation=([A-Za-z0-9._-]+)$/m);
-      if (recovery) armRecovery.set(armChild, { watcherPid: recovery[1], generation: recovery[2] });
+      if (recovery) {
+        const watcherPid = recovery[1];
+        const recoveryGeneration = recovery[2];
+        armRecovery.set(armChild, { watcherPid, generation: recoveryGeneration });
+        if (
+          owner.child === armChild &&
+          generationIsLive(owner) &&
+          lockOwnership() === "owned"
+        ) {
+          for (const retainedGeneration of owner.recoveryDeliveries.keys()) {
+            if (retainedGeneration !== recoveryGeneration) {
+              owner.recoveryDeliveries.delete(retainedGeneration);
+            }
+          }
+          if (owner.recoveryDeliveries.has(recoveryGeneration)) {
+            owner.recoveryDeliveries.set(recoveryGeneration, watcherPid);
+          }
+        }
+      }
       if (/^watcher: (?:started|attached)\b/m.test(combined)) {
         settleReadiness(true);
       }
@@ -455,7 +512,7 @@ export default function (pi: ExtensionAPI) {
           if (generationIsLive(owner)) owner.restoring = false;
           if (!generationIsLive(owner)) return;
           const message = restoration.failure ? `${classification.message}\n\n${restoration.failure}` : classification.message;
-          await sendWake(owner, message, restoration.recovery);
+          await sendWake(owner, message, restoration.recovery, !restoration.failure);
         })().catch(() => {
         });
         return;
@@ -479,8 +536,20 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
-  pi.on?.("session_start", () => {
+  pi.on?.("message_start", (event) => {
+    if (!generationIsLive(generation) || event.message.role !== "user") return;
+    const content = event.message.content;
+    const text = typeof content === "string" ? content : content
+      .filter((item) => item.type === "text")
+      .map((item) => item.text).join("");
+    if (!generation.pendingWake || !text.includes(generation.pendingWake.identity)) return;
+    generation.pendingWake = null;
+    confirmRecoveryDeliveries(generation);
+  });
+
+  pi.on?.("session_start", (_event, ctx) => {
     if (generation.stopping) generation = createGeneration();
+    generation.runtimeHasWork = () => !ctx.isIdle() || ctx.hasPendingMessages();
     activateGeneration(generation);
     markLoaded();
   });

@@ -43,6 +43,26 @@ No adapter starts a replacement with shell `&`.
 
 The turn-end guard remains the final backstop rather than the normal continuity mechanism and cooperates with the auto-arm in its `--claude` mode.
 
+## Pi notification batching
+
+Pi retains one ordinary watcher offer identity per active session generation.
+Further ordinary watcher closes share that identity and its recovery obligations while each successor still starts, and they cannot resubmit it before the bounded retry deadline.
+The generated message carries a random generation-scoped wake identity, and a `message_start` that preserves that identity through supported text wrapping or augmentation releases the slot, confirms its retained recovery identities, and allows events arriving during handling to request one more drain.
+An owned successor refreshes a retained confirmation when its recovery generation matches.
+Because downtime republication preserves a pending generation, a different newly established owned generation proves older retained recovery obligations are superseded so they cannot block confirmation of the current generation.
+Repeated delivery after acknowledgement is a no-op only while the generation and live watcher ownership still match.
+The hint tells Firstmate to drain the authoritative current batch once; it neither embeds a second work queue nor acknowledges any durable row.
+Continuity failures bypass batching so their diagnostic text remains visible to the agent.
+User input and queue delivery modes are unchanged, and unrelated messages or agent lifecycle events never mark or release the watcher offer.
+Only a matching `message_start` confirms delivery and releases the offer.
+A queued hint discarded without consumption, or a send consumed or rejected before `message_start`, remains unconfirmed until a later actionable close retries it.
+An existing offer can be retried only after its configured deadline and while Pi is idle with no pending messages.
+Native busy or pending-queue state defers retry without confirming delivery, clearing the offer, or changing its identity, deadline, or recovery obligations.
+An external input hook that remains unresolved beyond that deadline can admit a later retry when Pi and its queue are idle, so this boundary does not promise exactly-once submission across arbitrary hooks.
+Session replacement discards the old generation's identity and obligations, and a stale callback never confirms recovery after shutdown or ownership transfer.
+Pi's extension send API accepts a queue offer rather than reporting completed handling; actual work still requires the generation-bound acknowledgement below.
+This bounds redundant notification turns, not response latency, and does not interrupt an active model or tool call.
+
 ## Recovery episode acknowledgement
 
 A recovery episode is one generation of `state/.watcher-down`, and it is retired only by the generation-bound acknowledgement the drain prints as `WAKE_ACK_REQUIRED`.
@@ -75,9 +95,11 @@ Only the watcher process touches `state/.last-watcher-beat`; no helper process c
 
 ## Regression coverage
 
-`tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
+`tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, proves the successor launches before a wake offer, same-generation replacement refreshes the retained delivery owner, and a newly established owned generation retires a superseded acknowledged obligation, verifies confirmation waits for a matching transformed identity and single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
+The same portable suite also drives busy bursts, new events during handling, unconsumed offers, and session replacement before `message_start`, proving bounded hints with unchanged durable rows, retained recovery identity, independent user messages, failure delivery, settled queue reset, and generation ownership.
+The native SDK mode in `tests/fm-pi-primary-live-e2e.test.sh` exercises Pi's actual delayed input preflight, bounded retry, transform, consume, rejection, queue, and reload boundaries.
 The same suite covers ordinary same-process session replacement for `/new`, `/resume`, and `/fork`, same-instance shutdown-plus-start, stale prior-generation callbacks, repeated transitions with exactly one live cycle, disappearance of the shutting-down refusal after a valid replacement activates, and terminal quit still refusing late rearm.
-`tests/fm-watch-arm.test.sh` covers durable queue replay, real remote parent-replies ingestion into the authoritative status log, decision-only OPEN DECISIONS recovery, interrupted handling replay, generation-bound acknowledgement, a persistent live successor after recovery, a watcher close inside the handling window that must leave the printed acknowledgement valid, and the self-healing moved-generation acknowledgement that consumes its handled rows and names its remedy.
+`tests/fm-watch-arm.test.sh` covers durable queue replay, real remote parent-replies ingestion into the authoritative status log, decision-only OPEN DECISIONS recovery, interrupted handling replay, generation-bound acknowledgement, idempotent repeated delivery for an acknowledged matching generation and current watcher owner, a persistent live successor after recovery, a watcher close inside the handling window that must leave the printed acknowledgement valid, and the self-healing moved-generation acknowledgement that consumes its handled rows and names its remedy.
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, recovery publication before stale-lock removal, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
 `tests/fm-subagent-pretool-check.test.sh` proves Claude retains only the non-status Bash seatbelts.
 `tests/fm-claude-stop-autoarm.test.sh` covers the auto-arm's scope, stale and live session owners, unchanged AFK and need boundaries, single-flight, bounded failure retries, benign live-watcher cycle ends, one-notice failure episodes, and exit-2 translation.
