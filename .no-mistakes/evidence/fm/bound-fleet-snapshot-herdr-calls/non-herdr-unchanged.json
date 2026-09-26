@@ -1,0 +1,37 @@
+{
+  "scenario": "non-Herdr behavior unchanged",
+  "backend": "tmux (real host, tmux unavailable)",
+  "equal": true,
+  "baseline": {
+    "current_state": {
+      "state": "unknown",
+      "source": "none",
+      "detail": "backend target gone: firstmate:fm-non-herdr",
+      "raw": "state: unknown · source: none · backend target gone: firstmate:fm-non-herdr",
+      "freshness": "fresh"
+    },
+    "endpoint": {
+      "target": "firstmate:fm-non-herdr",
+      "exists": false,
+      "agent_alive": "not_checked",
+      "status": "absent",
+      "freshness": "fresh"
+    }
+  },
+  "target": {
+    "current_state": {
+      "state": "unknown",
+      "source": "none",
+      "detail": "backend target gone: firstmate:fm-non-herdr",
+      "raw": "state: unknown · source: none · backend target gone: firstmate:fm-non-herdr",
+      "freshness": "fresh"
+    },
+    "endpoint": {
+      "target": "firstmate:fm-non-herdr",
+      "exists": false,
+      "agent_alive": "not_checked",
+      "status": "absent",
+      "freshness": "fresh"
+    }
+  }
+}

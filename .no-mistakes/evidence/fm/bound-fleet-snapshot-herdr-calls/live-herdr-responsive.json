@@ -1,0 +1,24 @@
+{
+  "scenario": "responsive real Herdr endpoint",
+  "elapsed_seconds": 0,
+  "real_herdr_target": "default:w3:p1",
+  "task": {
+    "id": "live-herdr",
+    "current_state": {
+      "state": "unknown",
+      "source": "none",
+      "detail": "no current-state source available",
+      "raw": "state: unknown · source: none · no current-state source available",
+      "observed_at": "2026-09-26T01:13:14Z",
+      "freshness": "fresh"
+    },
+    "endpoint": {
+      "target": "default:w3:p1",
+      "exists": true,
+      "agent_alive": "dead",
+      "status": "dead",
+      "observed_at": "2026-09-26T01:13:14Z",
+      "freshness": "fresh"
+    }
+  }
+}

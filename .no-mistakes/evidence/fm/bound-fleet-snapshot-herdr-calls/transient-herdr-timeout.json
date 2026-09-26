@@ -1,0 +1,24 @@
+{
+  "scenario": "endpoint timeout remains authoritative after Herdr recovers",
+  "dependency": "first pane-get hangs; later calls would recover",
+  "elapsed_seconds": 2,
+  "pane_get_calls": 1,
+  "task": {
+    "current_state": {
+      "state": "unknown",
+      "source": "none",
+      "detail": "no current-state source available",
+      "raw": "state: unknown · source: none · no current-state source available",
+      "observed_at": "2026-09-26T01:15:01Z",
+      "freshness": "fresh"
+    },
+    "endpoint": {
+      "target": "default:w999:p2",
+      "exists": null,
+      "agent_alive": "unknown",
+      "status": "timeout",
+      "observed_at": "2026-09-26T01:15:01Z",
+      "freshness": "fresh"
+    }
+  }
+}

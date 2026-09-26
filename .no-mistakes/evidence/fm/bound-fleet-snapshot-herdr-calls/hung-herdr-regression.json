@@ -1,0 +1,33 @@
+{
+  "scenario": "hung Herdr dependency regression",
+  "dependency": "deliberately hanging Herdr test double",
+  "baseline": {
+    "exit_code": 124,
+    "elapsed_seconds": 6,
+    "outer_bound_seconds": 5
+  },
+  "target": {
+    "exit_code": 0,
+    "elapsed_seconds": 3,
+    "crew_state_bound_seconds": 1,
+    "endpoint_bound_seconds": 1,
+    "task": {
+      "current_state": {
+        "state": "unknown",
+        "source": "timeout",
+        "detail": "fm-crew-state.sh timed out after 1s",
+        "raw": "",
+        "observed_at": "2026-09-26T01:14:12Z",
+        "freshness": "fresh"
+      },
+      "endpoint": {
+        "target": "default:w999:p1",
+        "exists": null,
+        "agent_alive": "unknown",
+        "status": "timeout",
+        "observed_at": "2026-09-26T01:14:12Z",
+        "freshness": "fresh"
+      }
+    }
+  }
+}
