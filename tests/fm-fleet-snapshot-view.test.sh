@@ -36,6 +36,7 @@ if [ "${FAKE_HERDR_HANG:-0}" = 1 ]; then
   sleep "${FAKE_HERDR_HANG_SECONDS:-30}"
 fi
 case "${1:-} ${2:-}" in
+  "status --json") printf '{"server":{"running":true}}\n' ;;
   "pane get") printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}" ;;
   "agent get") printf '{"result":{"agent":{"agent_status":"working"}}}\n' ;;
 esac
@@ -44,6 +45,7 @@ SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+sleep "${FAKE_TMUX_DELAY_SECONDS:-0}"
 target=""
 prev=""
 for arg in "$@"; do
@@ -841,6 +843,7 @@ test_hung_herdr_endpoint_and_state_read_are_bounded() {
       and .current_state.source == "timeout"
       and .endpoint.exists == null
       and .endpoint.agent_alive == "unknown"
+      and .endpoint.status == "timeout"
   ' >/dev/null || fail "a timed-out herdr endpoint must report an explicit timeout, not a hard failure or a false dead/alive verdict: $json"
   pass "a hung herdr endpoint call is bounded and reports timeout instead of hanging the snapshot"
 }
@@ -869,12 +872,41 @@ test_endpoint_timeout_stays_unknown_after_herdr_recovers() {
 
   printf '%s' "$json" | jq -e '
     .tasks[] | select(.id == "transient-hung-mate")
-    | .endpoint.exists == null
+    | .current_state.source != "timeout"
+      and .endpoint.exists == null
       and .endpoint.agent_alive == "unknown"
+      and .endpoint.status == "timeout"
   ' >/dev/null || fail "an endpoint-presence timeout must stay authoritative after herdr recovers: $json"
   [ "$(cat "$home/state/.fake-herdr-pane-get-count")" -eq 1 ] \
     || fail "a timed-out endpoint-presence read must skip the independent agent probe"
   pass "an endpoint-presence timeout stays unknown after herdr recovers"
+}
+
+test_non_herdr_reads_keep_existing_unbounded_path() {
+  local home fakebin wt json
+  home=$(make_home delayed-tmux)
+  wt="$home/projects/delayed-tmux-task"
+  mkdir -p "$wt"
+  fm_write_meta "$home/state/delayed-tmux-task.meta" \
+    "window=firstmate:fm-delayed-tmux-task" \
+    "worktree=$wt" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  fakebin=$(make_fakebin "$home")
+
+  json=$(FAKE_TMUX_DELAY_SECONDS=2 \
+    FM_SNAPSHOT_CREW_STATE_TIMEOUT=1 FM_SNAPSHOT_ENDPOINT_TIMEOUT=1 \
+    PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+
+  printf '%s' "$json" | jq -e '
+    .tasks[] | select(.id == "delayed-tmux-task")
+    | .current_state.source != "timeout"
+      and .endpoint.exists == true
+      and .endpoint.status == "unknown"
+  ' >/dev/null || fail "non-herdr reads must retain their existing unbounded behavior: $json"
+  pass "non-herdr reads retain their existing unbounded path"
 }
 
 test_empty_fleet_json
@@ -894,3 +926,4 @@ test_view_renders_snapshot
 test_view_renders_dead_secondmate_agent_status
 test_hung_herdr_endpoint_and_state_read_are_bounded
 test_endpoint_timeout_stays_unknown_after_herdr_recovers
+test_non_herdr_reads_keep_existing_unbounded_path
