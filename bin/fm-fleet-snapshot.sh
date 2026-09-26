@@ -37,9 +37,9 @@
 #     against current_state; hints.pending_decision and hints.blocked_event are
 #     booleans derived from that set.
 #     endpoint.exists is the cheap backend endpoint-presence read. Herdr reads
-#     are bounded by FM_SNAPSHOT_ENDPOINT_TIMEOUT; a timed-out read reports
-#     exists:null and status:timeout, never false, since a stuck backend call is
-#     not proof the endpoint is gone.
+#     are bounded by FM_SNAPSHOT_ENDPOINT_TIMEOUT; a timed-out presence read
+#     reports exists:null, and either timed-out endpoint probe reports
+#     status:timeout rather than treating an inconclusive read as absent.
 #     endpoint.agent_alive is populated for secondmates only, where it is useful
 #     return-channel supervision data; other tasks use "not_checked", and a
 #     timed-out read reports "unknown" for the same reason.
@@ -105,10 +105,8 @@ FM_SNAPSHOT_REGISTRY_LINES=${FM_SNAPSHOT_REGISTRY_LINES:-256}
 FM_SNAPSHOT_REGISTRY_BYTES=${FM_SNAPSHOT_REGISTRY_BYTES:-65536}
 FM_SNAPSHOT_REGISTRY_RECORDS=${FM_SNAPSHOT_REGISTRY_RECORDS:-40}
 FM_SNAPSHOT_REGISTRY_TIMEOUT=${FM_SNAPSHOT_REGISTRY_TIMEOUT:-2}
-# Bounds the per-task bin/fm-crew-state.sh subprocess (line ~304 below) and the
-# per-task local-backend endpoint reads (line ~365 below). Every other
-# slow/network path in this file is already bounded; these two were not,
-# which let one wedged herdr endpoint hang the whole snapshot indefinitely.
+# Bounds only Herdr per-task current-state and local endpoint probes.
+# Other backends retain their existing read paths.
 FM_SNAPSHOT_CREW_STATE_TIMEOUT=${FM_SNAPSHOT_CREW_STATE_TIMEOUT:-15}
 FM_SNAPSHOT_ENDPOINT_TIMEOUT=${FM_SNAPSHOT_ENDPOINT_TIMEOUT:-8}
 validate_positive_bound() {  # <name> <value>
@@ -222,10 +220,9 @@ last_nonempty_line() {  # <file>
 
 crew_state_json() {  # <id> <backend>
   local id=$1 backend=$2 raw rest state source detail sep rc
-  # Bounded: an unresponsive backend (a wedged herdr server, most commonly)
-  # can otherwise stall this subprocess forever with the whole per-task loop
-  # behind it. A timeout is reported below as an explicit unknown/timed-out
-  # result, never as a hard failure of the snapshot.
+  # A wedged Herdr server can otherwise stall this subprocess with the whole
+  # per-task loop behind it. Bound only that backend and report its timeout as
+  # an explicit unknown result rather than a hard snapshot failure.
   if [ "$backend" = herdr ]; then
     raw=$(
       fm_run_timed "$FM_SNAPSHOT_CREW_STATE_TIMEOUT" env \
