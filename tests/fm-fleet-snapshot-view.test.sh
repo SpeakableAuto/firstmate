@@ -23,9 +23,22 @@ SH
   # a wedged herdr endpoint is bounded rather than blocking the snapshot.
   cat > "$fb/herdr" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = "pane get" ]; then
+  count_file="${FM_HOME:?}/state/.fake-herdr-pane-get-count"
+  count=$(cat "$count_file" 2>/dev/null || printf 0)
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$count_file"
+  if [ "${FAKE_HERDR_HANG_PANE_GET_NUMBER:-0}" = "$count" ]; then
+    sleep "${FAKE_HERDR_HANG_SECONDS:-30}"
+  fi
+fi
 if [ "${FAKE_HERDR_HANG:-0}" = 1 ]; then
   sleep "${FAKE_HERDR_HANG_SECONDS:-30}"
 fi
+case "${1:-} ${2:-}" in
+  "pane get") printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}" ;;
+  "agent get") printf '{"result":{"agent":{"agent_status":"working"}}}\n' ;;
+esac
 exit 0
 SH
   cat > "$fb/tmux" <<'SH'
@@ -832,6 +845,38 @@ test_hung_herdr_endpoint_and_state_read_are_bounded() {
   pass "a hung herdr endpoint call is bounded and reports timeout instead of hanging the snapshot"
 }
 
+test_endpoint_timeout_stays_unknown_after_herdr_recovers() {
+  local home fakebin wt json
+  home=$(make_home transient-hung-herdr)
+  wt="$home/projects/transient-hung-mate"
+  mkdir -p "$wt" "$home/transient-hung-mate-home"
+  fm_write_meta "$home/state/transient-hung-mate.meta" \
+    "backend=herdr" \
+    "window=fakesession:p1" \
+    "worktree=$wt" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "yolo=off" \
+    "home=$home/transient-hung-mate-home" \
+    "projects=alpha"
+  fakebin=$(make_fakebin "$home")
+
+  json=$(FAKE_HERDR_HANG_PANE_GET_NUMBER=1 FAKE_HERDR_HANG_SECONDS=30 \
+    FM_SNAPSHOT_CREW_STATE_TIMEOUT=1 FM_SNAPSHOT_ENDPOINT_TIMEOUT=1 \
+    PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+
+  printf '%s' "$json" | jq -e '
+    .tasks[] | select(.id == "transient-hung-mate")
+    | .endpoint.exists == null
+      and .endpoint.agent_alive == "unknown"
+  ' >/dev/null || fail "an endpoint-presence timeout must stay authoritative after herdr recovers: $json"
+  [ "$(cat "$home/state/.fake-herdr-pane-get-count")" -eq 1 ] \
+    || fail "a timed-out endpoint-presence read must skip the independent agent probe"
+  pass "an endpoint-presence timeout stays unknown after herdr recovers"
+}
+
 test_empty_fleet_json
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
@@ -848,3 +893,4 @@ test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot
 test_view_renders_dead_secondmate_agent_status
 test_hung_herdr_endpoint_and_state_read_are_bounded
+test_endpoint_timeout_stays_unknown_after_herdr_recovers

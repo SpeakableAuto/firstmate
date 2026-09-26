@@ -290,7 +290,7 @@ first_pr_url_in_file() {  # <file>
 task_json_lines() {
   local meta id kind harness mode yolo project worktree home projects backend target status_log report_path
   local remote_host remote_root remote_state remote_rc remote_home_present
-  local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json endpoint_rc agent_rc
+  local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json endpoint_rc agent_rc endpoint_timed_out
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
   local open_decisions_tsv open_decisions_json
 
@@ -369,6 +369,7 @@ task_json_lines() {
 
     endpoint_exists=null
     agent_alive=not_checked
+    endpoint_timed_out=0
     if [ -n "$remote_host" ]; then
       if remote_state=$(fm_run_timed "$FM_SNAPSHOT_SECONDMATE_TIMEOUT" \
         "$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh state "$id" < /dev/null 2>/dev/null); then
@@ -403,12 +404,14 @@ task_json_lines() {
           endpoint_rc=$?
           if [ "$endpoint_rc" -eq 124 ]; then
             endpoint_exists=null
+            endpoint_timed_out=1
+            agent_alive=unknown
           else
             endpoint_exists=false
           fi
         fi
       fi
-      if [ "$kind" = secondmate ] && [ -n "$target" ]; then
+      if [ "$kind" = secondmate ] && [ -n "$target" ] && [ "$endpoint_timed_out" -eq 0 ]; then
         # shellcheck disable=SC2016 # Positional parameters expand inside the child bash, not here.
         agent_alive=$(fm_run_timed "$FM_SNAPSHOT_ENDPOINT_TIMEOUT" bash -c \
           '. "$1"; fm_backend_agent_alive "$2" "$3"' \
