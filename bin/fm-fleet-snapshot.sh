@@ -26,17 +26,23 @@
 #     Malformed program records remain visible in errors rather than becoming an
 #     empty portfolio. An unreadable backlog aborts the command without JSON.
 #   tasks[]: one row per state/<id>.meta, sorted by id.
-#     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
-#     state, source, detail, and raw line separately.
+#     current_state is parsed from bin/fm-crew-state.sh <id> and preserves state,
+#     source, detail, and raw line separately. Herdr reads run under a hard bound
+#     (FM_SNAPSHOT_CREW_STATE_TIMEOUT); a timed-out read reports state:unknown,
+#     source:timeout rather than blocking the snapshot.
 #     paths.status_log.last_event is historical wake-event data only, never
 #     current state.
 #     hints.open_decisions is the keyed open-decision set returned by
 #     fm-classify-lib.sh's authoritative status_open_decisions fold and reconciled
 #     against current_state; hints.pending_decision and hints.blocked_event are
 #     booleans derived from that set.
-#     endpoint.exists is the cheap backend endpoint-presence read.
+#     endpoint.exists is the cheap backend endpoint-presence read. Herdr reads
+#     are bounded by FM_SNAPSHOT_ENDPOINT_TIMEOUT; a timed-out presence read
+#     reports exists:null, and either timed-out endpoint probe reports
+#     status:timeout rather than treating an inconclusive read as absent.
 #     endpoint.agent_alive is populated for secondmates only, where it is useful
-#     return-channel supervision data; other tasks use "not_checked".
+#     return-channel supervision data; other tasks use "not_checked", and a
+#     timed-out read reports "unknown" for the same reason.
 #   scout_reports[]: present data/<id>/report.md pointers.
 #   main_inventory: {valid,reason,orphan_in_flight[],unstructured_current_count} -
 #     main-home current-inventory checks shared with secondmate_home_summary_json
@@ -99,6 +105,10 @@ FM_SNAPSHOT_REGISTRY_LINES=${FM_SNAPSHOT_REGISTRY_LINES:-256}
 FM_SNAPSHOT_REGISTRY_BYTES=${FM_SNAPSHOT_REGISTRY_BYTES:-65536}
 FM_SNAPSHOT_REGISTRY_RECORDS=${FM_SNAPSHOT_REGISTRY_RECORDS:-40}
 FM_SNAPSHOT_REGISTRY_TIMEOUT=${FM_SNAPSHOT_REGISTRY_TIMEOUT:-2}
+# Bounds only Herdr per-task current-state and local endpoint probes.
+# Other backends retain their existing read paths.
+FM_SNAPSHOT_CREW_STATE_TIMEOUT=${FM_SNAPSHOT_CREW_STATE_TIMEOUT:-15}
+FM_SNAPSHOT_ENDPOINT_TIMEOUT=${FM_SNAPSHOT_ENDPOINT_TIMEOUT:-8}
 validate_positive_bound() {  # <name> <value>
   case "$2" in
     ''|*[!0-9]*|0)
@@ -129,6 +139,8 @@ validate_positive_bound FM_SNAPSHOT_REGISTRY_LINES "$FM_SNAPSHOT_REGISTRY_LINES"
 validate_positive_bound FM_SNAPSHOT_REGISTRY_BYTES "$FM_SNAPSHOT_REGISTRY_BYTES"
 validate_positive_bound FM_SNAPSHOT_REGISTRY_RECORDS "$FM_SNAPSHOT_REGISTRY_RECORDS"
 validate_positive_bound FM_SNAPSHOT_REGISTRY_TIMEOUT "$FM_SNAPSHOT_REGISTRY_TIMEOUT"
+validate_positive_bound FM_SNAPSHOT_CREW_STATE_TIMEOUT "$FM_SNAPSHOT_CREW_STATE_TIMEOUT"
+validate_positive_bound FM_SNAPSHOT_ENDPOINT_TIMEOUT "$FM_SNAPSHOT_ENDPOINT_TIMEOUT"
 
 # shellcheck source=bin/fm-backend.sh
 # shellcheck disable=SC1091
@@ -169,6 +181,10 @@ FM_SNAPSHOT_PARENT_ACTIVITY_TIMEOUT, with truncation disclosed in the result.
 The registered secondmate table uses FM_SNAPSHOT_REGISTRY_LINES,
 FM_SNAPSHOT_REGISTRY_BYTES, FM_SNAPSHOT_REGISTRY_RECORDS, and
 FM_SNAPSHOT_REGISTRY_TIMEOUT, with unavailability and truncation disclosed.
+Every Herdr task row's current-state read and local endpoint read (both output
+modes) use FM_SNAPSHOT_CREW_STATE_TIMEOUT and FM_SNAPSHOT_ENDPOINT_TIMEOUT; a
+timed-out read degrades that one task to an explicit timeout rather than
+blocking the snapshot. Other backends retain their existing read paths.
 EOF
 }
 
@@ -202,33 +218,56 @@ last_nonempty_line() {  # <file>
   grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -1
 }
 
-crew_state_json() {  # <id>
-  local id=$1 raw rest state source detail sep
-  raw=$(
-    FM_ROOT_OVERRIDE="$FM_ROOT" \
+crew_state_json() {  # <id> <backend>
+  local id=$1 backend=$2 raw rest state source detail sep rc
+  # A wedged Herdr server can otherwise stall this subprocess with the whole
+  # per-task loop behind it. Bound only that backend and report its timeout as
+  # an explicit unknown result rather than a hard snapshot failure.
+  if [ "$backend" = herdr ]; then
+    raw=$(
+      fm_run_timed "$FM_SNAPSHOT_CREW_STATE_TIMEOUT" env \
+        FM_ROOT_OVERRIDE="$FM_ROOT" \
+        FM_HOME="$FM_HOME" \
+        FM_STATE_OVERRIDE="$STATE" \
+        FM_DATA_OVERRIDE="$DATA" \
+        FM_PROJECTS_OVERRIDE="$PROJECTS" \
+        FM_CONFIG_OVERRIDE="$CONFIG" \
+        "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null
+    )
+    rc=$?
+  else
+    raw=$( \
+      FM_ROOT_OVERRIDE="$FM_ROOT" \
       FM_HOME="$FM_HOME" \
       FM_STATE_OVERRIDE="$STATE" \
       FM_DATA_OVERRIDE="$DATA" \
       FM_PROJECTS_OVERRIDE="$PROJECTS" \
       FM_CONFIG_OVERRIDE="$CONFIG" \
       "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true
-  )
+    )
+    rc=0
+  fi
   raw=$(printf '%s\n' "$raw" | head -1)
   sep=' · '
   state=unknown
   source=none
   detail=
-  case "$raw" in
-    state:\ *"$sep"source:\ *)
-      rest=${raw#state: }
-      state=${rest%%"$sep"source: *}
-      rest=${rest#*"$sep"source: }
-      case "$rest" in
-        *"$sep"*) source=${rest%%"$sep"*}; detail=${rest#*"$sep"} ;;
-        *) source=$rest ;;
-      esac
-      ;;
-  esac
+  if [ "$rc" -eq 124 ]; then
+    source=timeout
+    detail="fm-crew-state.sh timed out after ${FM_SNAPSHOT_CREW_STATE_TIMEOUT}s"
+  else
+    case "$raw" in
+      state:\ *"$sep"source:\ *)
+        rest=${raw#state: }
+        state=${rest%%"$sep"source: *}
+        rest=${rest#*"$sep"source: }
+        case "$rest" in
+          *"$sep"*) source=${rest%%"$sep"*}; detail=${rest#*"$sep"} ;;
+          *) source=$rest ;;
+        esac
+        ;;
+    esac
+  fi
   jq -n --arg raw "$raw" --arg state "$state" --arg source "$source" --arg detail "$detail" \
     '{state:$state,source:$source,detail:$detail,raw:$raw}'
 }
@@ -261,7 +300,7 @@ first_pr_url_in_file() {  # <file>
 task_json_lines() {
   local meta id kind harness mode yolo project worktree home projects backend target status_log report_path
   local remote_host remote_root remote_state remote_rc remote_home_present
-  local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
+  local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json endpoint_rc agent_rc endpoint_timed_out
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
   local open_decisions_tsv open_decisions_json
 
@@ -301,7 +340,7 @@ task_json_lines() {
       pr_source=absent
     fi
 
-    current_json=$(crew_state_json "$id")
+    current_json=$(crew_state_json "$id" "$backend")
     event_json=$(status_event_json "$status_log")
     last_event_raw=$(printf '%s' "$event_json" | jq -r '.last_event.raw // ""')
     current_state=$(printf '%s' "$current_json" | jq -r '.state // ""')
@@ -340,6 +379,7 @@ task_json_lines() {
 
     endpoint_exists=null
     agent_alive=not_checked
+    endpoint_timed_out=0
     if [ -n "$remote_host" ]; then
       if remote_state=$(fm_run_timed "$FM_SNAPSHOT_SECONDMATE_TIMEOUT" \
         "$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh state "$id" < /dev/null 2>/dev/null); then
@@ -362,14 +402,46 @@ task_json_lines() {
       fi
     else
       if [ -n "$target" ]; then
-        if fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
-          endpoint_exists=true
+        if [ "$backend" = herdr ]; then
+          # shellcheck disable=SC2016 # Positional parameters expand inside the child bash, not here.
+          if fm_run_timed "$FM_SNAPSHOT_ENDPOINT_TIMEOUT" bash -c \
+            '. "$1"; fm_backend_target_exists "$2" "$3" "$4"' \
+            fm-endpoint-exists "$SCRIPT_DIR/fm-backend.sh" "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
+            endpoint_exists=true
+          else
+            endpoint_rc=$?
+            if [ "$endpoint_rc" -eq 124 ]; then
+              endpoint_exists=null
+              endpoint_timed_out=1
+              agent_alive=unknown
+            else
+              endpoint_exists=false
+            fi
+          fi
         else
-          endpoint_exists=false
+          if fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
+            endpoint_exists=true
+          else
+            endpoint_exists=false
+          fi
         fi
       fi
-      if [ "$kind" = secondmate ] && [ -n "$target" ]; then
-        agent_alive=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null || printf unknown)
+      if [ "$kind" = secondmate ] && [ -n "$target" ] && [ "$endpoint_timed_out" -eq 0 ]; then
+        if [ "$backend" = herdr ]; then
+          # shellcheck disable=SC2016 # Positional parameters expand inside the child bash, not here.
+          agent_alive=$(fm_run_timed "$FM_SNAPSHOT_ENDPOINT_TIMEOUT" bash -c \
+            '. "$1"; fm_backend_agent_alive "$2" "$3"' \
+            fm-agent-alive "$SCRIPT_DIR/fm-backend.sh" "$backend" "$target" 2>/dev/null)
+          agent_rc=$?
+          if [ "$agent_rc" -eq 124 ]; then
+            endpoint_timed_out=1
+            agent_alive=unknown
+          elif [ -z "$agent_alive" ]; then
+            agent_alive=unknown
+          fi
+        else
+          agent_alive=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null || printf unknown)
+        fi
       fi
     fi
 
@@ -412,6 +484,7 @@ task_json_lines() {
       --argjson worktree_path "$worktree_json" \
       --argjson home_path "$home_json" \
       --argjson endpoint_exists "$endpoint_exists" \
+      --argjson endpoint_timed_out "$(bool_json "$endpoint_timed_out")" \
       --argjson open_decisions "$open_decisions_json" \
       --argjson pending_decision "$(bool_json "$pending_decision")" \
       --argjson blocked_event "$(bool_json "$blocked_event")" \
@@ -435,7 +508,8 @@ task_json_lines() {
         secondmate_projects:($projects | if . == "" then [] else split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$"; "")) | map(select(. != "")) end),
         current_state:($current_state + {observed_at:$observed_at,freshness:"fresh"}),
         endpoint:{target:($target | if . == "" then null else . end),exists:$endpoint_exists,agent_alive:$agent_alive,
-          status:(if $endpoint_exists == false then "absent"
+          status:(if $endpoint_timed_out then "timeout"
+                  elif $endpoint_exists == false then "absent"
                   elif $agent_alive == "alive" or $agent_alive == "dead" then $agent_alive
                   else "unknown" end),
           observed_at:$observed_at,freshness:"fresh"},
