@@ -19,9 +19,33 @@ make_fakebin() {  # <dir>
 #!/usr/bin/env bash
 exit 0
 SH
+  # A herdr stub that hangs on demand (FAKE_HERDR_HANG=1) so a test can prove
+  # a wedged herdr endpoint is bounded rather than blocking the snapshot.
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = "pane get" ]; then
+  count_file="${FM_HOME:?}/state/.fake-herdr-pane-get-count"
+  count=$(cat "$count_file" 2>/dev/null || printf 0)
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$count_file"
+  if [ "${FAKE_HERDR_HANG_PANE_GET_NUMBER:-0}" = "$count" ]; then
+    sleep "${FAKE_HERDR_HANG_SECONDS:-30}"
+  fi
+fi
+if [ "${FAKE_HERDR_HANG:-0}" = 1 ]; then
+  sleep "${FAKE_HERDR_HANG_SECONDS:-30}"
+fi
+case "${1:-} ${2:-}" in
+  "status --json") printf '{"server":{"running":true}}\n' ;;
+  "pane get") printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}" ;;
+  "agent get") printf '{"result":{"agent":{"agent_status":"working"}}}\n' ;;
+esac
+exit 0
+SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+sleep "${FAKE_TMUX_DELAY_SECONDS:-0}"
 target=""
 prev=""
 for arg in "$@"; do
@@ -52,7 +76,7 @@ case "${1:-}" in
 esac
 exit 0
 SH
-  chmod +x "$fb/no-mistakes" "$fb/tmux"
+  chmod +x "$fb/no-mistakes" "$fb/herdr" "$fb/tmux"
   printf '%s\n' "$fb"
 }
 
@@ -1152,6 +1176,106 @@ EOF
   pass "home-summary excludes kind=secondmate from unowned_current and terminal_in_flight"
 }
 
+# Regression for the fm-bearings-snapshot hang: a herdr endpoint that never
+# answers must never block the snapshot. The per-task current-state read is
+# bounded for every backend by FM_SNAPSHOT_CREW_STATE_TIMEOUT; the local Herdr
+# endpoint reads (fm_backend_target_exists, fm_backend_agent_alive) are
+# bounded by FM_SNAPSHOT_ENDPOINT_TIMEOUT.
+test_hung_herdr_endpoint_and_state_read_are_bounded() {
+  local home fakebin wt start elapsed json rc
+  home=$(make_home hung-herdr)
+  wt="$home/projects/hung-mate"
+  mkdir -p "$wt" "$home/hung-mate-home"
+  fm_write_meta "$home/state/hung-mate.meta" \
+    "backend=herdr" \
+    "window=fakesession:p1" \
+    "worktree=$wt" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "yolo=off" \
+    "home=$home/hung-mate-home" \
+    "projects=alpha"
+  fakebin=$(make_fakebin "$home")
+
+  start=$(date +%s)
+  json=$(FAKE_HERDR_HANG=1 FAKE_HERDR_HANG_SECONDS=30 \
+    FM_SNAPSHOT_CREW_STATE_TIMEOUT=1 FM_SNAPSHOT_ENDPOINT_TIMEOUT=1 \
+    PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  rc=$?
+  elapsed=$(( $(date +%s) - start ))
+
+  [ "$rc" -eq 0 ] || fail "snapshot must still exit 0 when a herdr endpoint hangs: rc=$rc"
+  [ "$elapsed" -lt 15 ] \
+    || fail "a hung herdr call blocked the snapshot for ${elapsed}s (fake hang is 30s; a bounded read should finish in ~2s)"
+  printf '%s' "$json" | jq -e '
+    .tasks[] | select(.id == "hung-mate")
+    | .current_state.state == "unknown"
+      and .endpoint.exists == null
+      and .endpoint.agent_alive == "unknown"
+      and .endpoint.status == "timeout"
+  ' >/dev/null || fail "a timed-out herdr endpoint must report an explicit timeout, not a hard failure or a false dead/alive verdict: $json"
+  pass "a hung herdr endpoint call is bounded and reports timeout instead of hanging the snapshot"
+}
+
+test_endpoint_timeout_stays_unknown_after_herdr_recovers() {
+  local home fakebin wt json
+  home=$(make_home transient-hung-herdr)
+  wt="$home/projects/transient-hung-mate"
+  mkdir -p "$wt" "$home/transient-hung-mate-home"
+  fm_write_meta "$home/state/transient-hung-mate.meta" \
+    "backend=herdr" \
+    "window=fakesession:p1" \
+    "worktree=$wt" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "yolo=off" \
+    "home=$home/transient-hung-mate-home" \
+    "projects=alpha"
+  fakebin=$(make_fakebin "$home")
+
+  json=$(FAKE_HERDR_HANG_PANE_GET_NUMBER=1 FAKE_HERDR_HANG_SECONDS=30 \
+    FM_SNAPSHOT_CREW_STATE_TIMEOUT=1 FM_SNAPSHOT_ENDPOINT_TIMEOUT=1 \
+    PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+
+  printf '%s' "$json" | jq -e '
+    .tasks[] | select(.id == "transient-hung-mate")
+    | .endpoint.exists == null
+      and .endpoint.agent_alive == "unknown"
+      and .endpoint.status == "timeout"
+  ' >/dev/null || fail "an endpoint-presence timeout must stay authoritative after herdr recovers: $json"
+  pass "an endpoint-presence timeout stays unknown after herdr recovers"
+}
+
+test_non_herdr_endpoint_reads_keep_existing_path() {
+  local home fakebin wt json
+  home=$(make_home delayed-tmux)
+  wt="$home/projects/delayed-tmux-task"
+  mkdir -p "$wt"
+  fm_write_meta "$home/state/delayed-tmux-task.meta" \
+    "window=firstmate:fm-delayed-tmux-task" \
+    "worktree=$wt" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  fakebin=$(make_fakebin "$home")
+
+  json=$(FAKE_TMUX_DELAY_SECONDS=2 \
+    FM_SNAPSHOT_CREW_STATE_TIMEOUT=1 FM_SNAPSHOT_ENDPOINT_TIMEOUT=1 \
+    PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+
+  printf '%s' "$json" | jq -e '
+    .tasks[] | select(.id == "delayed-tmux-task")
+    | .endpoint.exists == true
+      and .endpoint.status == "unknown"
+  ' >/dev/null || fail "non-herdr endpoint reads must retain their existing unbounded behavior: $json"
+  pass "non-herdr endpoint reads retain their existing path"
+}
+
 test_empty_fleet_json
 test_fixture_snapshot_json
 test_home_summary_excludes_secondmate_from_child_inventory
@@ -1170,3 +1294,6 @@ test_scout_reports_include_teardown_reports
 test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot
 test_view_renders_dead_secondmate_agent_status
+test_hung_herdr_endpoint_and_state_read_are_bounded
+test_endpoint_timeout_stays_unknown_after_herdr_recovers
+test_non_herdr_endpoint_reads_keep_existing_path

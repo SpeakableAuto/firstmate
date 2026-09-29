@@ -73,6 +73,10 @@
 #     endpoint.agent_alive is populated for local secondmates only, where it is
 #     useful return-channel supervision data; remote secondmates use "unknown"
 #     without a probe, and other tasks use "not_checked".
+#     Herdr endpoint reads are bounded by FM_SNAPSHOT_ENDPOINT_TIMEOUT; a
+#     timed-out presence read reports exists:null, and either timed-out Herdr
+#     endpoint probe reports agent_alive "unknown" and status "timeout" rather
+#     than treating an inconclusive read as absent, dead, or alive.
 #   scout_reports[]: present data/<id>/report.md pointers.
 #   main_inventory: {valid,reason,orphan_in_flight[],unstructured_current_count} -
 #     main-home current-inventory checks shared with secondmate_home_summary_json
@@ -159,6 +163,8 @@ esac
 # hang or explode the parent snapshot.
 FM_SNAPSHOT_SECONDMATES=${FM_SNAPSHOT_SECONDMATES:-20}
 FM_SNAPSHOT_CREW_STATE_TIMEOUT=${FM_SNAPSHOT_CREW_STATE_TIMEOUT:-10}
+# Bounds only Herdr local endpoint probes; other backends keep their read paths.
+FM_SNAPSHOT_ENDPOINT_TIMEOUT=${FM_SNAPSHOT_ENDPOINT_TIMEOUT:-8}
 FM_SNAPSHOT_LOCAL_READ_CONCURRENCY=${FM_SNAPSHOT_LOCAL_READ_CONCURRENCY:-8}
 FM_SNAPSHOT_BUDGET=${FM_SNAPSHOT_BUDGET:-5}
 FM_SNAPSHOT_CACHE_DIR=${FM_SNAPSHOT_CACHE_DIR:-$STATE/secondmate-summary-cache}
@@ -192,6 +198,7 @@ case "$FM_SNAPSHOT_SECONDMATES" in
     ;;
 esac
 validate_positive_bound FM_SNAPSHOT_CREW_STATE_TIMEOUT "$FM_SNAPSHOT_CREW_STATE_TIMEOUT"
+validate_positive_bound FM_SNAPSHOT_ENDPOINT_TIMEOUT "$FM_SNAPSHOT_ENDPOINT_TIMEOUT"
 validate_positive_bound FM_SNAPSHOT_LOCAL_READ_CONCURRENCY "$FM_SNAPSHOT_LOCAL_READ_CONCURRENCY"
 validate_positive_bound FM_SNAPSHOT_BUDGET "$FM_SNAPSHOT_BUDGET"
 validate_positive_bound FM_SNAPSHOT_SECONDMATE_MAX_BYTES "$FM_SNAPSHOT_SECONDMATE_MAX_BYTES"
@@ -270,7 +277,10 @@ home with neither a valid current ledger nor a valid current cached copy is
 reported unreadable with the reason; collection never computes a summary in
 that home.
 Each local per-task current-state read is bounded by FM_SNAPSHOT_CREW_STATE_TIMEOUT
-(default 10 seconds); a read that hits the bound reports state unknown. Local task
+(default 10 seconds); a read that hits the bound reports state unknown. Each
+Herdr task's local endpoint presence and agent reads are bounded by
+FM_SNAPSHOT_ENDPOINT_TIMEOUT (default 8 seconds); a timed-out read reports endpoint
+status timeout rather than blocking the snapshot. Local task
 observations run concurrently, up to FM_SNAPSHOT_LOCAL_READ_CONCURRENCY (default 8).
 Remote secondmate endpoint liveness is not probed by this command.
 Terminal contradiction evidence uses
@@ -447,6 +457,7 @@ prefetch_task_observations() {  # <meta> <id>
   local meta=$1 id=$2 remote_host current_file endpoint_file current_pid='' current_rc=0
   local status_log status_capture report_path report_capture
   local kind backend target endpoint_exists=null agent_alive=not_checked generation_current=1
+  local endpoint_rc agent_rc endpoint_timed_out=0
   remote_host=$(meta_value "$meta" remote_host)
   current_file="$SNAPSHOT_TASK_DIR/$id.json"
   endpoint_file="$SNAPSHOT_TASK_DIR/$id.endpoint"
@@ -471,7 +482,39 @@ prefetch_task_observations() {  # <meta> <id>
     kind=$(meta_value "$meta" kind)
     backend=$(fm_backend_of_meta "$meta")
     target=$(fm_backend_target_of_meta "$meta")
-    if [ -n "$target" ]; then
+    if [ -n "$target" ] && [ "$backend" = herdr ]; then
+      # A wedged Herdr server can otherwise stall this task's observation and
+      # the whole snapshot behind it. Bound only Herdr, and keep a timed-out
+      # presence read inconclusive rather than absent.
+      # shellcheck disable=SC2016 # Positional parameters expand inside the child bash, not here.
+      if fm_run_timed "$FM_SNAPSHOT_ENDPOINT_TIMEOUT" bash -c \
+        '. "$1"; fm_backend_target_exists "$2" "$3" "$4"' \
+        fm-endpoint-exists "$SCRIPT_DIR/fm-backend.sh" "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
+        endpoint_exists=true
+      else
+        endpoint_rc=$?
+        if [ "$endpoint_rc" -eq 124 ]; then
+          endpoint_exists=null
+          endpoint_timed_out=1
+          agent_alive=unknown
+        else
+          endpoint_exists=false
+        fi
+      fi
+      if [ "$kind" = secondmate ] && [ "$endpoint_timed_out" -eq 0 ]; then
+        # shellcheck disable=SC2016 # Positional parameters expand inside the child bash, not here.
+        agent_alive=$(fm_run_timed "$FM_SNAPSHOT_ENDPOINT_TIMEOUT" bash -c \
+          '. "$1"; fm_backend_agent_alive "$2" "$3"' \
+          fm-agent-alive "$SCRIPT_DIR/fm-backend.sh" "$backend" "$target" 2>/dev/null)
+        agent_rc=$?
+        if [ "$agent_rc" -eq 124 ]; then
+          endpoint_timed_out=1
+          agent_alive=unknown
+        elif [ -z "$agent_alive" ]; then
+          agent_alive=unknown
+        fi
+      fi
+    elif [ -n "$target" ]; then
       if fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
         endpoint_exists=true
       else
@@ -496,8 +539,10 @@ prefetch_task_observations() {  # <meta> <id>
       > "$current_file" || current_rc=1
     endpoint_exists=null
     agent_alive=unknown
+    endpoint_timed_out=0
   fi
-  printf 'endpoint_exists=%s\nagent_alive=%s\n' "$endpoint_exists" "$agent_alive" > "$endpoint_file" || current_rc=1
+  printf 'endpoint_exists=%s\nagent_alive=%s\nendpoint_timed_out=%s\n' \
+    "$endpoint_exists" "$agent_alive" "$endpoint_timed_out" > "$endpoint_file" || current_rc=1
   return "$current_rc"
 }
 
@@ -558,7 +603,7 @@ prefetch_task_current_states() {
 task_json_lines() {
   local meta original_meta id kind harness mode yolo project worktree home projects spawn_gen backend target status_log report_path
   local remote_host remote_root current_file endpoint_file observation_line index=0
-  local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
+  local pr pr_source event_json current_json endpoint_exists agent_alive endpoint_timed_out meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
   local open_decisions_tsv open_decisions_json
 
@@ -645,11 +690,13 @@ task_json_lines() {
 
     endpoint_exists=null
     agent_alive=not_checked
+    endpoint_timed_out=0
     endpoint_file="$SNAPSHOT_TASK_DIR/$id.endpoint"
     while IFS= read -r observation_line || [ -n "$observation_line" ]; do
       case "$observation_line" in
         endpoint_exists=*) endpoint_exists=${observation_line#*=} ;;
         agent_alive=*) agent_alive=${observation_line#*=} ;;
+        endpoint_timed_out=1) endpoint_timed_out=1 ;;
       esac
     done < "$endpoint_file" || {
       snapshot_task_cleanup
@@ -697,6 +744,7 @@ task_json_lines() {
       --argjson worktree_path "$worktree_json" \
       --argjson home_path "$home_json" \
       --argjson endpoint_exists "$endpoint_exists" \
+      --argjson endpoint_timed_out "$(bool_json "$endpoint_timed_out")" \
       --argjson open_decisions "$open_decisions_json" \
       --argjson pending_decision "$(bool_json "$pending_decision")" \
       --argjson blocked_event "$(bool_json "$blocked_event")" \
@@ -722,7 +770,8 @@ task_json_lines() {
         secondmate_projects:($projects | if . == "" then [] else split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$"; "")) | map(select(. != "")) end),
         current_state:($current_state + {observed_at:$observed_at,freshness:"fresh"}),
         endpoint:{target:($target | if . == "" then null else . end),exists:$endpoint_exists,agent_alive:$agent_alive,
-          status:(if $endpoint_exists == false then "absent"
+          status:(if $endpoint_timed_out then "timeout"
+                  elif $endpoint_exists == false then "absent"
                   elif $agent_alive == "alive" or $agent_alive == "dead" then $agent_alive
                   else "unknown" end),
           observed_at:$observed_at,freshness:"fresh"},
