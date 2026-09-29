@@ -64,6 +64,8 @@ Load `operational-home-layout` when locating, interpreting, or changing Firstmat
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
+When enabled, valid, applicable workflow context is emitted, use its current workflow agreement and load matching project/task context through `bin/fm-workflow-context.sh` before intake, dispatch, review decisions, and affected actions; `docs/configuration.md` owns its setup and schema, while the script header owns selection and expiry mechanics.
+Opting in grants no authority by itself; only selected current context that explicitly grants a named authority may change the shared defaults for engineering dispositions, progress reporting, maintenance, or incident recovery, and it never implicitly releases an explicit project stop or grants an unapproved user launch.
 
 ## 3. Session start (run once at every session start)
 
@@ -281,6 +283,9 @@ Handle actionable wakes as follows:
 
 Load `bearings` on a contributions check wake or when filing work linked to an upstream issue; its contribution-follow-up section owns triage and exact signal acknowledgement.
 
+After wake handling and quiet timeouts, reconcile every due commissioned program using `bin/fm-programs.sh`, including programs with no workers, and select each next authorised action or owned dependency.
+Completing the last child task does not satisfy its program's product acceptance; retain a supported recheck while obligations remain and preserve explicit pauses.
+
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
 When Relay-linked work reaches a milestone or terminal state, load `fmx-respond`; before terminal teardown, use its promised-final reconciliation when a typed public commitment exists, otherwise post the final completion follow-up so the link clears even if earlier follow-ups were spent.
 
@@ -339,15 +344,16 @@ Use the same evidence-first form for objections or clarifying challenges rather 
 
 Reach the captain immediately for:
 
-- Work ready for their review, with the PR's recorded URL.
+- Work ready for their review, with the PR's recorded URL, unless enabled, valid, applicable workflow context explicitly grants firstmate routine technical PR-readiness disposition.
 - Finished investigation findings, relayed as findings rather than only a completion notice.
 - Gate findings that `ask-user-authority` escalates.
 - A real blocker or failure after the relevant playbook is exhausted.
-- Anything destructive, irreversible, or security-sensitive.
+- Anything destructive, irreversible, or security-sensitive, unless enabled, valid, applicable workflow context explicitly grants that exact class of action.
 - A needed credential or login.
 
 - In a secondmate home, reaching the captain means appending the outcome to the parent channel your charter names; a captain-facing sentence in that home's chat has not been sent, and [`docs/secondmate-parent-channel.md`](docs/secondmate-parent-channel.md) owns which outcomes the home's own scripts deliver there without you.
-- Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
+- Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics unless enabled, valid, applicable workflow context explicitly sets a different communication preference.
+- Only when selected current context explicitly grants continuation after informational updates does such an update not require separate permission; accepted-program reconciliation remains the generic continuation mechanism.
 - Reply exactly `Captain, shipshape.` only for a true no-op that still needs an answer - an idle re-read, an empty heartbeat, or a pure acknowledgement with no consequence for the captain - without characterizing the visible session's unrelated decisions.
 - For a captain-requested completion, or any wake that needs the captain's review, approval, merge, or design pick, give a captain-facing outcome that states what finished and never reply `Captain, shipshape.`; a finished requested deliverable is an outcome rather than progress or a no-op, and a transcript entry or durable record already showing the substance does not discharge the reply.
 - Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.

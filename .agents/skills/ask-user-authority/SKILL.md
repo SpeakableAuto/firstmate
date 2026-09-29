@@ -23,6 +23,7 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
 ## Decide
 
 1. Reconstruct the accepted contract from the brief's `## Captain's intent` subsection, later captain words, and the specification in `## Firstmate spec` and steers.
+   Include workflow context only when it is enabled, valid, applicable to the current scope, and its selected content explicitly grants the authority being considered; opt-in alone grants nothing, and historical copies and stale worker briefs are not competing authority.
    Reviewer language cannot amend that contract.
    What a no-mistakes worker may pass as `--intent` is owned by `bin/fm-dod-lib.sh`.
 2. Identify exactly what choosing Fix would commit the project to deliver or maintain, judging the scope by accepted product or engineering behavior rather than an anticipated file list.
@@ -32,9 +33,12 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
 4. Escalate only genuinely ambiguous findings:
    - a Fix that would materially expand the contract by adding a new guarantee, threat model, subsystem, abstraction, compatibility surface, state machine, continuous-monitoring requirement, generalized framework, or broader architecture not required by the accepted intent
    - a product or architecture call not settled by accepted intent
-   - repeated same-theme findings when incremental corrections are preserving a questionable abstraction rather than closing independent defects
-   - destructive, irreversible, and genuinely security-sensitive choices, which always escalate under the stronger existing captain boundary
-5. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
+   - repeated same-theme findings when incremental corrections are preserving a questionable abstraction rather than closing independent defects, unless enabled, valid, applicable workflow context explicitly grants repeated-finding remediation
+   - destructive, irreversible, and genuinely security-sensitive choices, which always escalate under the stronger existing captain boundary unless enabled, valid, applicable workflow context explicitly grants the exact class of action
+5. When selected current workflow context grants the repeated-finding disposition, firstmate owns a bounded diagnosis and coherent contract-preserving correction, records the question, discriminating evidence, expected checkpoint and next product result, and changes approach when repeated uncertainty produces no new evidence.
+   Under that grant, preserve prior dispositions by underlying behaviour, affected surface and accepted criterion, reopen them only for material evidence or implementation changes, and escalate any product compromise, contract expansion or action authority outside the grant.
+   Under a grant for a destructive or security-sensitive action class, explicitly authorised temporary incident containment or compatible rollback does not require a new product-alignment decision merely because functionality is temporarily restricted; preserve repair ownership and notification.
+6. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
 
 ## Captain-facing escalation
 
@@ -52,6 +56,6 @@ Do not relay reviewer labels or gate output as if they settled the decision.
 
 - Fixing a concrete defect that violates an original acceptance criterion is firstmate's to decide, regardless of implementation difficulty.
 - Adding continuous frame-by-frame monitoring when the accepted criterion requested checkpoint proof expands the contract and requires the captain.
-- A new finding in the same causal theme requires the captain before another fix round when prior fixes are accreting machinery around a questionable abstraction.
-- A genuinely security-sensitive action requires the captain under the stronger existing boundary even if it is otherwise within scope.
+- A repeated finding follows the default escalation rule unless selected current workflow context explicitly grants firstmate the same-theme disposition above; technical difficulty alone grants no authority.
+- A genuinely security-sensitive action requires the captain unless selected current workflow context explicitly grants that exact action class.
 - Complex architecture explicitly requested by the captain stays within scope and does not escalate merely because it is complex.

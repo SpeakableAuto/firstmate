@@ -12,6 +12,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
+| Private operating guidance and multi-task outcomes | [Private workflow context](#private-workflow-context-configworkflow-context) and [accepted delivery programs](#accepted-delivery-programs) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
@@ -78,6 +79,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Project and secondmate registries.
 - Captain preferences and optional shared captain preferences.
 - Learnings, backlog, briefs, and scout reports.
+- Optional indexed private workflow instructions under `data/workflow/`.
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 
 `state/` holds runtime records:
@@ -92,7 +94,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 
-`config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
+`config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/` and the optional `config/workflow-context` selector.
 
 `projects/` holds local project clones.
 Firstmate reads these clones, but changes them only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
@@ -127,6 +129,33 @@ Untracked files and directories whose names begin with `scratchpad` are also git
 The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md).
 Edit it like any prompt when the fleet is empty.
 While tasks are in flight, dispatch shared-repo edits to a crewmate.
+
+## Private workflow context (config/workflow-context)
+
+Private workflow context is inert by default.
+An absent `config/workflow-context` file or the exact value `off` emits no context; the exact value `on` enables the private index at `data/workflow/index.md`, and every other value is rejected.
+Enabled workflow context requires `python3`; if it is unavailable, the loader reports the missing prerequisite and emits no context, while absent or disabled configuration remains inert without Python.
+The index contains one Markdown table with exactly these columns:
+
+| Scope | Status | Path | Source | End-check |
+| --- | --- | --- | --- | --- |
+| global | active | operating-agreement.md | approved decision reference | none |
+
+`Scope` is `global`, `project:<name>`, or `task:<id>`, where names contain letters, digits, `.`, `_`, or `-` and start with a letter or digit.
+`Status` is `active`, `stopped`, `superseded`, or `expired`.
+`Path` is a relative `.md` file below `data/workflow/` with no symlink component, `Source` is a nonempty approval or evidence reference, and table fields cannot contain pipes.
+`End-check` is `none`, `until:YYYY-MM-DDTHH:MM:SSZ`, or `condition:<plain-language owner check>`.
+An elapsed `until` withholds active content pending its owner check, while stopped content remains visible and never resumes because a date elapsed.
+Superseded and expired content is indexed for provenance but never emitted as instructions.
+
+`bin/fm-workflow-context.sh startup` emits current global content plus project/task navigation, while `bin/fm-workflow-context.sh project <project-name> [--task <task-id>]` emits global content followed by matching project and task content.
+Selection is atomic: invalid configuration, an invalid index, or unreadable selected content produces no partial context, and unrelated bodies are not read.
+Enabling the loader is not an authority grant; only applicable selected content carrying explicit user authority can change a shared default, and explicit stops or user-launch decisions remain with their owners.
+Session start loads the global selection, and generated ordinary-worker instructions place selected private content and provenance outside the publishable Task section.
+Secondmate charters do not import their parent's selected context; each secondmate loads workflow context from its own home and scope.
+Do not copy private bodies, private paths, or provenance into gate intent, commits, pull requests, reports, or public evidence.
+`FM_DATA_OVERRIDE` and `FM_CONFIG_OVERRIDE` independently select alternate private roots for specialized setups and tests.
+The helper header owns exact selection order, expiry display, and atomic read mechanics.
 
 ## Calm preference (config/calm)
 
@@ -450,11 +479,11 @@ The compatibility helper `fm_backend_agent_alive` continues to collapse those de
 
 ### Dependency and socket checks
 
-- A herdr spawn additionally version-gates against the installed `herdr` binary's protocol and requires `jq`, refusing loudly on an incompatible or missing installation.
+- A herdr spawn additionally version-gates against the installed `herdr` binary's protocol, refusing loudly on an incompatible or missing installation.
 
-- A zellij spawn additionally version-gates against the installed `zellij` binary's version and requires `jq`, refusing loudly when either is missing or the version is older than 0.44.
+- A zellij spawn additionally version-gates against the installed `zellij` binary's version, refusing loudly when it is missing or older than 0.44.
 
-- A cmux spawn additionally version-gates against the installed `cmux` binary's version, requires `jq`, and requires the control socket to be reachable and accessible (see [`docs/cmux-backend.md`](cmux-backend.md) "Setup" for the one-time socket-access configuration this needs; Automation mode is the recommended socket control mode, with Password mode supported via `config/cmux-socket-password`), refusing loudly and non-retryably on a `cmuxOnly`/unauthenticated socket.
+- A cmux spawn additionally version-gates against the installed `cmux` binary's version and requires the control socket to be reachable and accessible (see [`docs/cmux-backend.md`](cmux-backend.md) "Setup" for the one-time socket-access configuration this needs; Automation mode is the recommended socket control mode, with Password mode supported via `config/cmux-socket-password`), refusing loudly and non-retryably on a `cmuxOnly`/unauthenticated socket.
 
 A backend spawn refusal from a missing dependency, version gate, or unauthenticated socket is terminal for that selected backend; firstmate surfaces it as a blocker instead of silently retrying another backend.
 
@@ -1215,7 +1244,7 @@ Required tools come in two parts: a universal toolchain every home needs regardl
 
 Every home requires:
 
-- node and git.
+- node, git, and jq.
 - gh, with GitHub authentication through `gh auth login`.
 - no-mistakes v1.46.0 or newer.
 - Compatible gh-axi.
@@ -1226,7 +1255,7 @@ Every home requires:
 [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the axi-family floor policy and the gh-axi and lavish-axi floors, while [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) hold their own tools' floor constants.
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 
-In that list, no-mistakes runs the validation pipeline, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
+In that list, jq supports shared JSON projections and supervision, no-mistakes runs the validation pipeline, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
 Lavish is a presentation-only dependency for visual decisions and reports; nonvisual work can proceed with plain text when it is unavailable.
 
 **Backend requirements**
@@ -1237,12 +1266,12 @@ The per-backend delta is required only for the backend resolved from `FM_BACKEND
 | Resolved backend | Additional tools |
 | --- | --- |
 | `tmux` | `tmux`, `treehouse` |
-| `herdr` | `herdr`, `jq`, `treehouse` |
-| `zellij` | `zellij`, `jq`, `treehouse` |
+| `herdr` | `herdr`, `treehouse` |
+| `zellij` | `zellij`, `treehouse` |
 | `orca` | `orca` |
-| `cmux` | `cmux`, `jq`, `treehouse` |
+| `cmux` | `cmux`, `treehouse` |
 
-The JSON-emitting adapters (`herdr`, `zellij`, `cmux`) need `jq` because their spawn and liveness paths parse backend JSON.
+The JSON-emitting adapters (`herdr`, `zellij`, `cmux`) parse backend JSON with the universal `jq` dependency.
 Every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`) uses `treehouse` for worktrees.
 
 Backend tool availability uses the adapter's own executable resolver, so bootstrap and spawn agree on supported non-`PATH` locations such as cmux's bundled CLI.
@@ -1253,8 +1282,8 @@ A herdr, zellij, or cmux home is therefore never told `tmux` is missing, and the
 
 **Feature-specific requirements**
 
-- When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
-- When Relay is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
+- When `config/crew-dispatch.json` exists, bootstrap uses the universal jq dependency for dispatch profile validation.
+- When Relay is opted in, bootstrap additionally requires `curl` and uses the universal jq dependency before arming the relay poll shim.
 
 **Missing-tool diagnostics**
 
@@ -2428,3 +2457,13 @@ A live lock, a missing `lsof`, any failed check, or any other fetch failure keep
 Every wait, retry, and removal is printed to stderr, and a successful recovery also prints one `recovered:` summary line to stdout so a session-start refresh - which discards fleet-sync stderr and relays only stdout - still surfaces it.
 
 The shared staleness proof lives in `bin/fm-lock-lib.sh`, which both `fm-teardown.sh` and `fm-fleet-sync.sh` use.
+
+## Accepted delivery programs
+
+Accepted commissions remain native in-flight `kind=program` backlog records independently of worker metadata.
+`bin/fm-programs-lib.sh` owns their optional body fields, read-only projection and due-check receipt contract; `bin/fm-programs.sh --json` lists every accepted program without a display cap.
+The existing watcher retains future rechecks even with zero workers and emits ordinary durable check events in attended and away mode.
+A check requests engineering reconciliation; it grants no new scope, dispatch, merge or live-action authority.
+Explicit user pauses remain quiet, while technical holds retain their next check and never become implicit completion.
+`state/.program-reconciliation` is disposable debounce state rather than task authority; the `bin/fm-programs-lib.sh` header solely owns its encoding, transition detection, retirement, loss limits, and retry mechanics, including `FM_PROGRAM_RECHECK_SECS`.
+`tests/fm-watch-checkpoint.test.sh` exercises zero-worker continuation and future waits through the actual checkpoint and watcher.

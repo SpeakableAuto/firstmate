@@ -120,6 +120,9 @@
 # a later scout promotion could not outrank), stops the scaffold before
 # anything is written. Secondmate charters never take it.
 # Refuses to overwrite an existing brief.
+# Opt-in scoped workflow context is rendered by fm-workflow-context.sh into a
+# separate private operational section; a missing/invalid selected record refuses the
+# scaffold before its brief is written. Secondmate charters load their own home.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -325,6 +328,25 @@ append_brief_include() {
 
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
+WORKFLOW_CONTEXT=
+if [ "$KIND" != secondmate ]; then
+  WORKFLOW_CONTEXT=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" \
+    "$SCRIPT_DIR/fm-workflow-context.sh" project "${POS[1]:-}" --task "$ID") || exit 1
+fi
+PRIVATE_WORKFLOW_CONTEXT=
+if [ -n "$WORKFLOW_CONTEXT" ]; then
+  IFS= read -r -d '' PRIVATE_WORKFLOW_CONTEXT <<EOF || true
+# Private operational context - never publish
+This section is private operating guidance, outside the Task and its publishable implementation intent.
+Do not copy its policy prose, source paths, refresh commands or private references into \`--intent\`, PRs, commits, reports or evidence artifacts.
+Carry only necessary task acceptance semantics, expressed without private policy text or provenance; ask Firstmate for a sanitized requirement if that separation is unclear.
+Apply the guidance while working, but never attach this section or the complete brief to an outbound artifact.
+
+BEGIN PRIVATE WORKFLOW CONTEXT
+$WORKFLOW_CONTEXT
+END PRIVATE WORKFLOW CONTEXT
+EOF
+fi
 mkdir -p "$DATA/$ID"
 
 ASK_USER_BLOCK=
@@ -585,6 +607,8 @@ $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
+
+$PRIVATE_WORKFLOW_CONTEXT
 EOF
 append_brief_include
 echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
@@ -661,6 +685,8 @@ A project's \`AGENTS.md\` or \`CLAUDE.md\` is loaded into every agent session in
 A correction edits only the wrong text: do not run \`$FM_ROOT/bin/fm-ensure-agents-md.sh\`, create either file, or add sections, headings, or pointers alongside it.
 
 $DOD
+
+$PRIVATE_WORKFLOW_CONTEXT
 EOF
 append_brief_include
 if [ "$FORGE" = none ]; then

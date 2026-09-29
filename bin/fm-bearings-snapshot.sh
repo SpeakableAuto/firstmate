@@ -21,7 +21,7 @@
 # never ambiguous.
 #
 # This wrapper consumes canonical status decisions plus canonically normalized
-# backlog roles, unresolved blockers, and captain actionability.
+# backlog roles, unresolved blockers, captain actionability, and program errors.
 # Contributions project cached coverage and required actors from fm-contributions.sh;
 # only captain rows are exposed, with counts for the other actors and unmeasured homes. It never infers
 # decisions from report or visual-review prose or reimplements snapshot semantics.
@@ -149,7 +149,9 @@ Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,name,
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
-  gates{id,title,blocked_by,reason,owner,filed}, reports{id,path}, recorded_prs{id,url},
+  programs{id,repo,title,continuation,recheck_at,due,children,blockers,hold,agreement,errors},
+  program_errors{id,errors}, gates{id,title,blocked_by,reason,owner,filed},
+  reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 Default gates are selected newest filed first before their bound; undated gates
   retain input order after dated gates.
@@ -635,6 +637,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
            missing_verdicts:([$measured[].missing_verdicts] | add // 0),
            captain_omitted:([$measured[].captain_omitted] | add // 0),
            captain:[$measured[] as $h | $h.captain[]? | . + {owner:$h.owner}]}),
+      programs: [($snap.programs.programs // [])[] | {id,repo,title,continuation,recheck_at,due,
+        children:(.children | map(.id + "=" + .state) | join(", ")),
+        blockers:(.unresolved_blocker_ids | join(", ")),hold:(.hold_reason // "-"),
+        agreement:(.agreement // "-"),errors:(.errors | join("; "))}],
+      program_errors: [($snap.programs.errors // [])[] | {id,errors:(.errors | join("; "))}],
       in_flight: (if $all_in_flight == 1 then $in_flight_all else $in_flight_all[:$in_flight_n] end),
       secondmates: (if $all_secondmates == 1 then $secondmates_all else $secondmates_all[:$secondmates_n] end),
       secondmate_reconcile: [ (.secondmate_current.records // [])[]

@@ -12,7 +12,6 @@ cmux is macOS-only, GUI-first, and unsuitable for a headless or SSH-only Firstma
 Prerequisites:
 
 - cmux 0.64 or newer, installed from [cmux.com](https://cmux.com) or with `brew install --cask cmux`.
-- `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 
 The CLI is not always installed on `PATH` with the app.
@@ -40,7 +39,7 @@ Configure the mode and password through the cmux UI rather than editing `cmux.js
 
 Select cmux with local `config/backend` containing `cmux`, `FM_BACKEND=cmux` for one launch, or an explicit request to Firstmate.
 It can also be runtime auto-detected when Firstmate itself runs inside cmux.
-A spawn stops with an actionable setup message when the app, minimum version, `jq`, socket access, or password is unavailable.
+A spawn stops with an actionable setup message when the app, minimum version, socket access, or password is unavailable.
 The adapter may launch the app with `open -a cmux` only when the socket is down; it does not relaunch the app for access-denied or authentication errors.
 
 Routine supervision uses `bin/fm-peek.sh <id>` and `FM_HOME=<home> bin/fm-send.sh <id> '<text>'` without bringing the cmux window forward.

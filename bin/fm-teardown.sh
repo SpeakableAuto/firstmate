@@ -1645,6 +1645,7 @@ backlog_refresh_reminder() {
   else
     printf '%s\n' "Backlog: $ID just finished ($BACKLOG_SKIP_REASON). Update $backlog_display - move $ID to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due."
   fi
+  printf '%s\n' 'Programs: reconcile the unfinished commissioned outcomes with bin/fm-programs.sh; child completion is not product acceptance, and independent authorised work continues.'
 }
 
 path_is_ancestor_of() {

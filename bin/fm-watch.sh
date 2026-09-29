@@ -84,6 +84,9 @@
 #                          successful attempts never wake firstmate
 #                          (bin/fm-task-inbox-lib.sh owns the ladder policy)
 #   check: <script>: <out> authenticated check output, always actionable
+#   check: program-reconcile: <out>
+#                          internally generated accepted-program reconciliation
+#                          request, always actionable and never dispatch authority
 #   check: process-event result captured: <keys>
 #                          a durably captured process-to-event result is queued
 #                          and has not been surfaced yet; reported once per
@@ -215,6 +218,8 @@ WATCH_HOME_EXISTED=0
 # cheap when no records exist and never scrapes secondmate conversation.
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
+# shellcheck source=bin/fm-programs-lib.sh
+. "$SCRIPT_DIR/fm-programs-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # Steering-inbox loss detection: bin/fm-task-inbox-lib.sh owns the record,
@@ -2648,6 +2653,11 @@ while :; do
   if reconcile_requests_pending; then
     reconcile_requests_detached
   fi
+
+  # Program continuation is independent of worker/status presence and heartbeat
+  # change filtering. Ordinary check transport also reaches the away daemon.
+  program_wake=$(fm_program_reconcile_tick "$STATE") || exit 1
+  [ -z "$program_wake" ] || wake "$program_wake"
 
   # Parent-owned secondmate pending-reply reconciliation: resolve correlated
   # parent reports, observe backend busy/idle turn completion, send one recovery
