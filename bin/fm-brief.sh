@@ -347,6 +347,17 @@ $WORKFLOW_CONTEXT
 END PRIVATE WORKFLOW CONTEXT
 EOF
 fi
+# Ship briefs carry the private section BEFORE the Definition of done, so an
+# ordinary brief and a scout promotion deliver byte-identical Definitions of
+# done (fm-task-delivery.test.sh). Nothing, not even a blank line, is added
+# when no workflow context is selected.
+PRIVATE_WORKFLOW_BEFORE_DOD=
+PRIVATE_WORKFLOW_TAIL=
+if [ -n "$PRIVATE_WORKFLOW_CONTEXT" ]; then
+  private_workflow_trimmed=${PRIVATE_WORKFLOW_CONTEXT%$'\n'}
+  PRIVATE_WORKFLOW_BEFORE_DOD="$private_workflow_trimmed"$'\n\n'
+  PRIVATE_WORKFLOW_TAIL=$'\n\n'"$private_workflow_trimmed"
+fi
 mkdir -p "$DATA/$ID"
 
 ASK_USER_BLOCK=
@@ -606,9 +617,7 @@ The report must stand alone: what you did, what you found, the evidence (command
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
-If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
-
-$PRIVATE_WORKFLOW_CONTEXT
+If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.${PRIVATE_WORKFLOW_TAIL}
 EOF
 append_brief_include
 echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
@@ -684,9 +693,7 @@ $INBOX_SECTION
 A project's \`AGENTS.md\` or \`CLAUDE.md\` is loaded into every agent session in that project, so edit it only to correct information that is factually wrong - including information your own change made wrong - and never to add knowledge because it is missing.
 A correction edits only the wrong text: do not run \`$FM_ROOT/bin/fm-ensure-agents-md.sh\`, create either file, or add sections, headings, or pointers alongside it.
 
-$DOD
-
-$PRIVATE_WORKFLOW_CONTEXT
+${PRIVATE_WORKFLOW_BEFORE_DOD}$DOD
 EOF
 append_brief_include
 if [ "$FORGE" = none ]; then
