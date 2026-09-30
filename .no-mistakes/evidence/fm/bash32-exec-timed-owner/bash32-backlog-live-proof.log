@@ -1,0 +1,45 @@
+runtime: GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+restricted PATH entries: tasks-axi node perl bash sleep (no sh)
+ok: added bash32-live-proof -> Queued
+task:
+  id: bash32-live-proof
+  title: Bash 3.2 bounded backlog proof
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: task
+  repo: "-"
+  priority: "-"
+  created: 2026-09-30
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+help[2]:
+  - Run `tasks-axi start bash32-live-proof --file=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-bash32-backlog.1EPk7N/backlog.md` to move it to in flight
+  - Run `tasks-axi block bash32-live-proof --by <other> --file=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-bash32-backlog.1EPk7N/backlog.md` to record a dependency
+ok: start bash32-live-proof -> In flight
+help[1]:
+  - Run `tasks-axi done bash32-live-proof --pr <url> --file=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-bash32-backlog.1EPk7N/backlog.md` when it ships
+task:
+  id: bash32-live-proof
+  title: Bash 3.2 bounded backlog proof
+  state: in_flight
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: task
+  repo: "-"
+  priority: "-"
+  created: 2026-09-30
+  closed: "-"
+  deps: none
+  links: none
+  body: ""

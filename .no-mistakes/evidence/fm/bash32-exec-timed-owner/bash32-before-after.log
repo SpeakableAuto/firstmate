@@ -1,0 +1,4 @@
+runtime: GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+restricted PATH entries: perl bash sleep (no sh)
+base b046ceacc1e924b047177c67eb4b6fc7ad87a3ac rc=127 output=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-bash32-proof.8Y6Nry/base-lib.sh: line 224: BASHPID: unbound variable
+changed rc=7 output=bounded
