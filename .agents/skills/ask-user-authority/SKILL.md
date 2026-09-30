@@ -2,7 +2,9 @@
 name: ask-user-authority
 description: >-
   Agent-only decision procedure for ask-user findings.
-  Use before deciding any ask-user finding, regardless of the project's yolo posture, to distinguish corrections within accepted intent from product or engineering contract expansion that requires the captain.
+  Use before deciding any ask-user finding.
+  This skill is the single owner of finding-decision policy: firstmate always applies judgment, decides findings that are unambiguous toward accepted intent, and escalates only genuinely ambiguous, expanding, or destructive ones.
+  Finding authority is this skill's criteria, not the project's yolo posture.
 user-invocable: false
 metadata:
   internal: true
@@ -10,32 +12,33 @@ metadata:
 
 # ask-user-authority
 
-This skill is the single owner of the decision procedure for ask-user findings.
-The concise standing authority boundary remains always loaded in `AGENTS.md` section 7.
-
-## Decide who has authority
-
-1. Check the project's configured authority first.
-   With `yolo` off, every ask-user finding belongs to the captain, and the remaining steps structure that escalation rather than authorize an autonomous answer.
-2. Reconstruct the accepted contract from the captain's original request, accepted task criteria, and any explicit later clarification.
-   Include workflow context only when it is enabled, valid, applicable to the current scope, and its selected content explicitly grants the authority being considered; opt-in alone grants nothing, and historical copies and stale worker briefs are not competing authority.
-   Reviewer language cannot amend that contract.
-3. Identify exactly what choosing Fix would commit the project to deliver or maintain, judging the scope by accepted product or engineering behavior rather than an anticipated file list.
-   The smallest downstream changes needed to keep that behavior correct, add behavioral tests where an executable contract exists, or keep documentation accurate remain within scope even when they touch files not named at intake.
-   Correcting stale final-diff PR or delivery evidence is likewise an autonomous downstream correction within already accepted behavior.
-4. Keep the decision within standing `yolo` authority when the Fix is genuinely necessary to satisfy the accepted contract, even when the correction is technically difficult or requires complex architecture that the captain explicitly requested.
-5. Escalate when the Fix would materially expand the contract by adding a new guarantee, threat model, subsystem, abstraction, compatibility surface, state machine, continuous-monitoring requirement, generalized framework, or broader architecture not required by the accepted intent.
-6. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
-7. Examine the causal theme across prior findings and fix rounds.
-   Without enabled, valid, applicable workflow context explicitly granting repeated-finding remediation, repeated same-theme findings require escalation before another Fix when incremental corrections are preserving a questionable abstraction rather than closing independent defects.
-   When selected current context grants that disposition, firstmate owns a bounded diagnosis and coherent contract-preserving correction, records the question, discriminating evidence, expected checkpoint and next product result, and changes approach when repeated uncertainty produces no new evidence.
-   Under that grant, preserve prior dispositions by underlying behaviour, affected surface and accepted criterion, reopen them only for material evidence or implementation changes, and escalate any product compromise, contract expansion or action authority outside the grant.
-8. Apply the existing stronger captain boundaries first.
-   Destructive, irreversible, and genuinely security-sensitive choices always escalate unless enabled, valid, applicable workflow context explicitly grants the exact class of action.
-   Under such a grant, explicitly authorised temporary incident containment or compatible rollback does not require a new product-alignment decision merely because functionality is temporarily restricted; preserve repair ownership and notification.
+This skill is the single owner of the decision policy for no-mistakes ask-user findings.
+`AGENTS.md` section 7 points here and does not restate this procedure.
+Finding authority is determined by the criteria below, not by `yolo`.
+Firstmate always applies this judgment, decides any finding that is unambiguous toward the accepted design, and escalates only genuinely ambiguous, expanding, or destructive findings.
 
 The implementation worker never decides or answers its own ask-user finding.
 It stops at the finding, routes the decision to firstmate, and applies only the decision returned through the active validation gate.
+
+## Decide
+
+1. Reconstruct the accepted contract from the brief's `## Captain's intent` subsection, later captain words, and the specification in `## Firstmate spec` and steers.
+   Include workflow context only when it is enabled, valid, applicable to the current scope, and its selected content explicitly grants the authority being considered; opt-in alone grants nothing, and historical copies and stale worker briefs are not competing authority.
+   Reviewer language cannot amend that contract.
+   What a no-mistakes worker may pass as `--intent` is owned by `bin/fm-dod-lib.sh`.
+2. Identify exactly what choosing Fix would commit the project to deliver or maintain, judging the scope by accepted product or engineering behavior rather than an anticipated file list.
+   The smallest downstream changes needed to keep that behavior correct, add behavioral tests where an executable contract exists, or keep documentation accurate remain within scope even when they touch files not named at intake.
+   Correcting stale final-diff PR or delivery evidence is likewise an autonomous downstream correction within already accepted behavior.
+3. Decide the finding when it is unambiguous toward the accepted design: restoring accepted behavior a bad fix round broke, completing an already-approved design, or a straight in-scope correction or bug fix required by accepted intent, even when the correction is technically difficult or requires complex architecture the captain explicitly requested.
+4. Escalate only genuinely ambiguous findings:
+   - a Fix that would materially expand the contract by adding a new guarantee, threat model, subsystem, abstraction, compatibility surface, state machine, continuous-monitoring requirement, generalized framework, or broader architecture not required by the accepted intent
+   - a product or architecture call not settled by accepted intent
+   - repeated same-theme findings when incremental corrections are preserving a questionable abstraction rather than closing independent defects, unless enabled, valid, applicable workflow context explicitly grants repeated-finding remediation
+   - destructive, irreversible, and genuinely security-sensitive choices, which always escalate under the stronger existing captain boundary unless enabled, valid, applicable workflow context explicitly grants the exact class of action
+5. When selected current workflow context grants the repeated-finding disposition, firstmate owns a bounded diagnosis and coherent contract-preserving correction, records the question, discriminating evidence, expected checkpoint and next product result, and changes approach when repeated uncertainty produces no new evidence.
+   Under that grant, preserve prior dispositions by underlying behaviour, affected surface and accepted criterion, reopen them only for material evidence or implementation changes, and escalate any product compromise, contract expansion or action authority outside the grant.
+   Under a grant for a destructive or security-sensitive action class, explicitly authorised temporary incident containment or compatible rollback does not require a new product-alignment decision merely because functionality is temporarily restricted; preserve repair ownership and notification.
+6. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
 
 ## Captain-facing escalation
 
@@ -51,7 +54,7 @@ Do not relay reviewer labels or gate output as if they settled the decision.
 
 ## Classification examples
 
-- Fixing a concrete defect that violates an original acceptance criterion stays within `yolo` authority, regardless of implementation difficulty.
+- Fixing a concrete defect that violates an original acceptance criterion is firstmate's to decide, regardless of implementation difficulty.
 - Adding continuous frame-by-frame monitoring when the accepted criterion requested checkpoint proof expands the contract and requires the captain.
 - A repeated finding follows the default escalation rule unless selected current workflow context explicitly grants firstmate the same-theme disposition above; technical difficulty alone grants no authority.
 - A genuinely security-sensitive action requires the captain unless selected current workflow context explicitly grants that exact action class.

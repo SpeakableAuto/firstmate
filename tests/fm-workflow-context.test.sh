@@ -106,7 +106,7 @@ for mode in no-mistakes direct-PR local-only scout; do
   else
     FM_HOME="$CONTEXT_HOME" "$ROOT/bin/fm-brief.sh" "privacy-$mode" alpha --mode "$mode" >/dev/null
   fi
-  python3 - "$CONTEXT_HOME/data/privacy-$mode/brief.md" <<'PY'
+  python3 - "$CONTEXT_HOME/data/privacy-$mode/brief.md" "$mode" <<'PY'
 import pathlib
 import sys
 
@@ -119,7 +119,15 @@ assert "PUBLIC_ACCEPTANCE" in task
 for private in ("GLOBAL_RULE", "ALPHA_RULE", "data/workflow", "Refresh:"):
     assert private not in task, (path.name, "private content in task", private)
 private_start = brief.index("# Private operational context - never publish")
-assert private_start > brief.index("# Definition of done") > task_end
+dod_start = brief.index("# Definition of done")
+if sys.argv[2] == "scout":
+    assert private_start > dod_start > task_end
+else:
+    # Ship briefs place the private section between the Task and the Definition
+    # of done, so the Definition of done stays the brief's final section and
+    # matches what a scout promotion delivers (fm-task-delivery.test.sh).
+    assert task_end < private_start < dod_start, (path.name, "private section must precede the Definition of done")
+    assert "BEGIN PRIVATE WORKFLOW CONTEXT" not in brief[dod_start:], (path.name, "private content after the Definition of done")
 assert "GLOBAL_RULE" in brief[private_start:]
 assert "ALPHA_RULE" in brief[private_start:]
 assert "outside the Task and its publishable implementation intent" in brief[private_start:]
