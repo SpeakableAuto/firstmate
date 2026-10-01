@@ -384,6 +384,158 @@ test_local_secondmate_reads_the_launching_home_pin() {
   pass "a local secondmate reads the launching home's pin and its own home's file is never inherited over"
 }
 
+# Admission logic uses the existing backend liveness interface. These cases
+# supply its verdicts rather than emulating vendor processes or live accounts.
+test_claude_admission_limits() (
+  . "$ROOT/bin/fm-backend.sh"
+  . "$ROOT/bin/fm-claude-admission-lib.sh"
+  fm_backend_agent_state() { cat "$CASE/verdict-${2##*:}"; }
+  new_case admission claude
+  cat > "$FAKEBIN/quota-axi" <<'SH'
+#!/usr/bin/env bash
+cat "$FM_TEST_QUOTA"
+SH
+  chmod +x "$FAKEBIN/quota-axi"
+  export FM_TEST_QUOTA="$CASE/quota.json"
+  export PATH="$FAKEBIN:$PATH"
+  quota_fixture() {
+    jq -n --argjson pct "$1" '{schemaVersion:5,providers:[{provider:"claude",windows:[{id:"five_hour",kind:"session",percentRemaining:$pct}],quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
+  }
+  check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary sonnet high 2>&1; }
+  local out rc n
+  quota_fixture 39
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "a 39% session refuses: $out"
+  assert_contains "$out" 'five_hour remaining 39% below 40%' 'session floor is independent of weekly availability'
+  assert_contains "$out" 'choose Codex' 'refusal gives an alternative'
+  quota_fixture 40
+  out=$(check_admission); rc=$?
+  expect_code 0 "$rc" "the exact floor admits: $out"
+  printf '%s\n' '{"claude_admission":{"min_session_percent":50},"default":{"harness":"claude","model":"sonnet","floor":{"scope":"all_models","min_percent":90}}}' > "$HOME_DIR/config/crew-dispatch.json"
+  quota_fixture 60
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "configured profile floor refuses: $out"
+  assert_contains "$out" 'all_models remaining 80% below 90%' 'configured scope is enforced'
+  printf '%s\n' '{"claude_admission":{"min_session_percent":70}}' > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "configured session floor refuses: $out"
+  printf '%s\n' '{"claude_admission":{"max_concurrent":0}}' > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "invalid configuration refuses: $out"
+  rm "$HOME_DIR/config/crew-dispatch.json"
+  printf '%s\n' '{"schemaVersion":6,"providers":[{"provider":"claude","accountKey":"default","quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}' > "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 0 "$rc" "unknown quota remains eligible: $out"
+  assert_contains "$out" 'disclosed uncertainty' 'unknown is disclosed'
+  for n in 1 2 3; do
+    printf 'harness=claude\nkind=ship\nwindow=firstmate:fm-%s\naccount=ordinary\n' "$n" > "$HOME_DIR/state/crew$n.meta"
+    echo alive > "$CASE/verdict-fm-$n"
+  done
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "three crew refuse despite unknown quota: $out"
+  assert_contains "$out" '3 live or unverified crew, limit 3' 'default cap applies'
+  echo dead > "$CASE/verdict-fm-3"
+  out=$(check_admission); rc=$?
+  expect_code 0 "$rc" "dead crew do not consume a slot: $out"
+  printf 'spawn_gen=s%s.1.1\n' "$(date +%s)" >> "$HOME_DIR/state/crew3.meta"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "a shell during startup reserves its slot: $out"
+  echo unreadable > "$CASE/verdict-fm-3"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "unverified crew conservatively consume a slot: $out"
+  sed 's/kind=ship/kind=secondmate/' "$HOME_DIR/state/crew3.meta" > "$CASE/meta"
+  cp "$CASE/meta" "$HOME_DIR/state/crew3.meta"
+  out=$(check_admission); rc=$?
+  expect_code 0 "$rc" "secondmate agents never count as crew: $out"
+  sed 's/account=ordinary/account=another/' "$HOME_DIR/state/crew2.meta" > "$CASE/meta"
+  cp "$CASE/meta" "$HOME_DIR/state/crew2.meta"
+  printf '%s\n' '{"claude_admission":{"max_concurrent":2}}' > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(check_admission); rc=$?
+  expect_code 0 "$rc" "other accounts are excluded from the configured cap: $out"
+  sed '/account=/d' "$HOME_DIR/state/crew2.meta" > "$CASE/meta"
+  cp "$CASE/meta" "$HOME_DIR/state/crew2.meta"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "legacy unknown accounts count conservatively: $out"
+  pass 'Claude admission enforces session and candidate floors, configurable account caps, and disclosed uncertainty'
+)
+
+test_spawn_enforces_claude_admission() {
+  local out rc n
+  new_case admission-spawn claude
+  cat > "$FAKEBIN/quota-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","windows":[{"id":"five_hour","percentRemaining":39}],"quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}'
+SH
+  chmod +x "$FAKEBIN/quota-axi"
+  out=$(spawn_ship guarded --harness claude); rc=$?
+  expect_code 1 "$rc" "real spawn refuses a depleted session: $out"
+  assert_refused_before_launch guarded "$out" 'five_hour remaining 39% below 40%'
+  assert_absent "$HOME_DIR/state/.claude-admission.lock" 'refusal releases admission lock'
+  # Unverified backend records count without invoking any installed backend.
+  for n in 1 2 3; do
+    printf 'harness=claude\nkind=scout\nbackend=unknown\nwindow=recorded-%s\n' "$n" > "$HOME_DIR/state/crew$n.meta"
+  done
+  out=$(spawn_ship capped --harness claude); rc=$?
+  expect_code 1 "$rc" "real spawn cannot bypass the cap: $out"
+  assert_refused_before_launch capped "$out" '3 live or unverified crew, limit 3'
+  out=$(spawn_ship unaffected --harness codex); rc=$?
+  expect_code 0 "$rc" "Codex is unaffected by Claude admission: $out"
+  pass 'spawn enforces Claude admission before metadata or launch and releases the lock on refusal'
+}
+
+test_concurrent_claude_spawns_share_last_slot() {
+  local n first_pid second_pid first_rc second_rc
+  new_case concurrent-admission claude
+  for n in 1 2; do
+    printf 'harness=claude\nkind=ship\nbackend=unknown\nwindow=recorded-%s\n' "$n" > "$HOME_DIR/state/crew$n.meta"
+  done
+  # Hold the first spawn at launch delivery, after the existing task-set
+  # publication lock has released but before admission may release its slot.
+  cp "$FAKEBIN/tmux" "$FAKEBIN/tmux-original"
+  cat > "$FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *send-keys*concurrent-first*" -l "*)
+    : > "$FM_ADMISSION_CASE/launch-entered"
+    for ((i=0; i<600; i++)); do
+      [ ! -f "$FM_ADMISSION_CASE/launch-release" ] || break
+      sleep 0.1
+    done
+    ;;
+esac
+exec "$(dirname "$0")/tmux-original" "$@"
+SH
+  chmod +x "$FAKEBIN/tmux"
+  FM_ADMISSION_CASE="$CASE" spawn_ship concurrent-first --harness claude > "$CASE/first.out" 2>&1 &
+  first_pid=$!
+  for ((n=0; n<300; n++)); do
+    [ ! -f "$CASE/launch-entered" ] || break
+    sleep 0.1
+  done
+  [ -f "$CASE/launch-entered" ] || fail 'first spawn never reached launch delivery'
+  FM_ADMISSION_CASE="$CASE" spawn_ship concurrent-second --harness claude > "$CASE/second.out" 2>&1 &
+  second_pid=$!
+  for ((n=0; n<300; n++)); do
+    [ ! -d "$HOME_DIR/state/.spawn-concurrent-second.lock" ] || break
+    sleep 0.1
+  done
+  [ -d "$HOME_DIR/state/.spawn-concurrent-second.lock" ] || fail 'second spawn never started'
+  assert_absent "$HOME_DIR/state/concurrent-second.meta" 'second spawn must wait outside provisioning'
+  : > "$CASE/launch-release"
+  wait "$first_pid"; first_rc=$?
+  wait "$second_pid"; second_rc=$?
+  expect_code 0 "$first_rc" "first spawn should take last slot: $(cat "$CASE/first.out")"
+  expect_code 1 "$second_rc" "second simultaneous spawn must refuse: $(cat "$CASE/second.out")"
+  assert_contains "$(cat "$CASE/second.out")" '3 live or unverified crew, limit 3' 'published startup reservation counts'
+  assert_absent "$HOME_DIR/state/concurrent-second.meta" 'losing spawn never publishes'
+  assert_absent "$HOME_DIR/state/.claude-admission.lock" 'finished spawns release admission lock'
+  pass 'simultaneous Claude spawns cannot both take the last account slot'
+}
+
+test_claude_admission_limits
+test_spawn_enforces_claude_admission
+test_concurrent_claude_spawns_share_last_slot
+
 test_absent_pin_keeps_the_launch_unchanged
 test_claude_pin_selects_the_root_and_sheds_ambient_credentials
 test_claude_pin_refuses_a_signed_out_root_despite_an_ambient_login

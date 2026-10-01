@@ -315,6 +315,8 @@
 #   worktree, or record exists and names the accepted values. The file is read
 #   on every spawn and relaunch, so a change reaches the next launch without a
 #   restart, and it is inherited into secondmate homes (bin/fm-config-inherit-lib.sh).
+# Claude crew admission: bin/fm-claude-admission-lib.sh enforces the limits
+# documented in docs/configuration.md "Claude crew admission" before provisioning.
 # Worker account pin (config/claude-account, config/pi-account):
 #   Opt-in. With no file, a Claude or Pi launch is unchanged: Claude still
 #   receives this process's own CLAUDE_CONFIG_DIR when it is set, and Pi the
@@ -628,6 +630,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-claude-admission-lib.sh
+. "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -1181,6 +1185,9 @@ HERDR_PRESENTATION_ORDER_LOCK=
 HERDR_PRESENTATION_ORDER_LOCK_HELD=0
 SPAWN_TASK_LOCK=
 SPAWN_TASK_LOCK_HELD=0
+CLAUDE_ADMISSION_LOCK=
+CLAUDE_ADMISSION_LOCK_HELD=0
+CLAUDE_QUOTA_IDENTITY=
 SPAWN_CONTROL_LOCK=
 SPAWN_CONTROL_LOCK_HELD=0
 SPAWN_CONTROL_PARENT=0
@@ -1374,6 +1381,9 @@ spawn_abort_cleanup() {
       rm -rf "$GIT_HOOKS_DIR" 2>/dev/null || true
     fi
     fm_lock_release "$SPAWN_TASK_LOCK" || true
+  fi
+  if [ "$CLAUDE_ADMISSION_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$CLAUDE_ADMISSION_LOCK" || true
   fi
   return "$status"
 }
@@ -2384,6 +2394,18 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
   else
     unset CLAUDE_CONFIG_DIR
   fi
+fi
+
+# All Claude crew admission paths, including raw launches and relaunches, pass
+# this gate before allocating a worktree or endpoint. The lock survives until
+# EXIT cleanup, so another admission sees the finished launch or its rollback.
+if [ "$HARNESS" = claude ] && [ "$KIND" != secondmate ]; then
+  CLAUDE_QUOTA_IDENTITY=${WORKER_ACCOUNT_DECLARED:-${CLAUDE_CONFIG_DIR:-ordinary}}
+  [ "$RAW_LAUNCH" = 0 ] || [ -n "$WORKER_ACCOUNT" ] || CLAUDE_QUOTA_IDENTITY=unknown
+  CLAUDE_ADMISSION_LOCK="$STATE/.claude-admission.lock"
+  fm_lock_acquire_wait "$CLAUDE_ADMISSION_LOCK" || exit 1
+  CLAUDE_ADMISSION_LOCK_HELD=1
+  fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$MODEL" "$EFFORT" || exit 1
 fi
 
 secondmate_registry_value() {
@@ -4859,7 +4881,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider claude_quota_identity busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -4884,6 +4906,7 @@ preserve_relaunch_meta() {
   [ -z "$WORKER_ACCOUNT_PROVIDER" ] || echo "account_provider=$WORKER_ACCOUNT_PROVIDER"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
+  [ -z "$CLAUDE_QUOTA_IDENTITY" ] || echo "claude_quota_identity=$CLAUDE_QUOTA_IDENTITY"
   # Default-off writes no traceparent= line.
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
