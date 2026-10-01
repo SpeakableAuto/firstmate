@@ -87,7 +87,11 @@ fm_claude_admission_check() {
     [ -z "$account" ] || [ "$identity" = unknown ] || [ "$account" = unknown ] || [ "$account" = "$identity" ] || continue
     backend=$(fm_backend_of_meta "$meta")
     target=$(fm_backend_target_of_meta "$meta")
-    verdict=$(fm_claude_admission_agent_state "$backend" "$target")
+    if fm_backend_source "$backend"; then
+      verdict=$(fm_claude_admission_agent_state "$backend" "$target")
+    else
+      verdict=unverified
+    fi
     if [ "$verdict" = missing ]; then
       absence=$(fm_control_endpoint_absence_verdict "$backend" "$target")
       case "${absence%%$'\t'*}" in
