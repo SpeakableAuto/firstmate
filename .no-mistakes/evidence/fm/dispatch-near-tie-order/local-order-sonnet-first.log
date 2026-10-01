@@ -1,0 +1,11 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 423/35
+  rule: rule_1 (Any ordinary software implementation task.)   confidence: 0.86
+  probabilities: default=0.07 rule_1=0.93
+  selection: quota-balanced
+  note: rule matched
+  candidate: claude:sonnet  provider=claude  scope=all_models  remaining=97%  spendPriority=0.5747  runway=through_reset  cached=37s old  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=97%  spendPriority=0.5747  runway=through_reset  cached=37s old  -> eligible
+  near-tie broken by configured order: claude:sonnet=0.5747, claude:opus=0.5747 (within 0.05)
+  profile: --harness 'claude' --model 'sonnet'

@@ -1,0 +1,10 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 423/35
+  rule: rule_1 (Any ordinary software implementation task.)   confidence: 0.84
+  probabilities: default=0.08 rule_1=0.92
+  selection: quota-balanced
+  note: rule matched
+  candidate: codex:gpt-6-sol  provider=codex  scope=all_models  remaining=32%  spendPriority=-0.2512  runway=projected_exhaustion  -> eligible
+  candidate: claude:sonnet  provider=claude  scope=all_models  remaining=97%  spendPriority=0.5763  runway=through_reset  cached=3s old  -> eligible
+  profile: --harness 'claude' --model 'sonnet'

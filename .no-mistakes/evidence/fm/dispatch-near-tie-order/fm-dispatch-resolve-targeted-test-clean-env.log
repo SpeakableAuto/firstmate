@@ -1,0 +1,38 @@
+ok - absent key is off: one stderr line, exit 0, no network call
+ok - TYPESAFE_API_KEY= in .env activates the tool; environment and config overrides work
+ok - clear: one rule Choice request, key on the fd header only, spendPriority argmax over every candidate
+ok - never-send list withholds the request on a match or a bad list, and never prints the value
+ok - rules snapshots and shell quoting preserve the profile protocol
+ok - no-rule fallback, Agy, Gemini, and documented configurations resolve
+ok - ambiguous: confidence below the fixed floor hands the decision back
+ok - per-rule confidence floors fall to the most probable runner-up that clears its own floor
+ok - only the brief's task sections and scout tag reach the model, with a whole-brief fallback
+ok - escalate: a rule declared approval: captain never yields a profile
+ok - rule floor: known shortfall falls through while unavailable evidence escalates
+ok - declared provider and profile floor evidence are applied in code
+ok - nonnumeric spendPriority evidence is never ranked
+ok - partial and missing quota evidence remain eligible but unranked
+ok - provider-wide and exact quota rows combine into one limiting candidate
+ok - candidate-order avoids projected exhaustion only with a passing through-reset alternative
+ok - candidate-order honors file/rule preference, default fallback, floors, uncertainty, and exhaustion
+ok - default: no rule matched resolves among the default profiles
+ok - near-tie: configured order breaks quota-balanced ties within the band; clear winners and floors are unchanged
+ok - no rankable candidate: the tool escalates instead of guessing
+ok - native Codex binds to codex-home before default, independently of Pi accounts and row order
+ok - Pi native adapters bind to codex-home with existing fallbacks and schema 5 compatibility
+ok - schema 6: each candidate binds to its account row; schema 5 is unchanged
+ok - quota evidence comes from one quota-axi --json read, and its failure is an error outcome
+ok - API, transport, and response failures are error outcomes with exit 0
+ok - configuration errors exit 2 before any network call
+ok - placement prefers a second mate whose headroom is materially better
+ok - cross-home placement reports remote quota-balanced near-ties
+ok - placement uses the fixed strict 0.5 margin
+ok - each home resolves the matched rule floor from its own quota
+ok - automatic remote placement requires through-reset runway
+ok - unknown remote quota is disclosed and never blocks local dispatch
+ok - placement only considers routes whose projects and modes allow it
+ok - an exhausted local machine can place work on a second mate with headroom
+ok - cross-home placement respects runway-aware candidate order on both machines
+ok - through-reset remote runway overrides the placement margin
+ok - bounded Claude cache recovery ranks recent evidence, preserves candidate order, and discloses age
+# all fm-dispatch-resolve tests passed
