@@ -192,9 +192,9 @@ PER_SCRIPT_TIMEOUT_SECS=0
 # under the bound with roughly 1.4x headroom over the slowest loaded measurement,
 # and it stays under the 30-minute normal CI tier so a wedged script fails here,
 # with its output, before the job cap
-# cancels the lane. It is a guard, not a speed control: a HUNG script becomes a
-# bounded failure instead of an unbounded suite, which is the shape that
-# silently outruns a caller's invocation budget.
+# cancels the lane. It is a guard, not a speed control: an over-bound script
+# becomes a bounded failure instead of an unbounded suite, which is the shape
+# that silently outruns a caller's invocation budget without claiming why it ran long.
 CHANGED_DEFAULT_TIMEOUT_SECS=1500
 
 # How many separate-runner shards the portable serial remainder splits into.
