@@ -17,7 +17,7 @@
 # quota-axi keeps working unchanged. FM_QUOTA_ROW_JQ is the one join used to
 # bind a candidate to its row under either schema.
 
-FM_QUOTA_AXI_MIN=0.1.51
+FM_QUOTA_AXI_MIN=0.1.55
 FM_QUOTA_PROVIDER_ID_RE='^[a-z0-9]+(-[a-z0-9]+)*\z'
 
 # The eligibility section of .agents/skills/quota-array-dispatch/SKILL.md
@@ -175,4 +175,72 @@ fm_quota_provider_for_harness() {
     muse)         printf 'meta\n' ;;
     *)            return 1 ;;
   esac
+}
+
+# Read through quota-axi's credential-aware cache, retaining its semantics and
+# account joins. Configuration and fallback policy: docs/configuration.md,
+# "Quota snapshot reuse". The command prefix may include an account-scoped env.
+# Usage: fm_quota_read_json <timeout-seconds> <command> [args...]
+fm_quota_read_json() {
+  local timeout=$1 snapshot recovered started remaining arg profile_only=0 bound=${FM_CLAUDE_QUOTA_MAX_AGE_SECONDS:-900}
+  shift
+  case "$timeout" in ''|0*|*[!0-9]*) echo 'error: quota read timeout must be a positive integer' >&2; return 2 ;; esac
+  for arg in "$@"; do [ "$arg" != --profile-only ] || profile_only=1; done
+  case "$bound" in ''|0[0-9]*|*[!0-9]*) echo 'error: FM_CLAUDE_QUOTA_MAX_AGE_SECONDS must be 0..3600' >&2; return 2 ;; esac
+  if [ "${#bound}" -gt 4 ] || [ "$bound" -gt 3600 ]; then
+    echo 'error: FM_CLAUDE_QUOTA_MAX_AGE_SECONDS must be 0..3600' >&2
+    return 2
+  fi
+  # shellcheck source=bin/fm-timeout-lib.sh
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
+  started=$(date +%s)
+  snapshot=$(fm_run_timed "$timeout" env "QUOTA_AXI_MAX_AGE=${QUOTA_AXI_MAX_AGE:-15m}" "$@") || return $?
+  # Let the caller retain its own invalid-snapshot diagnostic.
+  if ! printf '%s\n' "$snapshot" | fm_quota_json_valid; then
+    printf '%s\n' "$snapshot"
+    return 0
+  fi
+  remaining=$((timeout - $(date +%s) + started))
+  if [ "$bound" -gt 0 ] && [ "$profile_only" -eq 0 ] && [ "$remaining" -gt 0 ] && printf '%s\n' "$snapshot" | jq -e '
+    any(.providers[]; .provider == "claude" and .state.stale == true
+      and .state.error == "Claude quota endpoint rate limited")' >/dev/null; then
+    # Never promote raw stale windows or recompute vendor ranking ourselves.
+    # quota-axi checks the credential context and returns original refreshedAt.
+    # Profile-only remains cacheless by the vendor contract, so cannot recover.
+    recovered=$(fm_run_timed "$remaining" "$@" --provider claude --max-age "${bound}s" --no-credential-refresh 2>/dev/null) || recovered=
+    if printf '%s\n' "$recovered" | fm_quota_json_valid; then
+      snapshot=$(jq -cn --argjson original "$snapshot" --argjson cached "$recovered" '
+        $original | .providers |= map(. as $old |
+          if .provider == "claude" and .state.stale == true
+            and .state.error == "Claude quota endpoint rate limited" then
+            ([$cached.providers[] | select(.provider == "claude"
+              and (.accountKey // "default") == ($old.accountKey // "default")
+              and .state.status == "fresh" and .state.stale == false and .state.reused == true
+              and (.state.error // "") == "")] | first) as $reuse |
+            if $reuse == null then . else
+              $reuse | (if $old.accountKey then .accountKey = $old.accountKey else . end) |
+              .firstmateCache.reason = "rate limited"
+            end
+          else . end)') || return 1
+    fi
+  fi
+  # Measure against wall time, never the report generation time. A future,
+  # missing, malformed, or expired timestamp cannot justify a cached admission.
+  printf '%s\n' "$snapshot" | jq --argjson bound "$bound" '
+    def age: try (
+      (.state.refreshedAt | capture("^(?<whole>[^.]+)(?<fraction>\\.[0-9]+)?Z$") // error("invalid timestamp")) as $stamp |
+      now - (($stamp.whole + "Z" | fromdateiso8601) + (($stamp.fraction // "0") | tonumber))
+    ) catch null;
+    .providers |= map(
+      if .provider == "claude" and .state.reused == true then
+        age as $age |
+        if .state.status == "fresh" and .state.stale == false and (.state.error // "") == ""
+          and $age != null and $age >= 0 and $age < $bound then
+          .firstmateCache.ageSeconds = ($age | floor)
+        else
+          .state.stale = true | .state.status = "stale" |
+          .quotaSemantics = {status:"unknown", effectiveAvailability:[]} | del(.firstmateCache)
+        end
+      else . end)
+  '
 }

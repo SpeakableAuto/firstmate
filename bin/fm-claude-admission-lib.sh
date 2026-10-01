@@ -112,12 +112,14 @@ fm_claude_admission_check() {
     quota_env+=(-u CLAUDE_CONFIG_DIR)
     quota_env+=(quota-axi --provider claude --no-credential-refresh --json)
   fi
-  snapshot=$(fm_run_timed 15 "${quota_env[@]}" 2>/dev/null) || snapshot=
+  snapshot=$(fm_quota_read_json 15 "${quota_env[@]}" 2>/dev/null) || snapshot=
   if ! printf '%s\n' "$snapshot" | fm_quota_json_valid; then
     echo 'error: Claude crew admission refused because quota is unavailable or invalid; choose Codex or route to a second mate on another account' >&2
     return 1
   fi
   row=$(printf '%s\n' "$snapshot" | jq -c "$FM_QUOTA_ROW_JQ"'quota_row(.; "claude"; "")') || return 1
+  printf '%s\n' "$row" | jq -r 'select(.firstmateCache != null) |
+    "Claude quota: cached reading \(.firstmateCache.ageSeconds)s old"' >&2
   result=$(printf '%s\n' "$row" | jq -r --argjson floor "$floor" --argjson floors "$floors" '
     . as $p |
     def known: type == "number" and . >= 0 and . <= 100;
