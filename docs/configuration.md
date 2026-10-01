@@ -1025,7 +1025,8 @@ Firstmate resolves the rule's profile object or array under `AGENTS.md` section 
 
 **Contract owners**
 
-This section is the single owner of the canonical schema and its per-field semantics.
+This section is the single owner of the dispatch rule and profile schema and its per-field semantics.
+The [Claude crew admission](#claude-crew-admission) section owns the independent top-level `claude_admission` settings.
 `AGENTS.md` section 4 owns the always-loaded dispatch intake boundary, and `quota-array-dispatch` owns the completion-aware profile-array selection procedure.
 
 ```json
