@@ -1063,8 +1063,8 @@ The [Claude crew admission](#claude-crew-admission) section owns the independent
 **Candidate selection policy**
 
 Set `"select": "candidate-order"` at the top level to prefer earlier profiles in every rule and the default array, or on one rule to opt in only that rule.
-At manual intake, this policy selects the first viable candidate in configured order after the `quota-array-dispatch` eligibility, reasoning-class, runway, and declared-floor gates.
-Typed resolution applies the same ordering after its documented rankability checks; its `clear` result remains subject to Firstmate's full intake gates as described below under **Firstmate retains the dispatch decision**.
+At manual intake, this policy follows the [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy), including its runway-aware preference and intake gates.
+Typed resolution applies the same runway-aware ordering after its documented rankability checks and reports candidates passed over; its `clear` result remains subject to Firstmate's full intake gates as described below under **Firstmate retains the dispatch decision**.
 Neither path allows order to override a gate or treats unknown evidence as healthy.
 A rule-level `select` overrides the file-level value only for that rule's `use`; no match or a rule-floor fallback uses the file's policy for `default`.
 Omitting `select` everywhere preserves `quota-balanced`: all passing candidates have equal configured preference and the highest known `spendPriority` wins, with genuine scalar ties escalating.

@@ -750,6 +750,28 @@ assert_contains "$out" 'selection: candidate-order' "selection policy is inspect
 assert_contains "$out" 'remaining=47%  spendPriority=17.6' "higher-ranked quota is still reported"
 assert_not_contains "$(cat "$LOG/body")" 'candidate-order' "selection policy never reaches the classifier"
 
+# Runway preference changes only ordered candidates with a known safe alternative.
+cp "$ORDER_QUOTA" "$TMP_ROOT/order-healthy.json"
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].runway.status) = "projected_exhaustion"' "$ORDER_QUOTA" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_QUOTA"
+order_case
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" "projected Codex yields to through-reset Claude above its floor"
+assert_contains "$out" 'passed over: codex:gpt-6-astra: projected to run out before reset' "runway preference explains the skipped candidate"
+write_response "$RESPONSE" rule_3 0.9
+order_case
+assert_contains "$out" "profile: --harness 'claude' --model 'fable'" "design still selects Fable when Codex has projected exhaustion"
+write_response "$RESPONSE" rule_4 0.9
+cp "$ORDER_QUOTA" "$TMP_ROOT/order-projected.json"
+for alternate in below-floor projected_exhaustion unknown; do
+  jq --arg alternate "$alternate" '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[]) |=
+    (if $alternate == "below-floor" then .effectivePercentRemaining = 39 else .runway.status = $alternate end)' "$TMP_ROOT/order-projected.json" > "$ORDER_QUOTA"
+  order_case
+  assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "configured order survives when later Claude is $alternate"
+  assert_not_contains "$out" 'passed over:' "no runway skip without a rankable through-reset alternative"
+done
+cp "$TMP_ROOT/order-healthy.json" "$ORDER_QUOTA"
+pass "candidate-order avoids projected exhaustion only with a passing through-reset alternative"
+
 jq 'del(.select) | .rules[3].select = "candidate-order"' "$ORDER_RULES" > "$TMP_ROOT/order-edit.json"
 mv "$TMP_ROOT/order-edit.json" "$ORDER_RULES"
 order_case
@@ -1235,7 +1257,15 @@ jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvai
 mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
 QUOTA_AXI_FIXTURE="$TMP_ROOT/local-ordered.json" placement_case ok --project pager
 assert_contains "$out" 'placement: local' "unselected remote Claude quota cannot trigger placement"
-pass "cross-home placement respects candidate order on both machines"
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].runway.status) = "projected_exhaustion" |
+  (.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-edit.json"
+mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
+QUOTA_AXI_FIXTURE="$TMP_ROOT/local-ordered.json" placement_case ok --project pager
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "healthy local Codex retains configured preference"
+assert_contains "$out" 'home: peer  best=claude:opus' "remote projected Codex yields to through-reset Claude"
+assert_contains "$out" 'passed over: home=peer codex:gpt-6-astra: projected to run out before reset' "remote runway preference is explained"
+assert_contains "$out" 'placement: secondmate peer' "remote placement uses the runway-selected candidate"
+pass "cross-home placement respects runway-aware candidate order on both machines"
 
 # Rate-limit recovery reuses vendor semantics; old and other failures stay unknown.
 export TYPESAFE_API_KEY="$KEY"

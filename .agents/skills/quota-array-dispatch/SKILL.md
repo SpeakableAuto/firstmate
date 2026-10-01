@@ -115,7 +115,9 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 ## Rank by the configured selection policy
 
 Resolve `select` from the chosen rule and file under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson), including the default policy when a rule floor falls through.
-For `candidate-order`, take the first candidate in configured order that passes the three gates and has rankable evidence under the uncertainty rules below.
+For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, and rankability checks under the uncertainty rules below.
+Pass over a candidate with `projected_exhaustion` runway only when a later passing candidate has `through_reset` runway; otherwise retain the configured order.
+Select the first candidate not passed over, and account for each skipped candidate as "passed over: projected to run out before reset".
 Earlier candidates with failed gates or unrankable evidence remain in the accounting with their reasons; preference never overrides those gates.
 For `quota-balanced` (the unchanged default), candidates have equal configured preference: pick the highest known `spendPriority` among those that pass all three gates.
 Do not use `spendPriority` to reorder an explicitly ordered array.

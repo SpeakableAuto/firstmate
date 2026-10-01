@@ -54,6 +54,7 @@
 #     reason: <why the status is not clear>
 #     selection: quota-balanced | candidate-order
 #     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
+#     passed over: [home=<id>] <harness>:<model>: projected to run out before reset; later eligible candidate has runway through_reset
 #     profile: --harness <h> [--model <m>] [--effort <e>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]     (status clear only)
 #     placement: local | secondmate <id> (<why>)   (cross-home placement only)
 #     home: <id> best=<harness>:<model> scope=.. remaining=..% spendPriority=.. runway=.. [placement-blocked=..] | home: <id> unknown: <reason>: disclosed uncertainty
@@ -370,7 +371,12 @@ CANDIDATE_JQ='
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def selection_mode($cfg; $rule): ($rule.select // $cfg.select // "quota-balanced");
   def ranked_choice($eligible; $mode):
-    if $mode == "candidate-order" then {best: $eligible[0], tied: false}
+    if $mode == "candidate-order" then
+      ([$eligible | to_entries[] | select(.value.runway == "through_reset") | .key] | first) as $safe |
+      ([$eligible | to_entries[] | select(
+        .value.runway != "projected_exhaustion" or $safe == null or .key >= $safe
+      )] | first) as $pick |
+      {best: $pick.value, tied: false, passed_over: $eligible[:$pick.key]}
     else ($eligible | max_by(.spendPriority)) as $best |
       {best: $best, tied: ([$eligible[] | select(.spendPriority == $best.spendPriority)] | length > 1)}
     end;
@@ -515,7 +521,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       (ranked_choice($elig; $mode)) as $pick |
       ($pick.best) as $best |
       if $pick.tied then $ev + {status: "escalate", reason: "genuine spendPriority tie", note: $sel.note, candidates: $cands}
-      else $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $best}
+      else $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $best, passed_over: ($pick.passed_over // [])}
         + (if ($unranked | length) > 0 then
              {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
            else {} end)
@@ -598,7 +604,7 @@ if [ -n "$PLACEMENT_IDS" ]; then
             then {id: $h.id, reason: "genuine spendPriority tie there", note: $sel.note}
             elif $best.runway != "through_reset"
             then {id: $h.id, best: $best, placement_blocked: "limiting runway \($best.runway // "unknown") is not through_reset", note: $sel.note}
-            else {id: $h.id, best: $best, note: $sel.note}
+            else {id: $h.id, best: $best, note: $sel.note, passed_over: ($pick.passed_over // [])}
             end
           end
         end
@@ -641,6 +647,7 @@ TEXT=$(jq -r '
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + (if .cache then "  cached=\(.cache.ageSeconds)s old" else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
+  (.passed_over[]? | "  passed over: \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset"),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
       + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end)
@@ -654,7 +661,9 @@ TEXT=$(jq -r '
           else "  unknown: \(.reason | flat): disclosed uncertainty" end)
        + (if .best.cache then "  cached=\(.best.cache.ageSeconds)s old" else "" end)
        + (if .placement_blocked then "  placement-blocked=\(.placement_blocked | flat)" else "" end)
-       + (if .note then "  note=\(.note | flat)" else "" end))
+       + (if .note then "  note=\(.note | flat)" else "" end)),
+     (.placement.homes[] | .id as $home | .passed_over[]? |
+       "  passed over: home=\($home | flat) \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset")
    else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
 printf '%s\n' "$TEXT"
 exit 0
