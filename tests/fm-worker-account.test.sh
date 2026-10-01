@@ -432,7 +432,7 @@ SH
   check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary "${1:-}" "${2:-}" 2>&1; }
   local out rc n
   export FM_TEST_CACHED_QUOTA="$CASE/cached-quota.json"
-  for age in 300 1200; do
+  for age in 300 3540; do
     quota_fixture 80
     jq --argjson age "$age" '.providers[].state = {status:"fresh",stale:false,reused:true,
       refreshedAt:((now-$age)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"
@@ -444,22 +444,11 @@ SH
     if [ "$age" = 300 ]; then
       expect_code 0 "$rc" "five-minute-old rate-limited quota admits: $out"
       assert_contains "$out" 'cached reading ' 'admission exposes cache age'
-      out=$(FM_CLAUDE_QUOTA_MAX_AGE_SECONDS=60 check_admission); rc=$?
-      expect_code 1 "$rc" "configured stricter age refuses: $out"
-      out=$(FM_CLAUDE_QUOTA_MAX_AGE_SECONDS=0 check_admission); rc=$?
-      expect_code 1 "$rc" "zero disables cached admission: $out"
     else
-      expect_code 1 "$rc" "twenty-minute-old quota refuses: $out"
+      expect_code 1 "$rc" "59-minute-old quota refuses: $out"
       assert_contains "$out" 'quota floor is unverifiable' 'old quota cannot establish the floor'
     fi
   done
-  quota_fixture 80
-  jq '.providers[].state = {status:"fresh",stale:false,reused:true,
-    refreshedAt:((now-3540)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"
-  cp "$CASE/rate-limited.json" "$FM_TEST_QUOTA"
-  out=$(FM_CLAUDE_QUOTA_MAX_AGE_SECONDS=3600 check_admission); rc=$?
-  expect_code 1 "$rc" "a configured bound above fifteen minutes cannot admit a 59-minute-old reading: $out"
-  assert_contains "$out" 'quota floor is unverifiable' 'the recovery bound clamps to fifteen minutes'
   quota_fixture 39
   jq '.providers[].state = {status:"fresh",stale:false,reused:true,
     refreshedAt:((now-300)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"

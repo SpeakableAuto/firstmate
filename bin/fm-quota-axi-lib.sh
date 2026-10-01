@@ -182,12 +182,10 @@ fm_quota_provider_for_harness() {
 # "Quota snapshot reuse". The command prefix may include an account-scoped env.
 # Usage: fm_quota_read_json <timeout-seconds> <command> [args...]
 fm_quota_read_json() {
-  local timeout=$1 snapshot recovered started remaining arg profile_only=0 bound=${FM_CLAUDE_QUOTA_MAX_AGE_SECONDS:-900}
+  local timeout=$1 snapshot recovered started remaining arg profile_only=0 max_age=900
   shift
   case "$timeout" in ''|0*|*[!0-9]*) echo 'error: quota read timeout must be a positive integer' >&2; return 2 ;; esac
   for arg in "$@"; do [ "$arg" != --profile-only ] || profile_only=1; done
-  case "$bound" in ''|0[0-9]*|*[!0-9]*) echo 'error: FM_CLAUDE_QUOTA_MAX_AGE_SECONDS must be a non-negative integer' >&2; return 2 ;; esac
-  if [ "${#bound}" -gt 3 ] || [ "$bound" -gt 900 ]; then bound=900; fi
   # shellcheck source=bin/fm-timeout-lib.sh
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
   started=$(date +%s)
@@ -198,12 +196,12 @@ fm_quota_read_json() {
     return 0
   fi
   remaining=$((timeout - $(date +%s) + started))
-  if [ "$bound" -gt 0 ] && [ "$profile_only" -eq 0 ] && [ "$remaining" -gt 0 ] && printf '%s\n' "$snapshot" | jq -e '
+  if [ "$profile_only" -eq 0 ] && [ "$remaining" -gt 0 ] && printf '%s\n' "$snapshot" | jq -e '
     any(.providers[]; .provider == "claude" and .state.stale == true
       and .state.error == "Claude quota endpoint rate limited")' >/dev/null; then
     # Never promote raw stale windows or recompute vendor ranking ourselves.
     # quota-axi checks the credential context and returns original refreshedAt.
-    recovered=$(fm_run_timed "$remaining" "$@" --provider claude --max-age "${bound}s" --no-credential-refresh 2>/dev/null) || recovered=
+    recovered=$(fm_run_timed "$remaining" "$@" --provider claude --max-age "${max_age}s" --no-credential-refresh 2>/dev/null) || recovered=
     if printf '%s\n' "$recovered" | fm_quota_json_valid; then
       snapshot=$(jq -cn --argjson original "$snapshot" --argjson cached "$recovered" '
         $original | .providers |= map(. as $old |
@@ -222,7 +220,7 @@ fm_quota_read_json() {
   fi
   # Measure against wall time, never the report generation time. A future,
   # missing, malformed, or expired timestamp cannot justify a cached admission.
-  printf '%s\n' "$snapshot" | jq --argjson bound "$bound" '
+  printf '%s\n' "$snapshot" | jq --argjson max_age "$max_age" '
     def age: try (
       (.state.refreshedAt | capture("^(?<whole>[^.]+)(?<fraction>\\.[0-9]+)?Z$") // error("invalid timestamp")) as $stamp |
       now - (($stamp.whole + "Z" | fromdateiso8601) + (($stamp.fraction // "0") | tonumber))
@@ -231,7 +229,7 @@ fm_quota_read_json() {
       if .provider == "claude" and .state.reused == true then
         age as $age |
         if .state.status == "fresh" and .state.stale == false and (.state.error // "") == ""
-          and $age != null and $age >= 0 and $age < $bound then
+          and $age != null and $age >= 0 and $age < $max_age then
           .firstmateCache.ageSeconds = ($age | floor)
         else
           .state.stale = true | .state.status = "stale" |
