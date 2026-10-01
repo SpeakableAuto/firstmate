@@ -311,6 +311,7 @@ A file at `~/.local/bin/fm-remote-entrypoint.sh` that is not Firstmate's own sym
 | Always required | `git`, `jq`, `herdr`, compatible `tasks-axi`, and `treehouse` |
 | At least one of | `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, or `kimi` |
 | Additionally required on macOS | `lsof`, so the doctor and guard can prove which process owns the session socket |
+| Optional, for quota-aware placement | `quota-axi` on the worker PATH, so the primary can read that machine's quota |
 
 ## Provision a route
 
@@ -491,6 +492,7 @@ Its recovery request rings the doorbell again when it is enqueued.
 
 `fm-peek.sh` and `fm-crew-state.sh` route remote-secondmate reads to the endpoint's host instead of consulting local worktree or backend state.
 An unreachable or unreadable remote read is unknown, not evidence that the endpoint is dead.
+`fm-quota-snapshot.sh --secondmate <id>` reads the remote machine's quota fresh for each dispatch, with a short failure back-off for an unreachable machine, for [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement); unknown remote quota never blocks local dispatch.
 
 ### Replies and the parent channel
 

@@ -1000,4 +1000,116 @@ expect_code 0 "$code" "--help exits 0"
 assert_contains "$out" 'Usage:' "--help prints usage"
 pass "configuration errors exit 2 before any network call"
 
+# --- cross-home placement through a remote second mate's quota ---------------
+# The real fm-quota-snapshot.sh and fm-on.sh run; only ssh is a fake that runs
+# the decoded remote command from this checkout against REMOTE_QUOTA.
+REMOTE_QUOTA="$TMP_ROOT/remote-quota.json"
+SSH_CALLS="$TMP_ROOT/ssh.calls"
+SSH_MODE="$TMP_ROOT/ssh.mode"
+cat > "$FAKEBIN/ssh" <<SH
+#!/usr/bin/env bash
+set -u
+while [ "\$#" -gt 0 ] && [ "\$1" != -- ]; do shift; done
+shift
+printf '%s\n' "\$1" >> "$SSH_CALLS"
+if [ "\$(cat "$SSH_MODE" 2>/dev/null)" = unreachable ]; then
+  printf 'ssh: connect to host %s: Connection refused\n' "\$1" >&2
+  exit 255
+fi
+args=()
+while IFS= read -r -d '' arg; do args+=("\$arg"); done < <(printf '%s' "\$6" | base64 --decode 2>/dev/null || printf '%s' "\$6" | base64 -D)
+exec env -u FM_HOME QUOTA_AXI_FIXTURE="$REMOTE_QUOTA" "$ROOT/bin/\${args[0]}" "\${args[@]:1}"
+SH
+chmod +x "$FAKEBIN/ssh"
+export FM_SSH_BIN="$FAKEBIN/ssh"
+mkdir -p "$HOME_DIR/data"
+cat > "$HOME_DIR/data/projects.md" <<'MD'
+- pager [direct-PR] - Pager tool (added 2030-01-01)
+- solo-pager [local-only] - Machine-local pager (added 2030-01-01)
+- other [direct-PR] - Another project (added 2030-01-01)
+MD
+cat > "$HOME_DIR/data/secondmates.md" <<'MD'
+# Secondmates
+
+- peer - Overflow machine for test work. (host: peer-host; root: /srv/firstmate-code; home: /srv/firstmate-home; scope: overflow work; projects: solo-pager, pager; added 2030-01-01)
+MD
+cp "$BASE_RULES" "$RULES"
+placement_case() { # <ssh-mode> [args...]
+  rm -rf "$HOME_DIR/state/quota-remote" "$SSH_CALLS"
+  printf '%s\n' "$1" > "$SSH_MODE"
+  shift
+  reset_log
+  write_response "$RESPONSE" "${PLACEMENT_RULE:-rule_4}" 0.9
+  TYPESAFE_API_KEY="$KEY" run code out err "$BRIEF" "$@"
+}
+ssh_calls() { if [ -f "$SSH_CALLS" ]; then wc -l < "$SSH_CALLS" | tr -d ' '; else printf 0; fi; }
+
+write_quota "$REMOTE_QUOTA" 2.25
+placement_case ok --project pager
+expect_code 0 "$code" "placement exits 0"
+assert_contains "$out" 'status: clear' "the local result stays clear"
+assert_contains "$out" "profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the local profile is still published"
+assert_contains "$out" 'placement: secondmate peer (peer spendPriority 2.25 beats local 0.7597 by more than 0.5)' "materially better remote headroom places the task on the second mate"
+assert_contains "$out" 'home: peer  best=cursor:cursor-grok-4.6-medium  scope=all_models  remaining=91%  spendPriority=2.25  runway=through_reset' "the remote evidence is shown"
+assert_equals peer-host "$(cat "$SSH_CALLS")" "the remote quota is read through the registered route"
+pass "placement prefers a second mate whose headroom is materially better"
+
+write_quota "$REMOTE_QUOTA" 1.1
+placement_case ok --project pager
+assert_contains "$out" 'placement: local (no second mate beats local spendPriority 0.7597 by more than 0.5)' "similar remote headroom keeps the task local"
+assert_contains "$out" 'home: peer  best=cursor:cursor-grok-4.6-medium' "the similar remote is still shown"
+write_quota "$REMOTE_QUOTA" 1.2597
+placement_case ok --project pager
+assert_contains "$out" 'placement: local (no second mate beats local spendPriority 0.7597 by more than 0.5)' "an exact 0.5 advantage stays local"
+write_quota "$REMOTE_QUOTA" 1.2598
+placement_case ok --project pager
+assert_contains "$out" 'placement: secondmate peer (peer spendPriority 1.2598 beats local 0.7597 by more than 0.5)' "a strictly greater advantage places remotely"
+pass "placement uses the fixed strict 0.5 margin"
+
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability) |= map(
+  if .scope == "all_models" then .runway.status = "through_reset" | .selection.spendPriority = 2.5
+  elif .scope == "model:fable" then .effectivePercentRemaining = 95 | .runway.status = "through_reset" | .selection.spendPriority = 2.25
+  else . end
+)' "$QUOTA" > "$REMOTE_QUOTA"
+PLACEMENT_RULE=rule_1 placement_case ok --project pager
+assert_contains "$out" "profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "the local rule floor falls through to local defaults"
+assert_contains "$out" 'placement: secondmate peer (peer spendPriority 2.25 beats local 0.7597 by more than 0.5)' "the remote home evaluates the matched rule against its own floor"
+assert_contains "$out" 'home: peer  best=claude:fable' "the remote home uses the matched rule instead of the local default profiles"
+pass "each home resolves the matched rule floor from its own quota"
+
+write_quota "$REMOTE_QUOTA" 2.25
+jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[].runway.status) = "projected_exhaustion"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-projected.json"
+mv "$TMP_ROOT/remote-projected.json" "$REMOTE_QUOTA"
+placement_case ok --project pager
+assert_contains "$out" 'placement: local' "projected remote runway keeps the task local"
+assert_contains "$out" 'placement-blocked=limiting runway projected_exhaustion is not through_reset' "the remote runway veto is visible"
+pass "automatic remote placement requires through-reset runway"
+
+placement_case unreachable --project pager
+expect_code 0 "$code" "an unreachable second mate still exits 0"
+assert_contains "$out" 'status: clear' "an unreachable second mate never blocks local dispatch"
+assert_contains "$out" "profile: --harness 'cursor'" "the local profile survives an unreachable second mate"
+assert_contains "$out" 'placement: local' "an unreachable second mate keeps the task local"
+assert_contains "$out" "home: peer  unknown: peer's machine unreachable" "the unreachable second mate is disclosed"
+assert_contains "$out" 'disclosed uncertainty' "the unknown remote quota is named as uncertainty"
+pass "unknown remote quota is disclosed and never blocks local dispatch"
+
+placement_case ok --project solo-pager
+assert_not_contains "$out" 'placement:' "a local-only project is never placed remotely"
+assert_equals 0 "$(ssh_calls)" "a local-only project reads no remote quota"
+placement_case ok --project other
+assert_not_contains "$out" 'placement:' "a project outside the route's project list is never placed remotely"
+assert_equals 0 "$(ssh_calls)" "an unlisted project reads no remote quota"
+placement_case ok
+assert_not_contains "$out" 'placement:' "no project means no placement"
+assert_equals 0 "$(ssh_calls)" "no project reads no remote quota"
+pass "placement only considers routes whose projects and modes allow it"
+
+write_quota "$REMOTE_QUOTA" 0.3
+jq '(.providers[] | select(.provider == "claude" or .provider == "cursor") | .quotaSemantics.effectiveAvailability[].runway.status) = "exhausted_now"' "$QUOTA" > "$TMP_ROOT/exhausted.json"
+QUOTA_AXI_FIXTURE="$TMP_ROOT/exhausted.json" placement_case ok --project pager
+assert_contains "$out" 'status: escalate' "nothing rankable locally still escalates"
+assert_contains "$out" 'placement: secondmate peer (no local candidate is rankable; peer has spendPriority 0.3)' "a rankable second mate is offered when nothing local is rankable"
+pass "an exhausted local machine can place work on a second mate with headroom"
+
 printf '# all fm-dispatch-resolve tests passed\n'
