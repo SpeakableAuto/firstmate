@@ -435,6 +435,20 @@ SH
   quota_fixture 40
   out=$(check_admission); rc=$?
   expect_code 0 "$rc" "the exact floor admits: $out"
+  quota_fixture 80
+  jq '.providers[0].windows += [{id:"five_hour",kind:"session"}]' \
+    "$FM_TEST_QUOTA" > "$CASE/incomplete-session.json"
+  cp "$CASE/incomplete-session.json" "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "one measured session row must not hide an incomplete matching row: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'mixed session evidence fails closed'
+  quota_fixture 80
+  jq '.providers[0].quotaSemantics.effectiveAvailability += [{scope:"all_models",status:"unknown"}]' \
+    "$FM_TEST_QUOTA" > "$CASE/incomplete-scope.json"
+  cp "$CASE/incomplete-scope.json" "$FM_TEST_QUOTA"
+  out=$(check_admission all_models 40); rc=$?
+  expect_code 1 "$rc" "one known selected-scope row must not hide an unknown matching row: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'mixed selected-scope evidence fails closed'
   printf '%s\n' '{"default":{"harness":"claude"},"rules":[{"when":"unrelated","use":{"harness":"claude","model":"sonnet","floor":{"scope":"all_models","min_percent":90}}}]}' > "$HOME_DIR/config/crew-dispatch.json"
   quota_fixture 60
   out=$(check_admission); rc=$?
@@ -551,6 +565,14 @@ SH
   expect_code 1 "$rc" "a Claude-prefixed raw command with an unprovable identity must refuse"
   assert_refused_before_launch raw-prefixed "$out" 'raw command whose credential selection cannot be proved'
   rm "$HOME_DIR/config/claude-account"
+  printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
+  out=$(spawn_ship raw-env --harness "env \"CLAUDE_CONFIG_DIR=$CASE/work\" claude --print raw"); rc=$?
+  expect_code 1 "$rc" "an env-prefixed raw Claude command must enter admission"
+  assert_refused_before_launch raw-env "$out" 'raw command whose credential selection cannot be proved'
+  rm "$HOME_DIR/config/claude-account"
+  out=$(spawn_ship raw-exec --harness 'exec claude --print raw'); rc=$?
+  expect_code 1 "$rc" "an exec-prefixed raw Claude command must enter admission"
+  assert_refused_before_launch raw-exec "$out" 'raw command whose credential selection cannot be proved'
   out=$(spawn_ship raw-unknown 'claude --dangerously-skip-permissions'); rc=$?
   expect_code 1 "$rc" "an unpinned raw Claude launch refuses unverifiable quota: $out"
   assert_refused_before_launch raw-unknown "$out" 'raw command whose credential selection cannot be proved'

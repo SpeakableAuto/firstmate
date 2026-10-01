@@ -74,10 +74,10 @@
 #              already recorded for it.
 #              A prefixed raw-command basename cannot reconstruct its launch
 #              command, so relaunch requires an explicit --harness for it.
-#              A replacement Claude or Pi profile must also pass this home's
-#              worker account pin (bin/fm-worker-account-lib.sh) here, so a pin
-#              that no longer resolves or is signed out refuses before the old
-#              agent stops.
+#              A replacement Claude or Pi profile must pass this home's worker
+#              account pin, and direct Claude crew must pass the account cap
+#              and quota floors, before the old agent stops. The launch owner
+#              repeats Claude admission against current state.
 #              --note is required for a ship or scout, whose replacement
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
@@ -176,8 +176,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-worker-account-lib.sh
-. "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-claude-admission-lib.sh
+. "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 
 POLL=${FM_CONTROL_POLL:-0.5}
 SETTLE_WAIT=${FM_CONTROL_SETTLE_WAIT:-5}
@@ -189,14 +189,6 @@ EXIT_RETRIES=${FM_CONTROL_EXIT_RETRIES:-3}
 die() {  # <message>
   echo "error: $1" >&2
   exit 1
-}
-
-control_profile_floor_valid() {
-  jq -en --arg scope "$1" --arg min_percent "$2" '
-    ($scope | length) > 0
-    and (($min_percent | tonumber?) as $n |
-      ($n | type) == "number" and $n >= 0 and $n <= 100)
-  ' >/dev/null 2>&1
 }
 
 CONTROL_LOCK=
@@ -315,7 +307,7 @@ fi
 [ "$PROFILE_FLOOR_SCOPE_SET" = "$PROFILE_FLOOR_MIN_PERCENT_SET" ] \
   || die "--profile-floor-scope and --profile-floor-min-percent must be passed together"
 if [ "$PROFILE_FLOOR_SCOPE_SET" = 1 ]; then
-  control_profile_floor_valid "$NEW_PROFILE_FLOOR_SCOPE" "$NEW_PROFILE_FLOOR_MIN_PERCENT" \
+  fm_claude_profile_floor_valid "$NEW_PROFILE_FLOOR_SCOPE" "$NEW_PROFILE_FLOOR_MIN_PERCENT" \
     || die "invalid selected Claude profile floor; scope must be non-empty and min_percent must be 0..100"
 fi
 case "$NEW_EFFORT" in
@@ -893,7 +885,7 @@ resolve_relaunch_profile() {
        && [ "$TARGET_MODEL" = "$PRIOR_MODEL" ] \
        && [ "$TARGET_EFFORT" = "$PRIOR_EFFORT" ]; then
       if [ -n "$prior_floor_scope$prior_floor_min_percent" ]; then
-        control_profile_floor_valid "$prior_floor_scope" "$prior_floor_min_percent" \
+        fm_claude_profile_floor_valid "$prior_floor_scope" "$prior_floor_min_percent" \
           || die "task $ID records an invalid selected Claude profile floor; choose the candidate again and pass both profile floor flags"
         if [ "$PROFILE_FLOOR_SCOPE_SET" = 1 ] \
            && { [ "$NEW_PROFILE_FLOOR_SCOPE" != "$prior_floor_scope" ] \
@@ -915,13 +907,24 @@ resolve_relaunch_profile() {
   elif [ "$PROFILE_FLOOR_SCOPE_SET" = 1 ]; then
     die "selected profile floors apply only to Claude crew"
   fi
-  # The launch owner applies this home's worker account pin too, but only after
-  # the old agent has been stopped, so a pin that no longer resolves or is
-  # signed out must refuse here, while nothing has changed yet.
+  # Resolve the replacement account while the current agent and record are
+  # untouched; the admission preflight below uses this same selection.
   local account_model=$TARGET_MODEL
   [ "$account_model" != default ] || account_model=
-  fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
-    "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
+  TARGET_WORKER_ACCOUNT=$(fm_worker_account_select "$TARGET_HARNESS" \
+    "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$account_model" "$TARGET_HARNESS") || return 1
+}
+
+preflight_relaunch_admission() {
+  local identity
+  [ "$TARGET_HARNESS" = claude ] && [ "$KIND" != secondmate ] || return 0
+  if [ -n "$TARGET_WORKER_ACCOUNT" ]; then
+    identity=${TARGET_WORKER_ACCOUNT%%$'\t'*}
+  else
+    identity=$(fm_worker_account_claude_ambient_identity) || return 1
+  fi
+  fm_claude_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
+    "$identity" "$TARGET_PROFILE_FLOOR_SCOPE" "$TARGET_PROFILE_FLOOR_MIN_PERCENT"
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch
@@ -1054,6 +1057,7 @@ do_relaunch() {
     note_line="note=none"
   fi
   safe_checkpoint
+  preflight_relaunch_admission
   cp -p "$META" "$META_PRIOR" || die "could not preserve task $ID's durable record before relaunching"
   RELAUNCH_ACTIVE=1
   journal_write checkpoint "${CHECKPOINT_LINES[@]}" "$note_line"

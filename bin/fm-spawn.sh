@@ -1719,6 +1719,7 @@ PROJ=
 ARG3=
 FIRSTMATE_HOME=
 RAW_LAUNCH=0
+RAW_LAUNCH_IDENTITY_SAFE=0
 
 # --relaunch adoption: every identity axis comes from the task's own validated
 # durable record, never from the command line, so a relaunch can only ever
@@ -2261,18 +2262,96 @@ launch_template() {
   esac
 }
 
+raw_launch_info() {
+  perl -MText::ParseWords=shellwords -e '
+    my @words = eval { shellwords($ARGV[0]) };
+    exit 1 if $@;
+    my %protected = map { $_ => 1 } ("CLAUDE_CONFIG_DIR", split /\s+/, $ARGV[1]);
+    my $identity_safe = 1;
+    while (@words) {
+      my $word = shift @words;
+      if ($word =~ /\A([A-Za-z_][A-Za-z0-9_]*)=/) {
+        $identity_safe = 0 if $protected{$1};
+        next;
+      }
+      (my $base = $word) =~ s{.*/}{};
+      if ($base eq "exec") {
+        while (@words) {
+          if ($words[0] eq "-a") {
+            shift @words;
+            exit 1 unless @words;
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:-c|-l|--)\z/) {
+            shift @words;
+          } elsif ($words[0] =~ /\A-/) {
+            exit 1;
+          } else {
+            last;
+          }
+        }
+        next;
+      }
+      if ($base eq "env") {
+        while (@words) {
+          if ($words[0] =~ /\A([A-Za-z_][A-Za-z0-9_]*)=/) {
+            $identity_safe = 0 if $protected{$1};
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:-u|--unset|-C|--chdir)\z/) {
+            my $option = shift @words;
+            exit 1 unless @words;
+            my $value = shift @words;
+            $identity_safe = 0 if $option =~ /(?:-u|--unset)/ && $protected{$value};
+          } elsif ($words[0] =~ /\A(?:--unset=|-u)(.+)\z/) {
+            $identity_safe = 0 if $protected{$1};
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:--chdir=|-C.)/) {
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:-S|--split-string)\z/) {
+            shift @words;
+            exit 1 unless @words;
+            my $split = shift @words;
+            my @split = eval { shellwords($split) };
+            exit 1 if $@;
+            unshift @words, @split;
+          } elsif ($words[0] =~ /\A--split-string=(.*)\z/) {
+            my $split = $1;
+            shift @words;
+            my @split = eval { shellwords($split) };
+            exit 1 if $@;
+            unshift @words, @split;
+          } elsif ($words[0] =~ /\A(?:-i|--ignore-environment)\z/) {
+            $identity_safe = 0;
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:-0|--null|-v|--debug)\z/) {
+            shift @words;
+          } elsif ($words[0] eq "--") {
+            shift @words;
+            last;
+          } elsif ($words[0] =~ /\A-/) {
+            exit 1;
+          } else {
+            last;
+          }
+        }
+        next;
+      }
+      print $base, "\t", $identity_safe, "\n";
+      exit 0;
+    }
+    exit 1;
+  ' -- "$1" "$FM_WORKER_ACCOUNT_CLAUDE_SHED"
+}
+
 case "$ARG3" in
 *' '*) # raw launch command (unverified-adapter escape hatch)
   RAW_LAUNCH=1
   LAUNCH=$ARG3
-  HARNESS=""
-  for word in $LAUNCH; do
-    case "$word" in [A-Za-z_]*=*) continue ;; *)
-      HARNESS=$(basename "$word")
-      break
-      ;;
-    esac
-  done
+  RAW_LAUNCH_INFO=$(raw_launch_info "$LAUNCH") || {
+    echo "error: raw launch command has no classifiable executable after its env or exec prefix" >&2
+    exit 1
+  }
+  HARNESS=${RAW_LAUNCH_INFO%%$'\t'*}
+  RAW_LAUNCH_IDENTITY_SAFE=${RAW_LAUNCH_INFO#*$'\t'}
   ;;
 '')
   # No explicit harness: resolve from config. A secondmate AGENT launches on the
@@ -2485,7 +2564,8 @@ fi
 # this gate before allocating a worktree or endpoint. The lock survives until
 # EXIT cleanup, so another admission sees the finished launch or its rollback.
 if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
-  if [ "$RAW_LAUNCH" = 1 ] && [ "$HARNESS" != claude ]; then
+  if [ "$RAW_LAUNCH" = 1 ] \
+     && { [ "$RAW_LAUNCH_IDENTITY_SAFE" != 1 ] || [ "$HARNESS" != claude ]; }; then
     CLAUDE_QUOTA_IDENTITY=unknown
   elif [ -n "$WORKER_ACCOUNT" ]; then
     CLAUDE_QUOTA_IDENTITY=$WORKER_ACCOUNT_DECLARED

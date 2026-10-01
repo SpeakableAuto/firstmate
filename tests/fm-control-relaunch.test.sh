@@ -250,6 +250,7 @@ run_control() {  # <case-dir> <args...>
     -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
     PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
+    ANTHROPIC_API_KEY="${FM_TEST_CONTROL_ANTHROPIC_API_KEY:-}" \
     FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
     FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
     FM_REAL_GIT="${FM_REAL_GIT:-}" FM_FAKE_GIT_FAILURE="${FM_FAKE_GIT_FAILURE:-}" \
@@ -804,6 +805,39 @@ test_changed_claude_profile_requires_its_new_floor() {
   [ "$(meta_field "$dir" "$id" claude_profile_floor_min_percent)" = 90 ] \
     || fail "the changed Claude candidate floor was not recorded"
   pass "changed Claude relaunch requires and records the newly selected floor"
+}
+
+test_claude_admission_refuses_before_relaunch_stop() {
+  local dir out rc id=rl-admission
+  dir=$(new_case admission-preflight "$id")
+  add_ship_task "$dir" "$id" claude
+  cp "$dir/home/state/$id.meta" "$dir/meta-before"
+
+  write_claude_quota "$dir" 39
+  out=$(run_control "$dir" "$id" relaunch --note "retry after quota recovers"); rc=$?
+  expect_code 1 "$rc" "a below-floor Claude relaunch must refuse"
+  assert_contains "$out" 'five_hour remaining 39% below 40%' \
+    "the relaunch refusal should report the measured floor"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "below-floor admission stopped the existing Claude agent"
+  [ ! -s "$dir/fake/literal" ] \
+    || fail "below-floor admission delivered lifecycle input"
+  cmp -s "$dir/meta-before" "$dir/home/state/$id.meta" \
+    || fail "below-floor admission rewrote the task record"
+  [ ! -e "$dir/home/state/$id.control-relaunch" ] \
+    || fail "below-floor admission created a relaunch journal"
+
+  write_claude_quota "$dir" 95
+  out=$(FM_TEST_CONTROL_ANTHROPIC_API_KEY=other-account \
+    run_control "$dir" "$id" relaunch --note "retry under the verified account"); rc=$?
+  expect_code 1 "$rc" "an unprovable Claude account must refuse before relaunch"
+  assert_contains "$out" 'cannot prove which account ANTHROPIC_API_KEY selects' \
+    "the relaunch refusal should name the unprovable credential"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "unprovable account admission stopped the existing Claude agent"
+  [ ! -s "$dir/fake/literal" ] \
+    || fail "unprovable account admission delivered lifecycle input"
+  pass "Claude admission refuses a relaunch before the existing agent stops"
 }
 
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
@@ -2476,6 +2510,7 @@ test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_selected_claude_floor_survives_unchanged_relaunch
 test_changed_claude_profile_requires_its_new_floor
+test_claude_admission_refuses_before_relaunch_stop
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch

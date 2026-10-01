@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Claude crew admission, called only by fm-spawn.sh while holding its home-wide
-# .claude-admission.lock through launch and metadata publication (including abort
-# cleanup). No supervisor or secondmate admission is charged against crew.
+# Claude crew admission. fm-control.sh uses it as a read-only relaunch preflight;
+# fm-spawn.sh repeats it while holding the home-wide .claude-admission.lock
+# through launch and metadata publication. No supervisor or secondmate admission
+# is charged against crew.
 # docs/configuration.md "Claude crew admission" owns configuration and semantics.
 # Usage: fm_claude_admission_check <config> <state> <id> <identity> <floor-scope> <floor-min-percent>
 # The caller supplies the selected Claude config root, or ordinary, as identity.
@@ -114,14 +115,16 @@ fm_claude_admission_check() {
     . as $p |
     def known: type == "number" and . >= 0 and . <= 100;
     (if $p.state.stale == false then [
-      ([.windows[]? | select(.id == "five_hour" or .kind == "five_hour" or .kind == "session") |
-        .percentRemaining | select(known)] | if length == 0 then {scope:"five_hour",unknown:true}
-        else {scope:"five_hour",pct:min,min:$floor} end),
+      ([.windows[]? | select(.id == "five_hour" or .kind == "five_hour" or .kind == "session")]) as $session_rows |
+      (if ($session_rows | length) == 0 or any($session_rows[]; (.percentRemaining | known) | not)
+        then {scope:"five_hour",unknown:true}
+        else {scope:"five_hour",pct:($session_rows | map(.percentRemaining) | min),min:$floor} end),
       ($floors[] | . as $f |
-        ([$p.quotaSemantics.effectiveAvailability[]? | select(.scope == $f.scope and .status == "known") |
-          .effectivePercentRemaining | select(known)]) as $rows |
-        if ($rows | length) == 0 then {scope:$f.scope,unknown:true}
-        else {scope:$f.scope,pct:($rows|min),min:$f.min_percent} end)
+        ([$p.quotaSemantics.effectiveAvailability[]? | select(.scope == $f.scope)]) as $rows |
+        if ($rows | length) == 0
+           or any($rows[]; .status != "known" or ((.effectivePercentRemaining | known) | not))
+          then {scope:$f.scope,unknown:true}
+          else {scope:$f.scope,pct:($rows | map(.effectivePercentRemaining) | min),min:$f.min_percent} end)
     ] else [] end) as $checks |
     ([$checks[] | select(.unknown != true and .pct < .min)] | first) as $bad |
     if $bad then "refuse: \($bad.scope) remaining \($bad.pct)% below \($bad.min)%"
