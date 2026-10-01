@@ -425,7 +425,9 @@ cat "$FM_TEST_QUOTA"
 SH
   chmod +x "$FAKEBIN/quota-axi"
   export FM_TEST_QUOTA="$CASE/quota.json"
-  export PATH="$FAKEBIN:$PATH"
+  # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
+  local PATH="$FAKEBIN:$PATH"
+  export PATH
   quota_fixture() {
     jq -n --argjson pct "$1" '{schemaVersion:5,providers:[{provider:"claude",state:{stale:false},windows:[{id:"five_hour",kind:"session",percentRemaining:$pct}],quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
   }
@@ -571,6 +573,7 @@ SH
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "three crew refuse despite unknown quota: $out"
   assert_contains "$out" '3 live or unverified crew, limit 3' 'default cap applies'
+  assert_contains "$out" 'counted tasks: crew1, crew2, crew3' 'refusal names every counted task'
   echo dead > "$CASE/verdict-fm-3"
   out=$(check_admission); rc=$?
   expect_code 0 "$rc" "dead crew do not consume a slot: $out"
@@ -600,6 +603,69 @@ SH
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "legacy unknown accounts count conservatively: $out"
   pass 'Claude admission enforces fixed and selected floors, strict overrides, and fail-closed quota evidence'
+)
+
+# Exercise admission through the real backend classifier and process probe.
+# Only the Herdr protocol is canned; the shell-only proof reads a real process
+# table. No Herdr lifecycle command is permitted by this fixture.
+test_claude_admission_checks_processes_without_a_registration() (
+  . "$ROOT/bin/fm-backend.sh"
+  . "$ROOT/bin/fm-claude-admission-lib.sh"
+  fm_backend_source herdr
+  new_case admission-processes claude
+  # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
+  local PATH="$FAKEBIN:$PATH"
+  export PATH
+  local out rc fixture_shell_pid fixture_mode=exited fixture_registration=unknown
+  bash -c 'while :; do sleep 1; done' &
+  fixture_shell_pid=$!
+  trap 'kill "$fixture_shell_pid" 2>/dev/null || true; wait "$fixture_shell_pid" 2>/dev/null || true' EXIT
+  printf 'harness=claude\nkind=ship\nbackend=herdr\nwindow=test:w1:p2\naccount=ordinary\n' \
+    > "$HOME_DIR/state/parked.meta"
+  printf '%s\n' '{"claude_admission":{"max_concurrent":1}}' > "$HOME_DIR/config/crew-dispatch.json"
+  fm_backend_herdr_cli() {
+    case "$*" in
+      'test pane get w1:p2')
+        if [ "$fixture_mode" = gone ]; then
+          printf '%s\n' '{"error":{"code":"pane_not_found"}}'
+        else
+          printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}'
+        fi ;;
+      'test agent get w1:p2')
+        printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "$fixture_registration" ;;
+      'test status --json') printf '%s\n' '{"server":{"running":true}}' ;;
+      'test pane process-info --pane w1:p2')
+        case "$fixture_mode" in
+          unreadable) return 1 ;;
+          running)
+            printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_processes":[{"pid":4243,"name":"claude","argv0":"claude"}]}}}' ;;
+          exited)
+            printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":%s,"foreground_processes":[{"pid":%s,"name":"bash","argv0":"bash"}]}}}\n' "$fixture_shell_pid" "$fixture_shell_pid" ;;
+        esac ;;
+      *) printf '%s\n' "$*" >> "$CASE/unexpected-herdr-call"; return 1 ;;
+    esac
+  }
+  check_process_admission() {
+    fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary '' '' 2>&1
+  }
+  for fixture_registration in unknown idle; do
+    fixture_mode=exited
+    out=$(check_process_admission); rc=$?
+    expect_code 0 "$rc" "an exited Claude with $fixture_registration registration releases its slot: $out"
+    fixture_mode=running
+    out=$(check_process_admission); rc=$?
+    expect_code 1 "$rc" "a running Claude with $fixture_registration registration consumes its slot: $out"
+    assert_contains "$out" 'counted tasks: parked' 'refusal names the counted task'
+    fixture_mode=unreadable
+    out=$(check_process_admission); rc=$?
+    expect_code 1 "$rc" "an unreadable process probe with $fixture_registration registration consumes its slot: $out"
+    assert_contains "$out" 'counted tasks: parked' 'unreadable task remains actionable'
+  done
+  fixture_mode=gone
+  out=$(check_process_admission); rc=$?
+  expect_code 0 "$rc" "a confirmed gone endpoint releases its slot without starting a server: $out"
+  assert_absent "$CASE/unexpected-herdr-call" 'admission must use only read-only Herdr calls'
+  pass 'Claude admission reads process evidence despite unknown registrations and stays read-only'
 )
 
 test_spawn_enforces_claude_admission() {
@@ -715,6 +781,7 @@ test_spawn_help_describes_claude_admission_boundaries() {
   pass 'spawn help describes Claude identity admission and its raw-shell boundary'
 }
 
+test_claude_admission_checks_processes_without_a_registration || exit 1
 test_claude_admission_limits
 test_spawn_enforces_claude_admission
 test_concurrent_claude_spawns_share_last_slot
