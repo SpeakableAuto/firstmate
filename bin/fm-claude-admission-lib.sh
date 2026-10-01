@@ -13,12 +13,27 @@
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
 
+fm_claude_profile_floor_valid() {
+  jq -en --arg scope "$1" --arg min_percent "$2" '
+    ($scope | length) > 0
+    and (($min_percent | tonumber?) as $n |
+      ($n | type) == "number" and $n >= 0 and $n <= 100)
+  ' >/dev/null 2>&1
+}
+
 fm_claude_admission_check() {
   local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
   local settings='{}' limits cap floor floors meta account backend target verdict count=0
   local snapshot row result gen started now
   if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
     settings=$(cat "$config/crew-dispatch.json") || return 1
+  fi
+  if [ -n "$floor_scope$floor_min_percent" ]; then
+    if [ -z "$floor_scope" ] || [ -z "$floor_min_percent" ] \
+       || ! fm_claude_profile_floor_valid "$floor_scope" "$floor_min_percent"; then
+      echo 'error: invalid selected Claude profile floor; scope must be non-empty and min_percent must be 0..100' >&2
+      return 1
+    fi
   fi
   limits=$(printf '%s\n' "$settings" | jq -ce --arg floor_scope "$floor_scope" --arg floor_min_percent "$floor_min_percent" '
     if type != "object" then error("invalid dispatch object") else . end |
@@ -28,9 +43,7 @@ fm_claude_admission_check() {
     (if $floor_min_percent == "" then null else (try ($floor_min_percent | tonumber) catch null) end) as $profile_min |
     if ($c | type) != "object" or ($cap | type) != "number" or $cap < 1 or $cap > 3 or $cap != ($cap | floor)
       or ($floor | type) != "number" or $floor < 40 or $floor > 100
-      or (($floor_scope == "") != ($floor_min_percent == ""))
-      or ($floor_scope != "" and (($profile_min | type) != "number" or $profile_min < 0 or $profile_min > 100))
-      then error("invalid claude_admission or selected profile floor") else . end |
+      then error("invalid claude_admission") else . end |
     (if $floor_scope == "" then [] else [{scope:$floor_scope,min_percent:$profile_min}] end) as $floors |
     {cap:$cap, floor:$floor, floors:$floors}
   ' 2>/dev/null) || {
@@ -89,7 +102,7 @@ fm_claude_admission_check() {
   result=$(printf '%s\n' "$row" | jq -r --argjson floor "$floor" --argjson floors "$floors" '
     . as $p |
     def known: type == "number" and . >= 0 and . <= 100;
-    (if $p.state.stale == true then [] else [
+    (if $p.state.stale == false then [
       ([.windows[]? | select(.id == "five_hour" or .kind == "five_hour" or .kind == "session") |
         .percentRemaining | select(known)] | if length == 0 then {scope:"five_hour",unknown:true}
         else {scope:"five_hour",pct:min,min:$floor} end),
@@ -98,7 +111,7 @@ fm_claude_admission_check() {
           .effectivePercentRemaining | select(known)]) as $rows |
         if ($rows | length) == 0 then {scope:$f.scope,unknown:true}
         else {scope:$f.scope,pct:($rows|min),min:$f.min_percent} end)
-    ] end) as $checks |
+    ] else [] end) as $checks |
     ([$checks[] | select(.unknown != true and .pct < .min)] | first) as $bad |
     if $bad then "refuse: \($bad.scope) remaining \($bad.pct)% below \($bad.min)%"
     elif ($checks | length) == 0 or any($checks[]; .unknown) then "unknown"

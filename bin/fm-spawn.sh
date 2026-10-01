@@ -1725,6 +1725,10 @@ RAW_LAUNCH=0
 # validation teardown uses, so a malformed, ambiguous, or foreign record
 # refuses here exactly as it refuses there.
 RELAUNCH_PRIOR_HARNESS=
+RELAUNCH_PRIOR_MODEL=default
+RELAUNCH_PRIOR_EFFORT=default
+RELAUNCH_PRIOR_FLOOR_SCOPE=
+RELAUNCH_PRIOR_FLOOR_MIN_PERCENT=
 # 1 when the recorded endpoint is authoritatively gone and this relaunch must
 # create a fresh one for the task rather than adopt its recorded address.
 RELAUNCH_REBIND=0
@@ -1812,10 +1816,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
       ;;
   esac
   RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
-  if [ "$HARNESS_SET" -eq 0 ] && [ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ]; then
-    PROFILE_FLOOR_SCOPE=$(fm_meta_get "$RELAUNCH_META" claude_profile_floor_scope)
-    PROFILE_FLOOR_MIN_PERCENT=$(fm_meta_get "$RELAUNCH_META" claude_profile_floor_min_percent)
-  fi
+  RELAUNCH_PRIOR_MODEL=$(fm_meta_get "$RELAUNCH_META" model)
+  RELAUNCH_PRIOR_EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
+  [ -n "$RELAUNCH_PRIOR_MODEL" ] || RELAUNCH_PRIOR_MODEL=default
+  [ -n "$RELAUNCH_PRIOR_EFFORT" ] || RELAUNCH_PRIOR_EFFORT=default
+  RELAUNCH_PRIOR_FLOOR_SCOPE=$(fm_meta_get "$RELAUNCH_META" claude_profile_floor_scope)
+  RELAUNCH_PRIOR_FLOOR_MIN_PERCENT=$(fm_meta_get "$RELAUNCH_META" claude_profile_floor_min_percent)
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
   # A secondmate whose endpoint is gone already has ONE owner for that
@@ -2419,11 +2425,40 @@ fi
 if [ "$HARNESS" = agy ]; then
   agy_model_validate "$AGY_BIN" "$MODEL" || exit 1
 fi
+if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
+  RESOLVED_MODEL=${MODEL:-default}
+  RESOLVED_EFFORT=${EFFORT:-default}
+  if [ "$HARNESS" = "$RELAUNCH_PRIOR_HARNESS" ] \
+     && [ "$RESOLVED_MODEL" = "$RELAUNCH_PRIOR_MODEL" ] \
+     && [ "$RESOLVED_EFFORT" = "$RELAUNCH_PRIOR_EFFORT" ]; then
+    if [ -n "$RELAUNCH_PRIOR_FLOOR_SCOPE$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT" ]; then
+      fm_claude_profile_floor_valid "$RELAUNCH_PRIOR_FLOOR_SCOPE" "$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT" || {
+        echo "error: task $ID records an invalid selected Claude profile floor; choose the candidate again and pass both profile floor flags" >&2
+        exit 1
+      }
+      if [ "$PROFILE_FLOOR_SCOPE_SET" -eq 1 ] \
+         && { [ "$PROFILE_FLOOR_SCOPE" != "$RELAUNCH_PRIOR_FLOOR_SCOPE" ] \
+              || [ "$PROFILE_FLOOR_MIN_PERCENT" != "$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT" ]; }; then
+        echo "error: an unchanged Claude profile must preserve its recorded selected-candidate floor" >&2
+        exit 1
+      fi
+      PROFILE_FLOOR_SCOPE=$RELAUNCH_PRIOR_FLOOR_SCOPE
+      PROFILE_FLOOR_MIN_PERCENT=$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT
+    fi
+  elif [ "$HARNESS" = claude ] && [ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ]; then
+    echo "error: relaunching task $ID onto a changed Claude profile requires --profile-floor-scope and --profile-floor-min-percent from the newly selected candidate" >&2
+    exit 1
+  fi
+fi
 if [ "$PROFILE_FLOOR_SCOPE_SET" -eq 1 ] || [ -n "$PROFILE_FLOOR_SCOPE" ]; then
   if [ "$HARNESS" != claude ] || [ "$KIND" = secondmate ]; then
     echo "error: selected profile floors apply only to Claude crew" >&2
     exit 1
   fi
+  fm_claude_profile_floor_valid "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" || {
+    echo "error: invalid selected Claude profile floor; scope must be non-empty and min_percent must be 0..100" >&2
+    exit 1
+  }
 fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
 # record exists. An absent pin selects nothing and leaves every later launch

@@ -182,6 +182,11 @@ SH
   chmod +x "$fb/sleep"
 }
 
+write_claude_quota() {  # <case-dir> <percent>
+  printf '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","kind":"session","percentRemaining":%s}],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":%s,"runway":{"status":"through_reset"}}]}}]}\n' \
+    "$2" "$2" > "$1/fake/quota.json"
+}
+
 # new_case <name> [id] -> echoes a case dir with a live claude ship task.
 new_case() {
   local id=${2:-t1} dir="$TMP_ROOT/$1-$RANDOM"
@@ -193,6 +198,12 @@ new_case() {
   printf '%s\n' "fm-$id" > "$dir/fake/windows"
   printf '%s' fmses > "$dir/fake/session-name"
   make_tmux_stub "$dir"
+  cat > "$dir/fakebin/quota-axi" <<'SH'
+#!/usr/bin/env bash
+cat "$FM_FAKE_DIR/quota.json"
+SH
+  chmod +x "$dir/fakebin/quota-axi"
+  write_claude_quota "$dir" 95
   printf '%s\n' "$dir"
 }
 
@@ -676,7 +687,9 @@ test_harness_switch_resolves_a_prefixed_recorded_harness() {
   printf '%s\n' "$dir/home/state/rl32.turn-ended" > "$auth"
   printf 'token=fm.abcdefabcdef\n' > "$dir/wt/.fm-grok-turnend"
 
-  out=$(run_control "$dir" rl32 relaunch --harness claude --note "switching runtime"); rc=$?
+  out=$(run_control "$dir" rl32 relaunch --harness claude \
+    --profile-floor-scope all_models --profile-floor-min-percent 40 \
+    --note "switching runtime"); rc=$?
   expect_code 0 "$rc" "relaunch should resolve a prefixed recorded harness"$'\n'"$out"
   [ "$(sed -n '1p' "$dir/fake/literal")" = /exit ] \
     || fail "relaunch should stop a grok-prefixed task with grok's exit command"
@@ -735,6 +748,62 @@ test_same_harness_relaunch_keeps_the_profile_axes() {
   [ "$(meta_field "$dir" rl6 model)" = opus ] || fail "the model should carry across a same-harness relaunch"
   [ "$(meta_field "$dir" rl6 effort)" = high ] || fail "the effort should carry across a same-harness relaunch"
   pass "fm-control relaunch: a same-harness relaunch keeps the profile axes it was running with"
+}
+
+test_selected_claude_floor_survives_unchanged_relaunch() {
+  local dir out rc id=rl-floor
+  dir=$(new_case floor-relaunch "$id")
+  add_ship_task "$dir" "$id" claude
+  sed 's/^model=default$/model=opus/; s/^effort=default$/effort=high/' \
+    "$dir/home/state/$id.meta" > "$dir/home/state/$id.meta.tmp"
+  mv "$dir/home/state/$id.meta.tmp" "$dir/home/state/$id.meta"
+  printf 'claude_profile_floor_scope=all_models\nclaude_profile_floor_min_percent=90\n' \
+    >> "$dir/home/state/$id.meta"
+
+  out=$(run_control "$dir" "$id" relaunch --note "keep the selected candidate"); rc=$?
+  expect_code 0 "$rc" "an unchanged Claude profile should retain its selected floor: $out"
+  [ "$(meta_field "$dir" "$id" claude_profile_floor_scope)" = all_models ] \
+    || fail "fm-control dropped the unchanged Claude profile floor scope"
+  [ "$(meta_field "$dir" "$id" claude_profile_floor_min_percent)" = 90 ] \
+    || fail "fm-control dropped the unchanged Claude profile floor percentage"
+
+  printf 'zsh' > "$dir/fake/command"
+  write_claude_quota "$dir" 80
+  out=$(run_spawn "$dir" "$id" --relaunch --harness claude --model opus --effort high); rc=$?
+  expect_code 1 "$rc" "direct spawn relaunch must enforce the recorded candidate floor"
+  assert_contains "$out" 'all_models remaining 80% below 90%' \
+    "direct spawn relaunch did not restore the recorded candidate floor"
+  pass "Claude relaunch preserves and enforces the selected floor for an unchanged profile"
+}
+
+test_changed_claude_profile_requires_its_new_floor() {
+  local dir out rc id=rl-floor-change
+  dir=$(new_case floor-change "$id")
+  add_ship_task "$dir" "$id" claude
+  sed 's/^model=default$/model=opus/; s/^effort=default$/effort=high/' \
+    "$dir/home/state/$id.meta" > "$dir/home/state/$id.meta.tmp"
+  mv "$dir/home/state/$id.meta.tmp" "$dir/home/state/$id.meta"
+  printf 'claude_profile_floor_scope=all_models\nclaude_profile_floor_min_percent=90\n' \
+    >> "$dir/home/state/$id.meta"
+
+  out=$(run_control "$dir" "$id" relaunch --model sonnet --note "change candidate"); rc=$?
+  expect_code 1 "$rc" "a changed Claude profile without its selected floor must refuse"
+  assert_contains "$out" 'changed Claude profile requires --profile-floor-scope' \
+    "the refusal should request the newly selected candidate floor"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "a missing changed-profile floor must refuse before stopping the old agent"
+  [ ! -s "$dir/fake/literal" ] \
+    || fail "a missing changed-profile floor must not deliver lifecycle input"
+
+  out=$(run_control "$dir" "$id" relaunch --model sonnet \
+    --profile-floor-scope all_models --profile-floor-min-percent 90 \
+    --note "change candidate"); rc=$?
+  expect_code 0 "$rc" "a changed Claude profile with its selected floor should relaunch: $out"
+  [ "$(meta_field "$dir" "$id" model)" = sonnet ] \
+    || fail "the changed Claude model was not recorded"
+  [ "$(meta_field "$dir" "$id" claude_profile_floor_min_percent)" = 90 ] \
+    || fail "the changed Claude candidate floor was not recorded"
+  pass "changed Claude relaunch requires and records the newly selected floor"
 }
 
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
@@ -818,7 +887,9 @@ test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
   add_ship_task "$dir" rl7 claude
-  out=$(run_control "$dir" rl7 relaunch --model sonnet --effort low --note "dialling down"); rc=$?
+  out=$(run_control "$dir" rl7 relaunch --model sonnet --effort low \
+    --profile-floor-scope all_models --profile-floor-min-percent 40 \
+    --note "dialling down"); rc=$?
   expect_code 0 "$rc" "relaunch with explicit axes should succeed"$'\n'"$out"
   [ "$(meta_field "$dir" rl7 model)" = sonnet ] || fail "an explicit model should be recorded"
   [ "$(meta_field "$dir" rl7 effort)" = low ] || fail "an explicit effort should be recorded"
@@ -1179,7 +1250,8 @@ test_prefixed_prior_harness_wiring_is_still_retired() {
   printf '%s\n' "$dir/home/state/rl30.turn-ended" > "$auth"
   printf 'token=fm.abcdefabcdef\n' > "$dir/wt/.fm-grok-turnend"
   printf 'zsh' > "$dir/fake/command"
-  run_spawn "$dir" rl30 --relaunch --harness claude >/dev/null
+  run_spawn "$dir" rl30 --relaunch --harness claude \
+    --profile-floor-scope all_models --profile-floor-min-percent 40 >/dev/null
   [ ! -e "$auth" ] \
     || fail "a prefixed prior harness must still have its turn-end registry entry revoked"
   [ ! -e "$dir/home/state/rl30.grok-turnend-token" ] \
@@ -1201,7 +1273,8 @@ test_muse_session_binding_is_retired_on_a_harness_switch() {
     > "$dir/home/state/rl31.muse-session"
   printf '/nonexistent/session.jsonl\n' > "$dir/home/state/rl31.muse-session-current"
   printf 'zsh' > "$dir/fake/command"
-  run_spawn "$dir" rl31 --relaunch --harness claude >/dev/null
+  run_spawn "$dir" rl31 --relaunch --harness claude \
+    --profile-floor-scope all_models --profile-floor-min-percent 40 >/dev/null
   [ ! -e "$dir/home/state/rl31.muse-session" ] \
     || fail "the retired muse incarnation's session binding must not outlive it"
   [ ! -e "$dir/home/state/rl31.muse-session-current" ] \
@@ -1216,7 +1289,8 @@ test_cursor_session_binding_is_retired_on_a_harness_switch() {
   printf 'workspace=%s\nprior_conversation=old-conversation\n' "$dir/wt" \
     > "$dir/home/state/rl35.cursor-session"
   printf 'zsh' > "$dir/fake/command"
-  run_spawn "$dir" rl35 --relaunch --harness claude >/dev/null
+  run_spawn "$dir" rl35 --relaunch --harness claude \
+    --profile-floor-scope all_models --profile-floor-min-percent 40 >/dev/null
   [ ! -e "$dir/home/state/rl35.cursor-session" ] \
     || fail "the retired cursor incarnation's session binding must not outlive it"
   pass "fm-spawn --relaunch: switching away from cursor retires its session binding"
@@ -2400,6 +2474,8 @@ test_harness_switch_does_not_carry_the_old_profile_axes
 test_harness_switch_resolves_a_prefixed_recorded_harness
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
+test_selected_claude_floor_survives_unchanged_relaunch
+test_changed_claude_profile_requires_its_new_floor
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch

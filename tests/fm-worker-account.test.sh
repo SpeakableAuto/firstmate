@@ -396,7 +396,7 @@ SH
   export FM_TEST_QUOTA="$CASE/quota.json"
   export PATH="$FAKEBIN:$PATH"
   quota_fixture() {
-    jq -n --argjson pct "$1" '{schemaVersion:5,providers:[{provider:"claude",windows:[{id:"five_hour",kind:"session",percentRemaining:$pct}],quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
+    jq -n --argjson pct "$1" '{schemaVersion:5,providers:[{provider:"claude",state:{stale:false},windows:[{id:"five_hour",kind:"session",percentRemaining:$pct}],quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
   }
   check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary "${1:-}" "${2:-}" 2>&1; }
   local out rc n
@@ -437,6 +437,18 @@ SH
   cp "$CASE/stale.json" "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "stale quota refuses: $out"
+  quota_fixture 80
+  jq 'del(.providers[0].state)' "$FM_TEST_QUOTA" > "$CASE/incomplete.json"
+  cp "$CASE/incomplete.json" "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "quota without explicit freshness refuses: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'missing freshness fails closed'
+  quota_fixture 80
+  jq '.providers[0].state.stale = "false"' "$FM_TEST_QUOTA" > "$CASE/malformed-freshness.json"
+  cp "$CASE/malformed-freshness.json" "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "non-boolean freshness refuses: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'malformed freshness fails closed'
   : > "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "an invalid or unavailable snapshot refuses: $out"
@@ -490,7 +502,7 @@ test_spawn_enforces_claude_admission() {
   new_case admission-spawn claude
   cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","windows":[{"id":"five_hour","percentRemaining":39}],"quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}'
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","percentRemaining":39}],"quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}'
 SH
   chmod +x "$FAKEBIN/quota-axi"
   out=$(spawn_ship guarded --harness claude); rc=$?

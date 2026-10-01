@@ -1153,9 +1153,11 @@ A home-wide admission lock spans the count, quota check, provisioning, launch, a
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
 
 Admission reads one bounded, read-only `quota-axi --json` snapshot for Claude and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
+The selected Claude row is usable only when `state.stale` is explicitly `false`; an absent or malformed freshness signal is incomplete evidence and refuses admission.
 Explicit config roots use quota-axi's profile-only read so a different credential source cannot supply their quota; the ordinary account uses the default Claude row.
 The selected Claude candidate's own optional `floor` is carried by the resolver's concrete profile line as `--profile-floor-scope` and `--profile-floor-min-percent`; a manual selection passes the same pair.
-Admission enforces only that selected floor and records it with the task so an unchanged Claude relaunch retains the same floor.
+Admission enforces only that selected floor and records it with the concrete harness, model, and effort profile.
+An exact unchanged-profile relaunch retains the recorded floor, while a changed Claude profile must pass the newly selected candidate's floor pair.
 Malformed, incomplete, or looser admission settings and malformed selected floors refuse before provisioning.
 Missing, stale, timed-out, incomplete, or unknown quota refuses the Claude launch because neither the fixed floor nor a selected profile floor can be proved.
 A refusal names Codex or a second mate on another account as alternatives.
