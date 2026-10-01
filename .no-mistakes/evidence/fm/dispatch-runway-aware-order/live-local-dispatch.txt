@@ -1,0 +1,11 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 1000   tokens: 425/35
+  rule: rule_1 (Any software task.)   confidence: 0.73
+  probabilities: rule_1=0.87 default=0.13
+  selection: candidate-order
+  note: rule matched
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=36%  spendPriority=-0.1588  runway=projected_exhaustion  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=96%  spendPriority=0.6656  runway=through_reset  cached=46s old  -> eligible
+  passed over: codex:gpt-6-astra: projected to run out before reset; later eligible candidate has runway through_reset
+  profile: --harness 'claude' --model 'opus' --profile-floor-scope 'all_models' --profile-floor-min-percent '40'
