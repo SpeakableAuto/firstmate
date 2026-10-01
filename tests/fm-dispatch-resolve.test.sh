@@ -1267,6 +1267,18 @@ assert_contains "$out" 'passed over: home=peer codex:gpt-6-astra: projected to r
 assert_contains "$out" 'placement: secondmate peer' "remote placement uses the runway-selected candidate"
 pass "cross-home placement respects runway-aware candidate order on both machines"
 
+# A safe remote candidate overrides the placement margin when local runway is projected to exhaust.
+write_quota "$REMOTE_QUOTA" 0.3 0.3
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-edit.json"
+mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].effectivePercentRemaining) = 39' "$REMOTE_QUOTA" > "$TMP_ROOT/local-projected.json"
+QUOTA_AXI_FIXTURE="$TMP_ROOT/local-projected.json" placement_case ok --project pager
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "local Codex remains the best local candidate when Claude is below its floor"
+assert_contains "$out" 'candidate: claude:opus  provider=claude  scope=all_models  remaining=39%  spendPriority=-  runway=through_reset  -> not eligible: profile floor all_models below 40%' "the local Claude floor failure is visible"
+assert_contains "$out" 'home: peer  best=claude:opus  scope=all_models  remaining=79%  spendPriority=0.3  runway=through_reset' "the remote safe candidate is visible"
+assert_contains "$out" 'placement: secondmate peer (peer candidate runs through reset; local candidate is projected to run out before reset)' "runway safety overrides the 0.5 placement margin with an explicit reason"
+pass "through-reset remote runway overrides the placement margin"
+
 # Rate-limit recovery reuses vendor semantics; old and other failures stay unknown.
 export TYPESAFE_API_KEY="$KEY"
 write_response "$RESPONSE" default 0.95

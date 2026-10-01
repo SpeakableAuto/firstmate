@@ -582,6 +582,7 @@ if [ -n "$PLACEMENT_IDS" ]; then
     ($rules[0]) as $cfg |
     ($result.resolved_rule) as $choice |
     ($result.chosen.spendPriority // ([$result.candidates[] | select(.eligible and ((.unranked // false) | not)) | .spendPriority] | max)) as $local |
+    (($result.chosen.runway // null) == "projected_exhaustion") as $local_projected |
     [$homes[] | . as $h |
       if $h.snapshot == null then {id: $h.id, reason: $h.reason}
       else ($h.snapshot) as $q |
@@ -610,17 +611,19 @@ if [ -n "$PLACEMENT_IDS" ]; then
         end
       end] as $evaluated |
     ([$evaluated[] | select(.best and ((.placement_blocked // null) == null))]) as $ranked |
-    (if $local == null then $ranked
+    (if $local == null or $local_projected then $ranked
      else [$ranked[] | select(.best.spendPriority - $local > 0.5)] end) as $better |
     (if ($better | length) == 0 then
        {home: "local",
         reason: (if $local == null then "no second mate has rankable quota either"
+                 elif $local_projected then "no second mate has a through-reset candidate to avoid local exhaustion before reset"
                  else "no second mate beats local spendPriority \($local) by more than 0.5" end)}
      else ($better | max_by(.best.spendPriority)) as $top |
        if ([$better[] | select(.best.spendPriority == $top.best.spendPriority)] | length) > 1
        then {home: "local", reason: "second mates tie at spendPriority \($top.best.spendPriority)"}
        else {home: $top.id,
              reason: (if $local == null then "no local candidate is rankable; \($top.id) has spendPriority \($top.best.spendPriority)"
+                      elif $local_projected then "\($top.id) candidate runs through reset; local candidate is projected to run out before reset"
                       else "\($top.id) spendPriority \($top.best.spendPriority) beats local \($local) by more than 0.5" end)}
        end
      end) as $decision |
