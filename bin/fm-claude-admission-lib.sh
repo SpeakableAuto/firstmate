@@ -3,7 +3,7 @@
 # .claude-admission.lock through launch and metadata publication (including abort
 # cleanup). No supervisor or secondmate admission is charged against crew.
 # docs/configuration.md "Claude crew admission" owns configuration and semantics.
-# Usage: fm_claude_admission_check <config> <state> <id> <identity> <model> <effort>
+# Usage: fm_claude_admission_check <config> <state> <id> <identity> <floor-scope> <floor-min-percent>
 # The caller supplies the selected Claude config root, or ordinary, as identity.
 # Existing records without identity are conservatively charged to every account.
 # Backend recovery-grade liveness is reused, never inferred from status events.
@@ -14,31 +14,27 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
 
 fm_claude_admission_check() {
-  local config=$1 state=$2 id=$3 identity=$4 model=$5 effort=$6
+  local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
   local settings='{}' limits cap floor floors meta account backend target verdict count=0
   local snapshot row result gen started now
   if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
     settings=$(cat "$config/crew-dispatch.json") || return 1
   fi
-  limits=$(printf '%s\n' "$settings" | jq -ce --arg model "$model" --arg effort "$effort" '
-    def profiles: if type == "array" then . elif type == "object" then [.] else error("invalid profiles") end;
-    def valid_floor: type == "object" and (.scope | type == "string" and length > 0)
-      and (.min_percent | type == "number" and . >= 0 and . <= 100);
+  limits=$(printf '%s\n' "$settings" | jq -ce --arg floor_scope "$floor_scope" --arg floor_min_percent "$floor_min_percent" '
     if type != "object" then error("invalid dispatch object") else . end |
     (if has("claude_admission") then .claude_admission else {} end) as $c |
     ($c | if has("max_concurrent") then .max_concurrent else 3 end) as $cap |
     ($c | if has("min_session_percent") then .min_session_percent else 40 end) as $floor |
-    if ($c | type) != "object" or ($cap | type) != "number" or $cap < 1 or $cap != ($cap | floor)
-      or ($floor | type) != "number" or $floor < 0 or $floor > 100 then error("invalid claude_admission") else . end |
-    ([((.rules // [])[] | .use | profiles[]), ((.default // []) | profiles[])] |
-      map(select(.harness == "claude")) |
-      if any(.[]; has("floor") and (.floor | valid_floor | not)) then error("invalid Claude profile floor") else . end |
-      map(select(($model == "" or (.model // "") == "" or .model == $model)
-        and ($effort == "" or (.effort // "") == "" or .effort == $effort))) |
-      map(select(has("floor")) | .floor)) as $floors |
+    (if $floor_min_percent == "" then null else (try ($floor_min_percent | tonumber) catch null) end) as $profile_min |
+    if ($c | type) != "object" or ($cap | type) != "number" or $cap < 1 or $cap > 3 or $cap != ($cap | floor)
+      or ($floor | type) != "number" or $floor < 40 or $floor > 100
+      or (($floor_scope == "") != ($floor_min_percent == ""))
+      or ($floor_scope != "" and (($profile_min | type) != "number" or $profile_min < 0 or $profile_min > 100))
+      then error("invalid claude_admission or selected profile floor") else . end |
+    (if $floor_scope == "" then [] else [{scope:$floor_scope,min_percent:$profile_min}] end) as $floors |
     {cap:$cap, floor:$floor, floors:$floors}
   ' 2>/dev/null) || {
-    echo 'error: invalid Claude admission settings or profile floors in config/crew-dispatch.json; correct the configuration before spawning' >&2
+    echo 'error: invalid Claude admission settings or selected profile floor; max_concurrent must be 1..3 and min_session_percent must be 40..100' >&2
     return 1
   }
   cap=$(printf '%s\n' "$limits" | jq -r .cap)
@@ -71,12 +67,12 @@ fm_claude_admission_check() {
     count=$((count + 1))
   done
   if [ "$count" -ge "$cap" ]; then
-    echo "error: Claude crew admission refused for account $identity: $count live or unverified crew, limit $cap; choose Codex or route to a secondmate on another account" >&2
+    echo "error: Claude crew admission refused for account $identity: $count live or unverified crew, limit $cap; choose Codex or route to a second mate on another account" >&2
     return 1
   fi
   if [ "$identity" = unknown ]; then
-    echo 'warning: Claude quota unknown for unpinned raw command; concurrency cap still enforced' >&2
-    return 0
+    echo 'error: Claude crew admission refused because quota is unverifiable for an unpinned raw command; choose Codex or route to a second mate on another account' >&2
+    return 1
   fi
   # Explicit roots use profile-only so another credential source cannot answer
   # for the selected account. Ordinary Claude uses quota-axi's default row.
@@ -86,8 +82,8 @@ fm_claude_admission_check() {
     snapshot=$(fm_run_timed 15 quota-axi --provider claude --no-credential-refresh --json 2>/dev/null) || snapshot=
   fi
   if ! printf '%s\n' "$snapshot" | fm_quota_json_valid; then
-    echo 'warning: Claude quota unknown (unavailable or invalid snapshot); concurrency cap still enforced' >&2
-    return 0
+    echo 'error: Claude crew admission refused because quota is unavailable or invalid; choose Codex or route to a second mate on another account' >&2
+    return 1
   fi
   row=$(printf '%s\n' "$snapshot" | jq -c "$FM_QUOTA_ROW_JQ"'quota_row(.; "claude"; "")') || return 1
   result=$(printf '%s\n' "$row" | jq -r --argjson floor "$floor" --argjson floors "$floors" '
@@ -110,8 +106,10 @@ fm_claude_admission_check() {
   ') || return 1
   case "$result" in
     refuse:*)
-      echo "error: Claude crew admission refused for account $identity: ${result#refuse: }; choose Codex or route to a secondmate on another account" >&2
+      echo "error: Claude crew admission refused for account $identity: ${result#refuse: }; choose Codex or route to a second mate on another account" >&2
       return 1 ;;
-    unknown) echo 'warning: Claude quota floor unverifiable; disclosed uncertainty, concurrency cap still enforced' >&2 ;;
+    unknown)
+      echo 'error: Claude crew admission refused because the quota floor is unverifiable; choose Codex or route to a second mate on another account' >&2
+      return 1 ;;
   esac
 }

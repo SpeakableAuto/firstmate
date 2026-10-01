@@ -642,7 +642,10 @@ TEXT=$(jq -r '
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
-      + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end) else empty end),
+      + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end)
+      + (if .chosen.profile.harness == "claude" and .chosen.profile.floor then
+           " --profile-floor-scope \(.chosen.profile.floor.scope | shell_arg) --profile-floor-min-percent \(.chosen.profile.floor.min_percent | shell_arg)"
+         else "" end) else empty end),
   (if .placement then
      "  placement: \(if .placement.home == "local" then "local" else "secondmate \(.placement.home | flat)" end) (\(.placement.reason | flat))",
      (.placement.homes[] | "  home: \(.id | flat)"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -42,7 +42,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -87,6 +87,9 @@
 #   build agent's variant, keyed to the resolved model, inside the
 #   OPENCODE_CONFIG_CONTENT JSON its launch already carries (config schema
 #   verified on opencode 1.18.32); without a model the axis is recorded but omitted.
+#   --profile-floor-scope and --profile-floor-min-percent carry the selected
+#   Claude candidate's optional quota floor into admission. They must be passed
+#   together and are refused for every other harness and for secondmates.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -643,6 +646,8 @@ KIND_SET=0
 HARNESS_ARG=
 MODEL=
 EFFORT=
+PROFILE_FLOOR_SCOPE=
+PROFILE_FLOOR_MIN_PERCENT=
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -651,6 +656,8 @@ TRACEPARENT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
+PROFILE_FLOOR_SCOPE_SET=0
+PROFILE_FLOOR_MIN_PERCENT_SET=0
 BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
@@ -679,6 +686,14 @@ for a in "$@"; do
     effort)
       EFFORT=$a
       EFFORT_SET=1
+      ;;
+    profile-floor-scope)
+      PROFILE_FLOOR_SCOPE=$a
+      PROFILE_FLOOR_SCOPE_SET=1
+      ;;
+    profile-floor-min-percent)
+      PROFILE_FLOOR_MIN_PERCENT=$a
+      PROFILE_FLOOR_MIN_PERCENT_SET=1
       ;;
     backend)
       BACKEND_ARG=$a
@@ -733,6 +748,16 @@ for a in "$@"; do
     EFFORT=${a#--effort=}
     EFFORT_SET=1
     ;;
+  --profile-floor-scope) want_value=profile-floor-scope ;;
+  --profile-floor-scope=*)
+    PROFILE_FLOOR_SCOPE=${a#--profile-floor-scope=}
+    PROFILE_FLOOR_SCOPE_SET=1
+    ;;
+  --profile-floor-min-percent) want_value=profile-floor-min-percent ;;
+  --profile-floor-min-percent=*)
+    PROFILE_FLOOR_MIN_PERCENT=${a#--profile-floor-min-percent=}
+    PROFILE_FLOOR_MIN_PERCENT_SET=1
+    ;;
   --backend) want_value=backend ;;
   --backend=*)
     BACKEND_ARG=${a#--backend=}
@@ -777,6 +802,18 @@ done
   echo "error: --effort requires a non-empty value" >&2
   exit 1
 }
+[ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ] || [ -n "$PROFILE_FLOOR_SCOPE" ] || {
+  echo "error: --profile-floor-scope requires a non-empty value" >&2
+  exit 1
+}
+[ "$PROFILE_FLOOR_MIN_PERCENT_SET" -eq 0 ] || [ -n "$PROFILE_FLOOR_MIN_PERCENT" ] || {
+  echo "error: --profile-floor-min-percent requires a non-empty value" >&2
+  exit 1
+}
+if [ "$PROFILE_FLOOR_SCOPE_SET" -ne "$PROFILE_FLOOR_MIN_PERCENT_SET" ]; then
+  echo "error: --profile-floor-scope and --profile-floor-min-percent must be passed together" >&2
+  exit 1
+fi
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || {
   echo "error: --backend requires a non-empty value" >&2
   exit 1
@@ -1464,6 +1501,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
+  [ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ] || shared_args+=(--profile-floor-scope "$PROFILE_FLOOR_SCOPE" --profile-floor-min-percent "$PROFILE_FLOOR_MIN_PERCENT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
   # harness. Each pair still re-validates it against its own brief, so a batch
@@ -1774,6 +1812,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
       ;;
   esac
   RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
+  if [ "$HARNESS_SET" -eq 0 ] && [ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ]; then
+    PROFILE_FLOOR_SCOPE=$(fm_meta_get "$RELAUNCH_META" claude_profile_floor_scope)
+    PROFILE_FLOOR_MIN_PERCENT=$(fm_meta_get "$RELAUNCH_META" claude_profile_floor_min_percent)
+  fi
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
   # A secondmate whose endpoint is gone already has ONE owner for that
@@ -2377,6 +2419,12 @@ fi
 if [ "$HARNESS" = agy ]; then
   agy_model_validate "$AGY_BIN" "$MODEL" || exit 1
 fi
+if [ "$PROFILE_FLOOR_SCOPE_SET" -eq 1 ] || [ -n "$PROFILE_FLOOR_SCOPE" ]; then
+  if [ "$HARNESS" != claude ] || [ "$KIND" = secondmate ]; then
+    echo "error: selected profile floors apply only to Claude crew" >&2
+    exit 1
+  fi
+fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
 # record exists. An absent pin selects nothing and leaves every later launch
 # step exactly as it was. A pinned Claude root is exported here as well, so the
@@ -2405,7 +2453,7 @@ if [ "$HARNESS" = claude ] && [ "$KIND" != secondmate ]; then
   CLAUDE_ADMISSION_LOCK="$STATE/.claude-admission.lock"
   fm_lock_acquire_wait "$CLAUDE_ADMISSION_LOCK" || exit 1
   CLAUDE_ADMISSION_LOCK_HELD=1
-  fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$MODEL" "$EFFORT" || exit 1
+  fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" || exit 1
 fi
 
 secondmate_registry_value() {
@@ -4881,7 +4929,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider claude_quota_identity busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider claude_quota_identity claude_profile_floor_scope claude_profile_floor_min_percent busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -4907,6 +4955,8 @@ preserve_relaunch_meta() {
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   [ -z "$CLAUDE_QUOTA_IDENTITY" ] || echo "claude_quota_identity=$CLAUDE_QUOTA_IDENTITY"
+  [ -z "$PROFILE_FLOOR_SCOPE" ] || echo "claude_profile_floor_scope=$PROFILE_FLOOR_SCOPE"
+  [ -z "$PROFILE_FLOOR_MIN_PERCENT" ] || echo "claude_profile_floor_min_percent=$PROFILE_FLOOR_MIN_PERCENT"
   # Default-off writes no traceparent= line.
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;

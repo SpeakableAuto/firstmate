@@ -346,17 +346,14 @@ test_raw_claude_account_override_refuses_under_a_pin() {
   pass "a pinned home refuses a raw Claude command that overrides the account"
 }
 
-test_raw_claude_account_override_is_kept_without_a_pin() {
+test_raw_claude_account_override_refuses_without_a_pin() {
   local out rc id=acct-raw-unpinned
   new_case raw-unpinned claude
   mkdir -p "$CASE/other"
   out=$(spawn_ship "$id" --harness "CLAUDE_CONFIG_DIR=$CASE/other ANTHROPIC_API_KEY=override-key claude --print raw"); rc=$?
-  expect_code 0 "$rc" "an unpinned home should accept a raw Claude account override: $out"
-  assert_not_contains "$out" "account=" "an unpinned raw spawn must not report an account"
-  run_pane
-  assert_grep "CLAUDE_CONFIG_DIR=$CASE/other" "$CASE/claude-worker" "an unpinned raw override should keep its own root"
-  assert_grep "ANTHROPIC_API_KEY=override-key" "$CASE/claude-worker" "an unpinned raw override should keep its own key"
-  pass "an unpinned home keeps a raw Claude account override"
+  expect_code 1 "$rc" "an unpinned home must refuse a raw Claude account override: $out"
+  assert_refused_before_launch "$id" "$out" "quota is unverifiable for an unpinned raw command"
+  pass "an unpinned home refuses a raw Claude account override with unverifiable quota"
 }
 
 test_local_secondmate_reads_the_launching_home_pin() {
@@ -401,7 +398,7 @@ SH
   quota_fixture() {
     jq -n --argjson pct "$1" '{schemaVersion:5,providers:[{provider:"claude",windows:[{id:"five_hour",kind:"session",percentRemaining:$pct}],quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
   }
-  check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary sonnet high 2>&1; }
+  check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary "${1:-}" "${2:-}" 2>&1; }
   local out rc n
   quota_fixture 39
   out=$(check_admission); rc=$?
@@ -411,22 +408,51 @@ SH
   quota_fixture 40
   out=$(check_admission); rc=$?
   expect_code 0 "$rc" "the exact floor admits: $out"
-  printf '%s\n' '{"claude_admission":{"min_session_percent":50},"default":{"harness":"claude","model":"sonnet","floor":{"scope":"all_models","min_percent":90}}}' > "$HOME_DIR/config/crew-dispatch.json"
+  printf '%s\n' '{"default":{"harness":"claude"},"rules":[{"when":"unrelated","use":{"harness":"claude","model":"sonnet","floor":{"scope":"all_models","min_percent":90}}}]}' > "$HOME_DIR/config/crew-dispatch.json"
   quota_fixture 60
   out=$(check_admission); rc=$?
+  expect_code 0 "$rc" "an unselected profile floor does not apply: $out"
+  out=$(check_admission all_models 90); rc=$?
   expect_code 1 "$rc" "configured profile floor refuses: $out"
-  assert_contains "$out" 'all_models remaining 80% below 90%' 'configured scope is enforced'
+  assert_contains "$out" 'all_models remaining 80% below 90%' 'the selected candidate scope is enforced'
   printf '%s\n' '{"claude_admission":{"min_session_percent":70}}' > "$HOME_DIR/config/crew-dispatch.json"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "configured session floor refuses: $out"
   printf '%s\n' '{"claude_admission":{"max_concurrent":0}}' > "$HOME_DIR/config/crew-dispatch.json"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "invalid configuration refuses: $out"
+  printf '%s\n' '{"claude_admission":{"max_concurrent":4}}' > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "a looser concurrency override refuses: $out"
+  printf '%s\n' '{"claude_admission":{"min_session_percent":39}}' > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "a looser session override refuses: $out"
   rm "$HOME_DIR/config/crew-dispatch.json"
   printf '%s\n' '{"schemaVersion":6,"providers":[{"provider":"claude","accountKey":"default","quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}' > "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?
-  expect_code 0 "$rc" "unknown quota remains eligible: $out"
-  assert_contains "$out" 'disclosed uncertainty' 'unknown is disclosed'
+  expect_code 1 "$rc" "unknown quota refuses: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'unknown quota fails closed'
+  quota_fixture 80
+  jq '(.providers[0].state.stale) = true' "$FM_TEST_QUOTA" > "$CASE/stale.json"
+  cp "$CASE/stale.json" "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "stale quota refuses: $out"
+  : > "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "an invalid or unavailable snapshot refuses: $out"
+  cat > "$FAKEBIN/quota-axi" <<'SH'
+#!/usr/bin/env bash
+exit 124
+SH
+  chmod +x "$FAKEBIN/quota-axi"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "a timed-out quota read refuses: $out"
+  cat > "$FAKEBIN/quota-axi" <<'SH'
+#!/usr/bin/env bash
+cat "$FM_TEST_QUOTA"
+SH
+  chmod +x "$FAKEBIN/quota-axi"
+  quota_fixture 80
   for n in 1 2 3; do
     printf 'harness=claude\nkind=ship\nwindow=firstmate:fm-%s\naccount=ordinary\n' "$n" > "$HOME_DIR/state/crew$n.meta"
     echo alive > "$CASE/verdict-fm-$n"
@@ -456,7 +482,7 @@ SH
   cp "$CASE/meta" "$HOME_DIR/state/crew2.meta"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "legacy unknown accounts count conservatively: $out"
-  pass 'Claude admission enforces session and candidate floors, configurable account caps, and disclosed uncertainty'
+  pass 'Claude admission enforces fixed and selected floors, strict overrides, and fail-closed quota evidence'
 )
 
 test_spawn_enforces_claude_admission() {
@@ -471,6 +497,17 @@ SH
   expect_code 1 "$rc" "real spawn refuses a depleted session: $out"
   assert_refused_before_launch guarded "$out" 'five_hour remaining 39% below 40%'
   assert_absent "$HOME_DIR/state/.claude-admission.lock" 'refusal releases admission lock'
+  out=$(spawn_ship raw-unknown 'claude --dangerously-skip-permissions'); rc=$?
+  expect_code 1 "$rc" "an unpinned raw Claude launch refuses unverifiable quota: $out"
+  assert_refused_before_launch raw-unknown "$out" 'quota is unverifiable for an unpinned raw command'
+  cat > "$FAKEBIN/quota-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","kind":"session","percentRemaining":80}],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"}}]}}]}'
+SH
+  chmod +x "$FAKEBIN/quota-axi"
+  out=$(spawn_ship selected-floor --harness claude --profile-floor-scope all_models --profile-floor-min-percent 90); rc=$?
+  expect_code 1 "$rc" "spawn enforces the selected candidate floor: $out"
+  assert_refused_before_launch selected-floor "$out" 'all_models remaining 80% below 90%'
   # Unverified backend records count without invoking any installed backend.
   for n in 1 2 3; do
     printf 'harness=claude\nkind=scout\nbackend=unknown\nwindow=recorded-%s\n' "$n" > "$HOME_DIR/state/crew$n.meta"
@@ -547,7 +584,7 @@ test_pi_extension_provider_and_old_pi_fall_back_to_the_model_listing
 test_a_pin_governs_only_its_own_runner
 test_raw_claude_command_receives_the_pin
 test_raw_claude_account_override_refuses_under_a_pin
-test_raw_claude_account_override_is_kept_without_a_pin
+test_raw_claude_account_override_refuses_without_a_pin
 test_local_secondmate_reads_the_launching_home_pin
 
 echo "# all fm-worker-account tests passed"

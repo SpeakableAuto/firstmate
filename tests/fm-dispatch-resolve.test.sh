@@ -635,6 +635,14 @@ TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=model:missing  remaining=-%  spendPriority=-  runway=-  -> eligible, unranked: profile floor model:missing is unverifiable: not rankable: disclosed uncertainty' "a missing profile floor remains eligible but unranked"
 assert_not_contains "$out" 'profile floor model:missing below' "missing profile evidence is not described as a shortfall"
 assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex/gpt-5.6-sol'" "another candidate may clear without misrepresenting missing floor evidence"
+SELECTED_CLAUDE_FLOOR_RULES="$TMP_ROOT/selected-claude-floor-rules.json"
+jq '(.rules[3].use[0].floor) = {scope:"all_models",min_percent:50}' "$BASE_RULES" > "$SELECTED_CLAUDE_FLOOR_RULES"
+cp "$SELECTED_CLAUDE_FLOOR_RULES" "$RULES"
+SELECTED_CLAUDE_QUOTA="$TMP_ROOT/selected-claude-quota.json"
+write_quota "$SELECTED_CLAUDE_QUOTA" -0.9 0.8
+write_response "$RESPONSE" rule_4 0.99
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SELECTED_CLAUDE_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high' --profile-floor-scope 'all_models' --profile-floor-min-percent '50'" "the selected Claude candidate carries only its own floor into spawn"
 cp "$BASE_RULES" "$RULES"
 pass "declared provider and profile floor evidence are applied in code"
 
