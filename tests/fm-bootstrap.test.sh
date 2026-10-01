@@ -1184,6 +1184,11 @@ kimi model profile is accepted^{"rules":[{"when":"kimi work","use":{"harness":"k
 unsupported kimi effort is flagged^{"rules":[{"when":"kimi work","use":{"harness":"kimi","model":"kimi-code/k3","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: kimi:high
 cursor model profile is accepted^{"rules":[{"when":"cursor work","use":{"harness":"cursor","model":"cursor-grok-4.5-high"}}]}^empty^
 unsupported cursor effort is flagged^{"rules":[{"when":"cursor work","use":{"harness":"cursor","model":"cursor-grok-4.5-high","effort":"high"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: cursor:high
+file candidate-order is accepted^{"select":"candidate-order","rules":[{"when":"coding","use":[{"harness":"codex"},{"harness":"claude"}]}]}^empty^
+rule candidate-order is accepted^{"rules":[{"when":"coding","select":"candidate-order","use":[{"harness":"codex"},{"harness":"claude"}]}]}^empty^
+unknown file select is flagged^{"select":"mystery","default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unknown select: mystery
+null file select is flagged^{"select":null,"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - select must be a non-empty string
+false file select is flagged^{"select":false,"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - select must be a non-empty string
 array use with quota-balanced is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude","model":"claude-sonnet-5","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}],"select":"quota-balanced"}]}^empty^
 array use without select is accepted^{"rules":[{"when":"big feature","use":[{"harness":"claude"},{"harness":"codex"}]}]}^empty^
 one-element array use is accepted^{"rules":[{"when":"focused feature","use":[{"harness":"claude"}]}]}^empty^

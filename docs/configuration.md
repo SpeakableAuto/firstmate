@@ -1055,8 +1055,21 @@ This section is the single owner of the canonical schema and its per-field seman
 | `rules` | May be absent or empty for a default-only configuration. |
 | Rule `when` and `use` | Required for each rule. |
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
+| File or rule `select` | Optional selection policy: `quota-balanced` (default) or `candidate-order`; a rule overrides the file. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
+
+**Candidate selection policy**
+
+Set `"select": "candidate-order"` at the top level to prefer earlier profiles in every rule and the default array, or on one rule to opt in only that rule.
+At manual intake, this policy selects the first viable candidate in configured order after the `quota-array-dispatch` eligibility, reasoning-class, runway, and declared-floor gates.
+Typed resolution applies the same ordering after its documented rankability checks; its `clear` result remains subject to Firstmate's full intake gates as described below under **Firstmate retains the dispatch decision**.
+Neither path allows order to override a gate or treats unknown evidence as healthy.
+A rule-level `select` overrides the file-level value only for that rule's `use`; no match or a rule-floor fallback uses the file's policy for `default`.
+Omitting `select` everywhere preserves `quota-balanced`: all passing candidates have equal configured preference and the highest known `spendPriority` wins, with genuine scalar ties escalating.
+A rule can explicitly set `"select": "quota-balanced"` to retain that behavior inside an ordered file.
+Other values, including null and non-string values, are configuration errors.
+The [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy) owns manual selection and uncertainty handling.
 
 **Fields applied only by typed resolution**
 
@@ -1101,7 +1114,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 - Codex `max` is valid when the profile selects `gpt-5.6-luna`, whose installed catalog entry supports that reasoning level.
 - An omitted model or effort means the selected harness uses its own default for that axis.
 - OpenCode receives the effort as its default `build` agent's `variant`, keyed to the resolved model, inside the `OPENCODE_CONFIG_CONTENT` JSON its launch already writes (the per-model reasoning-effort field of the config schema, verified on opencode 1.18.32); with no model resolved, the effort is recorded in task metadata but omitted from the launch.
-- Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
+- Every profile array is resolved through `quota-array-dispatch` under its configured selection policy.
 - If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
 - Except for `ultra`, which refuses unsupported profiles under the native-effort contract above, an effort value the chosen harness does not accept is recorded as `effort=` in task meta for traceability but omitted from the launch flags.
 - Bootstrap reports unsupported harness/model/effort combinations as a `CREW_DISPATCH` diagnostic when they are visible in the file.
@@ -1179,7 +1192,7 @@ After the answer, code applies all remaining checks and ranking:
 - The confidence floor and the matched rule's `approval` and `floor`.
 - Each candidate's `provider` and `floor`.
 - Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
-- The numeric `spendPriority` argmax over candidates, using each candidate's limiting row.
+- The [configured candidate selection policy](#crew-dispatch-profiles-configcrew-dispatchjson), using each candidate's limiting quota row and retaining the existing rankability gates.
 - With `--project`, [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) for a `clear`, tied, or nothing-rankable result: the same candidates are evaluated against each eligible remote second mate's snapshot from `bin/fm-quota-snapshot.sh --secondmate`, and the result gains one `placement:` line plus one `home:` line per second mate.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).

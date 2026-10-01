@@ -710,6 +710,96 @@ assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_mod
 assert_contains "$out" '-> not eligible: runway exhausted_now at all_models' "a healthy exact row cannot bypass an exhausted account-wide bound"
 pass "provider-wide and exact quota rows combine into one limiting candidate"
 
+# --- opt-in candidate order keeps gates and quota-balanced compatibility -------
+ORDER_RULES="$TMP_ROOT/order-rules.json"
+ORDER_QUOTA="$TMP_ROOT/order-quota.json"
+jq '.select = "candidate-order" |
+  .rules[3].use = [
+    {harness:"codex", model:"gpt-6-astra"},
+    {harness:"claude", model:"opus", floor:{scope:"all_models", min_percent:40}}] |
+  .default = .rules[3].use |
+  .rules[2] |= (del(.approval) | .use = [
+    {harness:"claude", model:"fable", floor:{scope:"all_models", min_percent:40}},
+    {harness:"codex", model:"gpt-6-astra"}])' "$BASE_RULES" > "$ORDER_RULES"
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[]) |=
+  (.effectivePercentRemaining = 47 | .selection.spendPriority = 17.6 | .runway.status = "through_reset") |
+  (.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[]) |=
+  (.selection.spendPriority = 0.6 | .runway.status = "through_reset")' "$QUOTA" > "$ORDER_QUOTA"
+order_case() {
+  reset_log
+  cp "$ORDER_RULES" "$RULES"
+  TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$ORDER_QUOTA" run code out err "$BRIEF"
+  expect_code 0 "$code" "ordered dispatch exits successfully"
+}
+write_response "$RESPONSE" rule_4 0.9
+order_case
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "file opt-in chooses Codex despite Claude having higher spendPriority above its floor"
+assert_contains "$out" 'selection: candidate-order' "selection policy is inspectable"
+assert_contains "$out" 'remaining=47%  spendPriority=17.6' "higher-ranked quota is still reported"
+assert_not_contains "$(cat "$LOG/body")" 'candidate-order' "selection policy never reaches the classifier"
+
+jq 'del(.select) | .rules[3].select = "candidate-order"' "$ORDER_RULES" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_RULES"
+order_case
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "rule opt-in chooses Codex without file opt-in"
+jq '.select = "candidate-order" | .rules[3].select = "quota-balanced"' "$ORDER_RULES" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_RULES"
+order_case
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" "rule quota-balanced overrides file order"
+jq 'del(.select, .rules[3].select)' "$ORDER_RULES" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_RULES"
+order_case
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" "no opt-in retains spendPriority ranking"
+jq '.select = "candidate-order"' "$ORDER_RULES" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_RULES"
+
+write_response "$RESPONSE" rule_3 0.9
+order_case
+assert_contains "$out" "profile: --harness 'claude' --model 'fable'" "design preserves its Claude-first order"
+for percent in 40 39; do
+  jq --argjson pct "$percent" '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[] | select(.scope == "all_models").effectivePercentRemaining) = $pct' "$ORDER_QUOTA" > "$TMP_ROOT/order-edit.json"
+  mv "$TMP_ROOT/order-edit.json" "$ORDER_QUOTA"
+  order_case
+  if [ "$percent" = 40 ]; then
+    assert_contains "$out" "profile: --harness 'claude' --model 'fable'" "floor equality is eligible"
+  else
+    assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "ordered design skips Claude below floor"
+    assert_contains "$out" 'not eligible: profile floor all_models below 40%' "below-floor exclusion is visible"
+  fi
+done
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[] | select(.scope == "all_models")) |=
+  ({scope: .scope, status: "unknown", runway: {status: "unknown"}})' "$ORDER_QUOTA" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_QUOTA"
+order_case
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "unknown earlier floor stays unrankable"
+assert_contains "$out" 'eligible, unranked:' "unknown evidence is disclosed"
+
+# The default inherits the file policy, including when a rule floor falls through.
+write_response "$RESPONSE" default 0.9
+order_case
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "default inherits candidate order"
+jq '.rules[0].select = "quota-balanced" | .rules[0].floor.min_percent = 90' "$ORDER_RULES" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_RULES"
+write_response "$RESPONSE" rule_1 0.9
+order_case
+assert_contains "$out" 'fall through to default' "rule floor falls through"
+assert_contains "$out" 'selection: candidate-order' "default uses file policy, not failed rule override"
+
+# Ordered selection also resolves equal quota evidence by explicit preference.
+jq '(.providers[] | .quotaSemantics.effectiveAvailability[]) |=
+  (.status = "known" | .effectivePercentRemaining = 47 | .runway.status = "through_reset" | .selection.spendPriority = 0.6)' "$ORDER_QUOTA" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_QUOTA"
+write_response "$RESPONSE" rule_4 0.9
+order_case
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "equal quota does not override configured preference"
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].runway.status) = "exhausted_now"' "$ORDER_QUOTA" > "$TMP_ROOT/order-edit.json"
+mv "$TMP_ROOT/order-edit.json" "$ORDER_QUOTA"
+order_case
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" "ordered selection skips exhausted first candidate"
+assert_contains "$out" 'not eligible: runway exhausted_now' "runway gate remains visible"
+cp "$BASE_RULES" "$RULES"
+pass "candidate-order honors file/rule preference, default fallback, floors, uncertainty, and exhaustion"
+
 # --- default choice ------------------------------------------------------------
 reset_log
 write_response "$RESPONSE" default 0.88
@@ -964,6 +1054,9 @@ TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 expect_code 2 "$code" "non-JSON rules exits 2"
 assert_contains "$err" 'not JSON' "non-JSON rules is named"
 for bad in \
+  '{"select":"mystery","rules":[{"when":"x","use":{"harness":"codex"}}]}|unknown select: mystery' \
+  '{"select":null,"rules":[{"when":"x","use":{"harness":"codex"}}]}|select must be a non-empty string' \
+  '{"select":false,"rules":[{"when":"x","use":{"harness":"codex"}}]}|select must be a non-empty string' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"approval":"firstmate"}]}|approval must be "captain" when present' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"select":"mystery"}]}|unknown select: mystery' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"min_confidence":"high"}]}|min_confidence must be a number from 0 through 1 when present' \
@@ -1111,5 +1204,25 @@ QUOTA_AXI_FIXTURE="$TMP_ROOT/exhausted.json" placement_case ok --project pager
 assert_contains "$out" 'status: escalate' "nothing rankable locally still escalates"
 assert_contains "$out" 'placement: secondmate peer (no local candidate is rankable; peer has spendPriority 0.3)' "a rankable second mate is offered when nothing local is rankable"
 pass "an exhausted local machine can place work on a second mate with headroom"
+
+# Cross-home ranking uses the candidates selected by policy on both machines.
+jq '.select = "candidate-order" | .rules[3].use = [
+  {harness:"codex", model:"gpt-6-astra"},
+  {harness:"claude", model:"opus", floor:{scope:"all_models", min_percent:40}}]' "$BASE_RULES" > "$RULES"
+write_quota "$REMOTE_QUOTA" 0.3 17.6
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[]) |=
+  (.selection.spendPriority = 0.6 | .runway.status = "through_reset")' "$REMOTE_QUOTA" > "$TMP_ROOT/local-ordered.json"
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[]) |=
+  (.selection.spendPriority = 1.2 | .runway.status = "through_reset")' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-edit.json"
+mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
+QUOTA_AXI_FIXTURE="$TMP_ROOT/local-ordered.json" placement_case ok --project pager
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "local ordering survives placement"
+assert_contains "$out" 'home: peer  best=codex:gpt-6-astra' "remote home also respects configured order"
+assert_contains "$out" 'placement: secondmate peer (peer spendPriority 1.2 beats local 0.6 by more than 0.5)' "placement compares selected scores, not the higher ignored Claude score"
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection.spendPriority) = 0.8' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-edit.json"
+mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
+QUOTA_AXI_FIXTURE="$TMP_ROOT/local-ordered.json" placement_case ok --project pager
+assert_contains "$out" 'placement: local' "unselected remote Claude quota cannot trigger placement"
+pass "cross-home placement respects candidate order on both machines"
 
 printf '# all fm-dispatch-resolve tests passed\n'
