@@ -298,7 +298,7 @@ _fm_engine_reap() {
 # an engine its crashed predecessor left running.
 fm_supervision_engine_turn() {
   local engine=$1 model=$2 prompt=$3 message=$4 session=$5 mode=$6 timeout=$7 result=$8 errors=$9
-  local pid_file=${10:-} bin grace ledger watched rc home_phys root_phys state_phys identity recorded
+  local pid_file=${10:-} bin grace i ledger watched rc home_phys root_phys state_phys identity recorded
   local -a args
   bin=$(fm_supervision_engine_bin "$engine" 2>"$errors") || return 127
   case "$timeout" in ''|0*|*[!0-9]*) timeout=1200 ;; esac
@@ -352,7 +352,14 @@ fm_supervision_engine_turn() {
       fi
     fi
     _fm_engine_snapshot_descendants "$watched" "$ledger"
-    sleep 1
+    # Between the one-second snapshots the engine's exit is probed at a tenth
+    # of a second: the turn closes promptly when the engine dies while the
+    # process-table scans keep their one-second cadence.
+    i=0
+    while [ "$i" -lt 10 ] && fm_pid_alive "$watched"; do
+      sleep 0.1
+      i=$((i + 1))
+    done
   done
   wait "$watched"
   rc=$?
