@@ -1176,7 +1176,7 @@ Set `QUOTA_AXI_MAX_AGE` explicitly to a quota-axi duration (for example `2m`, or
 Each remote host applies its own environment settings.
 
 Only a stale Claude row with the exact endpoint rate-limit error triggers one additional Claude-only read with `--max-age`, within the original command timeout.
-`FM_CLAUDE_QUOTA_MAX_AGE_SECONDS` bounds that recovery and all reused Claude evidence to strictly less than `900` seconds by default; supported values are `0..3600`, with `0` disabling cached Claude evidence.
+`FM_CLAUDE_QUOTA_MAX_AGE_SECONDS` bounds that recovery and all reused Claude evidence to strictly less than `900` seconds by default; non-negative integer values above `900` clamp to `900`, while `0` disables cached Claude evidence.
 The recovery must be a fresh, explicitly reused reading for the same account row, with a valid original `refreshedAt` no later than the current time.
 Firstmate retains quota-axi's availability, runway, and spend priority rather than deriving a ranking from stale window percentages.
 The resolver and admission guard disclose the cached reading's age in seconds.

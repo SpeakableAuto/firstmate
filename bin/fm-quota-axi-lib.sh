@@ -186,11 +186,8 @@ fm_quota_read_json() {
   shift
   case "$timeout" in ''|0*|*[!0-9]*) echo 'error: quota read timeout must be a positive integer' >&2; return 2 ;; esac
   for arg in "$@"; do [ "$arg" != --profile-only ] || profile_only=1; done
-  case "$bound" in ''|0[0-9]*|*[!0-9]*) echo 'error: FM_CLAUDE_QUOTA_MAX_AGE_SECONDS must be 0..3600' >&2; return 2 ;; esac
-  if [ "${#bound}" -gt 4 ] || [ "$bound" -gt 3600 ]; then
-    echo 'error: FM_CLAUDE_QUOTA_MAX_AGE_SECONDS must be 0..3600' >&2
-    return 2
-  fi
+  case "$bound" in ''|0[0-9]*|*[!0-9]*) echo 'error: FM_CLAUDE_QUOTA_MAX_AGE_SECONDS must be a non-negative integer' >&2; return 2 ;; esac
+  if [ "${#bound}" -gt 3 ] || [ "$bound" -gt 900 ]; then bound=900; fi
   # shellcheck source=bin/fm-timeout-lib.sh
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
   started=$(date +%s)
