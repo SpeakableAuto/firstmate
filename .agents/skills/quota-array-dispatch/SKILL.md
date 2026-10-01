@@ -4,7 +4,7 @@ description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
   array from quota-axi's default TOON, applying configured preference after three
   orthogonal gates, and for placing a task on a remote second mate's machine
-  when its quota headroom is materially better.
+  when its runway is safer or its quota headroom is materially better.
   Load when a dispatch rule or default resolves to more than one profile
   candidate, or when a registered remote second mate's projects include the
   task's project.

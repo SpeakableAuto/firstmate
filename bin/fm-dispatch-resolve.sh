@@ -67,8 +67,8 @@
 #   that project and this home has not registered it local-only. Each such
 #   machine's quota comes from bin/fm-quota-snapshot.sh --secondmate and is
 #   judged by the same candidate gates; the quota-array-dispatch skill owns the
-#   placement rule and fixed strict 0.5 margin. Status and the profile line
-#   never change.
+#   placement rule, including when runway safety overrides its otherwise strict
+#   0.5 margin. Status and the profile line never change.
 #   Every outcome exits 0 so an intake is never blocked by this tool.
 #   Exit 2 only for a usage or configuration error (unreadable brief, an
 #   existing unreadable rules file, malformed rules, or missing jq), which is
