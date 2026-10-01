@@ -1,0 +1,10 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 496/44
+  rule: rule_2 (Genuinely difficult product design or planning work where vi)   confidence: 1.0
+  probabilities: rule_2=1.0 default=0.0 rule_1=0.0
+  selection: candidate-order
+  note: rule matched
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=46%  spendPriority=19.1595  runway=through_reset  -> eligible
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=60%  spendPriority=0.5479  runway=through_reset  -> eligible
+  profile: --harness 'claude' --model 'opus' --effort 'high'

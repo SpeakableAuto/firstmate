@@ -1,0 +1,23 @@
+{
+  "select": "candidate-order",
+  "rules": [
+    {
+      "when": "Coding, debugging, implementation, testing, documentation, or operational work that is not a genuinely difficult product design or planning decision.",
+      "use": [
+        { "harness": "codex", "model": "gpt-6-astra", "effort": "high" },
+        { "harness": "claude", "model": "opus", "effort": "high", "floor": { "scope": "all_models", "min_percent": 40 } }
+      ]
+    },
+    {
+      "when": "Genuinely difficult product design or planning work where visual or architectural judgment is the primary task.",
+      "use": [
+        { "harness": "claude", "model": "opus", "effort": "high", "floor": { "scope": "all_models", "min_percent": 40 } },
+        { "harness": "codex", "model": "gpt-6-astra", "effort": "high" }
+      ]
+    }
+  ],
+  "default": [
+    { "harness": "codex", "model": "gpt-6-astra", "effort": "high" },
+    { "harness": "claude", "model": "opus", "effort": "high", "floor": { "scope": "all_models", "min_percent": 40 } }
+  ]
+}
