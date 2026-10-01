@@ -1062,12 +1062,14 @@ This section is the single owner of the canonical schema and its per-field seman
 **Candidate selection policy**
 
 Set `"select": "candidate-order"` at the top level to prefer earlier profiles in every rule and the default array, or on one rule to opt in only that rule.
-After the existing eligibility, reasoning-class, runway, and declared-floor gates, this policy selects the first viable candidate in configured order; it does not allow order to override a gate or treat unknown evidence as healthy.
+At manual intake, this policy selects the first viable candidate in configured order after the `quota-array-dispatch` eligibility, reasoning-class, runway, and declared-floor gates.
+Typed resolution applies the same ordering after its documented rankability checks; its `clear` result remains subject to Firstmate's full intake gates as described below under **Firstmate retains the dispatch decision**.
+Neither path allows order to override a gate or treats unknown evidence as healthy.
 A rule-level `select` overrides the file-level value only for that rule's `use`; no match or a rule-floor fallback uses the file's policy for `default`.
 Omitting `select` everywhere preserves `quota-balanced`: all passing candidates have equal configured preference and the highest known `spendPriority` wins, with genuine scalar ties escalating.
 A rule can explicitly set `"select": "quota-balanced"` to retain that behavior inside an ordered file.
 Other values, including null and non-string values, are configuration errors.
-Both firstmate's manual intake and typed resolution apply this policy; the [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy) owns selection and uncertainty handling.
+The [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy) owns manual selection and uncertainty handling.
 
 **Fields applied only by typed resolution**
 
