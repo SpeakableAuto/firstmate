@@ -26,9 +26,23 @@ fm_claude_profile_floor_valid() {
   ' >/dev/null 2>&1
 }
 
+# Admission needs proof of an agent-free pane, not a usable registration.
+# Keep this fallback local so other control paths retain their classifier.
+fm_claude_admission_agent_state() {  # <backend> <target>
+  local backend=$1 target=$2 verdict
+  [ -n "$target" ] || { printf 'unreadable'; return 0; }
+  verdict=$(fm_backend_agent_state "$backend" "$target")
+  if [ "$backend:$verdict" = herdr:unreadable ] \
+     && fm_backend_herdr_parse_target "$target" \
+     && [ "$(fm_backend_herdr_pane_process_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" = shell ]; then
+    verdict=dead
+  fi
+  printf '%s' "$verdict"
+}
+
 fm_claude_admission_check() {
   local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
-  local settings='{}' limits cap floor floors meta account backend target verdict absence count=0
+  local settings='{}' limits cap floor floors meta account backend target verdict absence count=0 counted='' task
   local snapshot row result gen started now recorded_harness recorded_family var
   local -a quota_env=(env)
   if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
@@ -73,8 +87,11 @@ fm_claude_admission_check() {
     [ -z "$account" ] || [ "$identity" = unknown ] || [ "$account" = unknown ] || [ "$account" = "$identity" ] || continue
     backend=$(fm_backend_of_meta "$meta")
     target=$(fm_backend_target_of_meta "$meta")
-    verdict=unreadable
-    [ -z "$target" ] || verdict=$(fm_backend_agent_state "$backend" "$target")
+    if fm_backend_source "$backend"; then
+      verdict=$(fm_claude_admission_agent_state "$backend" "$target")
+    else
+      verdict=unverified
+    fi
     if [ "$verdict" = missing ]; then
       absence=$(fm_control_endpoint_absence_verdict "$backend" "$target")
       case "${absence%%$'\t'*}" in
@@ -93,9 +110,11 @@ fm_claude_admission_check() {
         ;;
     esac
     count=$((count + 1))
+    task=${meta##*/}; task=${task%.meta}
+    counted="${counted:+$counted, }$task"
   done
   if [ "$count" -ge "$cap" ]; then
-    echo "error: Claude crew admission refused for account $identity: $count live or unverified crew, limit $cap; choose Codex or route to a second mate on another account" >&2
+    echo "error: Claude crew admission refused for account $identity: $count live or unverified crew, limit $cap; counted tasks: $counted; choose Codex or route to a second mate on another account" >&2
     return 1
   fi
   if [ "$identity" = unknown ]; then

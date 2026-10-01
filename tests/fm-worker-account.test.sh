@@ -425,7 +425,9 @@ cat "$FM_TEST_QUOTA"
 SH
   chmod +x "$FAKEBIN/quota-axi"
   export FM_TEST_QUOTA="$CASE/quota.json"
-  export PATH="$FAKEBIN:$PATH"
+  # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
+  local PATH="$FAKEBIN:$PATH"
+  export PATH
   quota_fixture() {
     jq -n --argjson pct "$1" '{schemaVersion:5,providers:[{provider:"claude",state:{stale:false},windows:[{id:"five_hour",kind:"session",percentRemaining:$pct}],quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
   }
@@ -571,6 +573,7 @@ SH
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "three crew refuse despite unknown quota: $out"
   assert_contains "$out" '3 live or unverified crew, limit 3' 'default cap applies'
+  assert_contains "$out" 'counted tasks: crew1, crew2, crew3' 'refusal names every counted task'
   echo dead > "$CASE/verdict-fm-3"
   out=$(check_admission); rc=$?
   expect_code 0 "$rc" "dead crew do not consume a slot: $out"
@@ -600,6 +603,100 @@ SH
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "legacy unknown accounts count conservatively: $out"
   pass 'Claude admission enforces fixed and selected floors, strict overrides, and fail-closed quota evidence'
+)
+
+# Exercise admission through a cold-loaded backend classifier and process probe.
+# The Herdr protocol and absence recheck are canned; the shell-only proof reads
+# a real process table. No Herdr lifecycle command is permitted by this fixture.
+test_claude_admission_checks_processes_without_a_registration() (
+  . "$ROOT/bin/fm-backend.sh"
+  . "$ROOT/bin/fm-claude-admission-lib.sh"
+  new_case admission-processes claude
+  # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
+  local PATH="$FAKEBIN:$PATH"
+  export PATH
+  local out rc fixture_shell_pid fixture_mode=exited fixture_registration=unknown fixture_absence=missing
+  bash -c 'while :; do sleep 1; done' &
+  fixture_shell_pid=$!
+  trap 'kill "$fixture_shell_pid" 2>/dev/null || true; wait "$fixture_shell_pid" 2>/dev/null || true' EXIT
+  printf 'harness=claude\nkind=ship\nbackend=herdr\nwindow=test:w1:p2\naccount=ordinary\n' \
+    > "$HOME_DIR/state/parked.meta"
+  printf '%s\n' '{"claude_admission":{"max_concurrent":1}}' > "$HOME_DIR/config/crew-dispatch.json"
+  cat > "$FAKEBIN/herdr" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  'pane get w1:p2 --session test')
+        if [ "$FM_TEST_HERDR_MODE" = gone ]; then
+          printf '%s\n' '{"error":{"code":"pane_not_found"}}'
+        else
+          printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p2"}}}'
+        fi
+        ;;
+  'agent get w1:p2 --session test')
+        printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "$FM_TEST_HERDR_REGISTRATION"
+        ;;
+  'status --json --session test')
+        printf '%s\n' '{"server":{"running":true}}'
+        ;;
+  'pane process-info --pane w1:p2 --session test')
+        case "$FM_TEST_HERDR_MODE" in
+          unreadable) exit 1 ;;
+          running)
+            printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_processes":[{"pid":4243,"name":"claude","argv0":"claude"}]}}}' ;;
+          exited)
+            printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":%s,"foreground_processes":[{"pid":%s,"name":"bash","argv0":"bash"}]}}}\n' "$FM_TEST_HERDR_SHELL_PID" "$FM_TEST_HERDR_SHELL_PID" ;;
+        esac
+        ;;
+  *)
+        printf '%s\n' "$*" >> "$FM_TEST_HERDR_UNEXPECTED"
+        exit 1
+        ;;
+esac
+SH
+  chmod +x "$FAKEBIN/herdr"
+  export FM_TEST_HERDR_MODE FM_TEST_HERDR_REGISTRATION
+  export FM_TEST_HERDR_SHELL_PID="$fixture_shell_pid"
+  export FM_TEST_HERDR_UNEXPECTED="$CASE/unexpected-herdr-call"
+  fm_backend_source tmux || fail 'the mixed-backend fixture could not load tmux'
+  check_process_admission() {
+    fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary '' '' 2>&1
+  }
+  run_process_admission() {
+    check_process_admission > "$CASE/admission.out" 2>&1
+    rc=$?
+    out=$(cat "$CASE/admission.out")
+  }
+  for fixture_registration in unknown idle; do
+    fixture_mode=exited
+    FM_TEST_HERDR_MODE=$fixture_mode FM_TEST_HERDR_REGISTRATION=$fixture_registration run_process_admission
+    expect_code 0 "$rc" "an exited Claude with $fixture_registration registration releases its slot: $out"
+    fixture_mode=running
+    FM_TEST_HERDR_MODE=$fixture_mode FM_TEST_HERDR_REGISTRATION=$fixture_registration run_process_admission
+    expect_code 1 "$rc" "a running Claude with $fixture_registration registration consumes its slot: $out"
+    assert_contains "$out" 'counted tasks: parked' 'refusal names the counted task'
+    fixture_mode=unreadable
+    FM_TEST_HERDR_MODE=$fixture_mode FM_TEST_HERDR_REGISTRATION=$fixture_registration run_process_admission
+    expect_code 1 "$rc" "an unreadable process probe with $fixture_registration registration consumes its slot: $out"
+    assert_contains "$out" 'counted tasks: parked' 'unreadable task remains actionable'
+  done
+  fm_backend_herdr_endpoint_absence_recheck() {
+    : > "$CASE/absence-recheck"
+    printf '%s' "$fixture_absence"
+  }
+  fixture_mode=gone
+  fixture_absence=missing
+  FM_TEST_HERDR_MODE=$fixture_mode FM_TEST_HERDR_REGISTRATION=$fixture_registration run_process_admission
+  expect_code 0 "$rc" "a confirmed gone endpoint releases its slot after the absence recheck: $out"
+  assert_present "$CASE/absence-recheck" 'a missing endpoint uses the shared absence proof'
+  fixture_absence=alive
+  run_process_admission
+  expect_code 1 "$rc" "an endpoint found alive during the absence recheck consumes its slot: $out"
+  assert_contains "$out" 'counted tasks: parked' 'a live endpoint found by the recheck remains actionable'
+  fixture_absence=unreadable
+  run_process_admission
+  expect_code 1 "$rc" "an unproved endpoint absence conservatively consumes its slot: $out"
+  assert_absent "$CASE/unexpected-herdr-call" 'the fixture must not invoke Herdr lifecycle commands'
+  pass 'Claude admission reads process evidence and preserves endpoint absence proof'
 )
 
 test_spawn_enforces_claude_admission() {
@@ -715,6 +812,7 @@ test_spawn_help_describes_claude_admission_boundaries() {
   pass 'spawn help describes Claude identity admission and its raw-shell boundary'
 }
 
+test_claude_admission_checks_processes_without_a_registration || exit 1
 test_claude_admission_limits
 test_spawn_enforces_claude_admission
 test_concurrent_claude_spawns_share_last_slot

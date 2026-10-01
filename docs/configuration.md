@@ -1152,6 +1152,8 @@ An unpinned canonical launch refuses when a higher-precedence Claude credential 
 Every admitted launch removes higher-precedence pane credentials and explicitly selects the same config root used for its quota snapshot.
 Unpinned raw commands count against every account and are refused because their credential selection and quota cannot be proved.
 Backend recovery-grade liveness excludes confirmed dead agents and endpoints whose absence is proven; uncertain liveness counts conservatively, and a just-published launch reserves its slot for 60 seconds while the process starts.
+For Herdr, an unreadable agent registration falls back to the existing process probe: a shell-only pane with no harness descendants releases its slot, while an unreadable process view still counts.
+A concurrency refusal lists every counted task.
 Backends without a recovery classifier retain their recorded slots conservatively until teardown removes the record.
 A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
