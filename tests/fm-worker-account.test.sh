@@ -606,8 +606,8 @@ SH
 )
 
 # Exercise admission through the real backend classifier and process probe.
-# Only the Herdr protocol is canned; the shell-only proof reads a real process
-# table. No Herdr lifecycle command is permitted by this fixture.
+# The Herdr protocol and absence recheck are canned; the shell-only proof reads
+# a real process table. No Herdr lifecycle command is permitted by this fixture.
 test_claude_admission_checks_processes_without_a_registration() (
   . "$ROOT/bin/fm-backend.sh"
   . "$ROOT/bin/fm-claude-admission-lib.sh"
@@ -616,7 +616,7 @@ test_claude_admission_checks_processes_without_a_registration() (
   # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
   local PATH="$FAKEBIN:$PATH"
   export PATH
-  local out rc fixture_shell_pid fixture_mode=exited fixture_registration=unknown
+  local out rc fixture_shell_pid fixture_mode=exited fixture_registration=unknown fixture_absence=missing
   bash -c 'while :; do sleep 1; done' &
   fixture_shell_pid=$!
   trap 'kill "$fixture_shell_pid" 2>/dev/null || true; wait "$fixture_shell_pid" 2>/dev/null || true' EXIT
@@ -645,6 +645,10 @@ test_claude_admission_checks_processes_without_a_registration() (
       *) printf '%s\n' "$*" >> "$CASE/unexpected-herdr-call"; return 1 ;;
     esac
   }
+  fm_backend_herdr_endpoint_absence_recheck() {
+    : > "$CASE/absence-recheck"
+    printf '%s' "$fixture_absence"
+  }
   check_process_admission() {
     fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary '' '' 2>&1
   }
@@ -662,10 +666,19 @@ test_claude_admission_checks_processes_without_a_registration() (
     assert_contains "$out" 'counted tasks: parked' 'unreadable task remains actionable'
   done
   fixture_mode=gone
+  fixture_absence=missing
   out=$(check_process_admission); rc=$?
-  expect_code 0 "$rc" "a confirmed gone endpoint releases its slot without starting a server: $out"
-  assert_absent "$CASE/unexpected-herdr-call" 'admission must use only read-only Herdr calls'
-  pass 'Claude admission reads process evidence despite unknown registrations and stays read-only'
+  expect_code 0 "$rc" "a confirmed gone endpoint releases its slot after the absence recheck: $out"
+  assert_present "$CASE/absence-recheck" 'a missing endpoint uses the shared absence proof'
+  fixture_absence=alive
+  out=$(check_process_admission); rc=$?
+  expect_code 1 "$rc" "an endpoint found alive during the absence recheck consumes its slot: $out"
+  assert_contains "$out" 'counted tasks: parked' 'a live endpoint found by the recheck remains actionable'
+  fixture_absence=unreadable
+  out=$(check_process_admission); rc=$?
+  expect_code 1 "$rc" "an unproved endpoint absence conservatively consumes its slot: $out"
+  assert_absent "$CASE/unexpected-herdr-call" 'the fixture must not invoke Herdr lifecycle commands'
+  pass 'Claude admission reads process evidence and preserves endpoint absence proof'
 )
 
 test_spawn_enforces_claude_admission() {

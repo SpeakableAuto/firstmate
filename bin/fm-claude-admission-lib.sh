@@ -7,8 +7,7 @@
 # Usage: fm_claude_admission_check <config> <state> <id> <identity> <floor-scope> <floor-min-percent>
 # The caller supplies the selected Claude config root, or ordinary, as identity.
 # Existing records without identity are conservatively charged to every account.
-# Agent absence is proved by backend process reads, never by task status events.
-# Admission is read-only: it never starts a server to recheck endpoint absence.
+# Backend recovery-grade liveness is reused, never inferred from status events.
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-quota-axi-lib.sh"
@@ -27,44 +26,23 @@ fm_claude_profile_floor_valid() {
   ' >/dev/null 2>&1
 }
 
-# Admission needs proof of an agent-free pane, not a usable registration or a
-# recoverable endpoint. Keep this policy local: recovery/teardown still need
-# their stronger endpoint-ownership checks before they can mutate anything.
+# Admission needs proof of an agent-free pane, not a usable registration.
+# Keep this fallback local so other control paths retain their classifier.
 fm_claude_admission_agent_state() {  # <backend> <target>
   local backend=$1 target=$2 verdict
   [ -n "$target" ] || { printf 'unreadable'; return 0; }
-  fm_backend_source "$backend" || { printf 'unverified'; return 0; }
   verdict=$(fm_backend_agent_state "$backend" "$target")
-  case "$backend:$verdict" in
-    herdr:unreadable)
-      # An unknown/malformed agent registration can hide a perfectly readable
-      # process view. Reuse the existing shell + descendant proof, never text
-      # left on screen by the exited agent.
-      if fm_backend_herdr_parse_target "$target"; then
-        case "$(fm_backend_herdr_pane_process_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" in
-          shell) verdict=dead ;;
-          agent) verdict=alive ;;
-        esac
-      fi
-      ;;
-    herdr:missing)
-      # A positively absent pane or stopped recorded session holds no agent.
-      # The control-plane absence recheck starts that server; admission must
-      # not invoke it just to count slots.
-      verdict=dead
-      ;;
-    *:missing)
-      # In particular, tmux metadata does not bind a socket identity: absence
-      # from this server cannot prove absence from the recorded endpoint.
-      verdict=unreadable
-      ;;
-  esac
+  if [ "$backend:$verdict" = herdr:unreadable ] \
+     && fm_backend_herdr_parse_target "$target" \
+     && [ "$(fm_backend_herdr_pane_process_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" = shell ]; then
+    verdict=dead
+  fi
   printf '%s' "$verdict"
 }
 
 fm_claude_admission_check() {
   local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
-  local settings='{}' limits cap floor floors meta account backend target verdict count=0 counted='' task
+  local settings='{}' limits cap floor floors meta account backend target verdict absence count=0 counted='' task
   local snapshot row result gen started now recorded_harness recorded_family var
   local -a quota_env=(env)
   if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
@@ -110,6 +88,13 @@ fm_claude_admission_check() {
     backend=$(fm_backend_of_meta "$meta")
     target=$(fm_backend_target_of_meta "$meta")
     verdict=$(fm_claude_admission_agent_state "$backend" "$target")
+    if [ "$verdict" = missing ]; then
+      absence=$(fm_control_endpoint_absence_verdict "$backend" "$target")
+      case "${absence%%$'\t'*}" in
+        gone|dead) verdict=dead ;;
+        *) verdict=unreadable ;;
+      esac
+    fi
     case "$verdict" in
       dead)
         # Launch publication precedes vendor startup. Reserve that slot while
