@@ -1126,6 +1126,7 @@ crew_dispatch_validate() {
       else "default profile model and effort must be non-empty strings when present"
       end
     elif $typed and has("default") and malformed_profile_floors([profiles(.default)[]?]) then "default profile floor needs scope and min_percent 0..100"
+    elif has("placement") and ((.placement | type) != "object" or (.placement | has("min_advantage") and ((.min_advantage | type) != "number" or .min_advantage < 0))) then "placement must be an object whose optional min_advantage is a number of at least 0"
     else
       (configured_profiles
         | map(.harness)

@@ -53,10 +53,19 @@
 #     reason: <why the status is not clear>
 #     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
+#     placement: local | secondmate <id> (<why>)   (cross-home placement only)
+#     home: <id> best=<harness>:<model> scope=.. remaining=..% spendPriority=.. runway=.. | home: <id> unknown: <reason>: disclosed uncertainty
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
 #   escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie
 #   error     -> API, network, response, or quota-axi failure; decide as today
+#   placement and home lines appear only with --project, for a clear, tied, or
+#   nothing-rankable result, when a remote route in data/secondmates.md lists
+#   that project and this home has not registered it local-only. Each such
+#   machine's quota comes from bin/fm-quota-snapshot.sh --secondmate and is
+#   judged by the same candidate gates; the quota-array-dispatch skill owns the
+#   placement rule, and config/crew-dispatch.json placement.min_advantage
+#   (default 0.5) is its margin. Status and the profile line never change.
 #   Every outcome exits 0 so an intake is never blocked by this tool.
 #   Exit 2 only for a usage or configuration error (unreadable brief, an
 #   existing unreadable rules file, malformed rules, or missing jq), which is
@@ -78,6 +87,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
@@ -89,6 +99,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-timing-lib.sh"
 # shellcheck source=bin/fm-brief-heading-lib.sh
 . "$SCRIPT_DIR/fm-brief-heading-lib.sh"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 
 CONFIDENCE_FLOOR=0.6
 TS_MODEL=jev-latest
@@ -196,6 +208,7 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
   elif has("default") and duplicate_profiles(profiles(.default)) then "default must not contain duplicate harness, model, and effort profiles"
   elif has("default") and any(profiles(.default)[]; (verified(.harness) | not)) then "each default profile must name a verified harness"
   elif has("default") and any(profiles(.default)[]; (effort_ok(.harness; .model; .effort) | not)) then "each default profile effort must be supported by its harness and model"
+  elif has("placement") and ((.placement | type) != "object" or (.placement | has("min_advantage") and ((.min_advantage | type) != "number" or .min_advantage < 0))) then "placement must be an object whose optional min_advantage is a number of at least 0"
   else empty end
 ' "$RULES" 2>/dev/null) || die "malformed rules file: $RULES_PATH (not JSON)"
 [ -z "$rules_err" ] || die "malformed rules file: $RULES_PATH - $rules_err"
@@ -348,10 +361,11 @@ command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
 quota-axi --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
 fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
 
-# ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
-RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" \
-  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ"'
-  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
+# Candidate evaluation against one snapshot bound to $q, with $pmap in scope.
+# The local resolution and the cross-home placement below both splice it in,
+# so a second mate's machine is judged by exactly the same gates.
+# shellcheck disable=SC2016  # jq program text, not shell expansion
+CANDIDATE_JQ='
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
@@ -421,6 +435,13 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
     end;
+'
+
+# ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
+RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" \
+  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ"'
+  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
+'"$CANDIDATE_JQ"'
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
@@ -493,6 +514,85 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     end
   end') || emit_error "resolution failed"
 
+# ---- cross-home placement: the same candidates on each second mate's machine ---
+# Runs only for a named project on a clear result or a tie or nothing-rankable
+# escalation, and only for remote routes whose registered projects include it
+# when this home has not registered the project local-only. Each machine's
+# snapshot comes from fm-quota-snapshot.sh --secondmate (bounded, briefly
+# cached, read-only); an unreachable or unknown machine is disclosed on its own
+# home line and never changes the local result.
+placement_ids() {
+  local line entry mode
+  local -a entries
+  [ -n "$PROJECT" ] || return 0
+  [ -f "$DATA/secondmates.md" ] && [ ! -L "$DATA/secondmates.md" ] || return 0
+  mode=$("$SCRIPT_DIR/fm-project-mode.sh" "$PROJECT" 2>/dev/null) || return 0
+  [ "${mode%% *}" != local-only ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '- '*) ;; *) continue ;; esac
+    secondmate_registry_parse_line "$line" || continue
+    [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] && [ -n "$SECONDMATE_REGISTRY_PROJECTS" ] || continue
+    IFS=',' read -ra entries <<< "$SECONDMATE_REGISTRY_PROJECTS"
+    for entry in "${entries[@]}"; do
+      entry=${entry#"${entry%%[![:space:]]*}"}
+      entry=${entry%"${entry##*[![:space:]]}"}
+      if [ "$entry" = "$PROJECT" ]; then
+        printf '%s\n' "$SECONDMATE_REGISTRY_ID"
+        break
+      fi
+    done
+  done < "$DATA/secondmates.md"
+}
+
+placement_stage=$(jq -r 'if .status == "clear" or (.status == "escalate" and (.reason == "no rankable eligible candidate" or .reason == "genuine spendPriority tie")) then "yes" else "no" end' <<<"$RESULT")
+if [ "$placement_stage" = yes ]; then
+  PLACEMENT_IDS=$(placement_ids)
+else
+  PLACEMENT_IDS=
+fi
+if [ -n "$PLACEMENT_IDS" ]; then
+  HOMES=$(mktemp) || emit_error "mktemp failed"
+  SNAP=$(mktemp) || { rm -f "$HOMES"; emit_error "mktemp failed"; }
+  trap 'rm -f "$RULES" "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT" "$HOMES" "$SNAP"' EXIT
+  while IFS= read -r home_id; do
+    if snap_err=$("$SCRIPT_DIR/fm-quota-snapshot.sh" --secondmate "$home_id" 2>&1 >"$SNAP"); then
+      jq -c --arg id "$home_id" '{id: $id, snapshot: .}' "$SNAP"
+    else
+      snap_err=${snap_err#quota-snapshot: unavailable (}
+      snap_err=${snap_err%)}
+      jq -nc --arg id "$home_id" --arg reason "${snap_err:-quota unavailable}" '{id: $id, snapshot: null, reason: $reason}'
+    fi
+  done <<<"$PLACEMENT_IDS" > "$HOMES" || emit_error "placement evidence failed"
+  RESULT=$(jq -n --argjson pmap "$PMAP" --argjson result "$RESULT" --slurpfile rules "$RULES" --slurpfile homes "$HOMES" "$FM_QUOTA_ROW_JQ"'
+    ($rules[0].placement.min_advantage // 0.5) as $margin |
+    ($result.candidates | map(.profile)) as $profiles |
+    ([$result.candidates[] | select(.eligible and ((.unranked // false) | not)) | .spendPriority] | max) as $local |
+    [$homes[] | . as $h |
+      if $h.snapshot == null then {id: $h.id, reason: $h.reason}
+      else ($h.snapshot) as $q |
+        '"$CANDIDATE_JQ"'
+        ([$profiles[] | evaluate(.) | select(.eligible and ((.unranked // false) | not))]) as $elig |
+        if ($elig | length) == 0 then {id: $h.id, reason: "no rankable eligible candidate there"}
+        else {id: $h.id, best: ($elig | max_by(.spendPriority))} end
+      end] as $evaluated |
+    ([$evaluated[] | select(.best)]) as $ranked |
+    (if $local == null then $ranked
+     else [$ranked[] | select(.best.spendPriority - $local >= $margin)] end) as $better |
+    (if ($better | length) == 0 then
+       {home: "local",
+        reason: (if $local == null then "no second mate has rankable quota either"
+                 else "no second mate beats local spendPriority \($local) by \($margin)" end)}
+     else ($better | max_by(.best.spendPriority)) as $top |
+       if ([$better[] | select(.best.spendPriority == $top.best.spendPriority)] | length) > 1
+       then {home: "local", reason: "second mates tie at spendPriority \($top.best.spendPriority)"}
+       else {home: $top.id,
+             reason: (if $local == null then "no local candidate is rankable; \($top.id) has spendPriority \($top.best.spendPriority)"
+                      else "\($top.id) spendPriority \($top.best.spendPriority) beats local \($local) by at least \($margin)" end)}
+       end
+     end) as $decision |
+    $result + {placement: ($decision + {homes: $evaluated})}') || emit_error "placement resolution failed"
+fi
+
 TEXT=$(jq -r '
   def flat: tostring | gsub("[\t\r\n]"; " ");
   def show($value): ($value // "-") | flat;
@@ -513,6 +613,12 @@ TEXT=$(jq -r '
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
-      + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end) else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
+      + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end) else empty end),
+  (if .placement then
+     "  placement: \(if .placement.home == "local" then "local" else "secondmate \(.placement.home | flat)" end) (\(.placement.reason | flat))",
+     (.placement.homes[] | "  home: \(.id | flat)"
+       + (if .best then "  best=\(.best.profile.harness | flat):\(show(.best.profile.model))  scope=\(show(.best.scope))  remaining=\(show(.best.pct))%  spendPriority=\(show(.best.spendPriority))  runway=\(show(.best.runway))"
+          else "  unknown: \(.reason | flat): disclosed uncertainty" end))
+   else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
 printf '%s\n' "$TEXT"
 exit 0

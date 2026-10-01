@@ -3,8 +3,11 @@ name: quota-array-dispatch
 description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
   array from quota-axi's default TOON, ranking by spendPriority after three
-  orthogonal gates.
-  Load when a dispatch rule or default resolves to more than one profile candidate.
+  orthogonal gates, and for placing a task on a remote second mate's machine
+  when its quota headroom is materially better.
+  Load when a dispatch rule or default resolves to more than one profile
+  candidate, or when a registered remote second mate's projects include the
+  task's project.
 user-invocable: false
 metadata:
   internal: true
@@ -132,3 +135,22 @@ Report duplicate concrete profiles as a configuration error.
 Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, `spendPriority`, and runway-versus-horizon result.
 A blocked credential report must name `harness`, `model`, authentication surface, and concrete failure evidence; never emit a bare `Grok unauthenticated` statement.
 Never conclude with an unexplained "best quota" label.
+
+## Cross-home placement
+
+Each remote second mate runs on its own machine with its own accounts, so its quota is separate headroom the fleet can spend.
+This section owns when a task goes to a remote second mate because of quota; scope fit stays the ordinary secondmate routing judgment in `AGENTS.md` section 7.
+
+A remote second mate is a placement candidate only when all of these hold:
+
+- Its route in `data/secondmates.md` is remote and its `projects:` list names the task's project.
+- This home has not registered the project `local-only`.
+- Its scope fits the work, which firstmate judges as for any secondmate routing.
+
+Read each candidate machine's quota with `bin/fm-quota-snapshot.sh --secondmate <id>`; its header owns the bound, cache, and failure mechanics.
+Evaluate the same rule's candidate profiles against that snapshot with the same three gates, and take that machine's best known `spendPriority`.
+Place the task on the second mate whose best exceeds the local best by at least `placement.min_advantage` (default 0.5, declared in `config/crew-dispatch.json`), or on one with a rankable candidate when no local candidate is rankable.
+Otherwise keep the task local: similar headroom, a tie between second mates, or no comparison at all is no reason to move work off this machine.
+An unreachable machine or unknown remote quota is disclosed uncertainty about that machine only; it never blocks, delays, or downgrades local dispatch.
+Placing a task sends it through the ordinary secondmate routing path, and the second mate resolves its own worker profile from its own quota.
+The opt-in [typed resolver](../../../docs/configuration.md#typed-dispatch-resolution-env-typesafe_api_key) applies this rule in code and prints `placement:` and `home:` lines; without it, apply the same rule by hand at intake.
