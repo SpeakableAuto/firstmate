@@ -1181,7 +1181,7 @@ The recovery must be a fresh, explicitly reused reading for the same account row
 Firstmate retains quota-axi's availability, runway, and spend priority rather than deriving a ranking from stale window percentages.
 The resolver and admission guard disclose the cached reading's age in seconds.
 Expired, malformed, future-dated, missing, or non-rate-limit failure evidence remains unknown or unverifiable, and admission still applies the same five-hour floor and concurrent crew cap.
-An explicit config root keeps its isolated profile-only vendor read, then retries a rate limit without `--profile-only` under the same pinned `CLAUDE_CONFIG_DIR` and credential-shedding environment so quota-axi can reuse only that exact credential context's cache, never the ordinary account's cache.
+Cached recovery applies only to unpinned accounts; pinned-account reads remain cacheless and their rate-limit recovery is a known follow-up.
 `tests/fm-quota-snapshot.test.sh`, `tests/fm-dispatch-resolve.test.sh`, and `tests/fm-worker-account.test.sh` exercise these boundaries without vendor access.
 
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)

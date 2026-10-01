@@ -419,13 +419,7 @@ test_claude_admission_limits() (
 #!/usr/bin/env bash
 case "$*" in
   *--max-age*)
-    case " $* " in *' --profile-only '*) ;; *)
-      if [ -n "${FM_TEST_CACHED_QUOTA:-}" ] &&
-         [ "${FM_TEST_CACHED_ACCOUNT:-ordinary}" = "${CLAUDE_CONFIG_DIR:-ordinary}" ]; then
-        cat "$FM_TEST_CACHED_QUOTA"
-        exit
-      fi ;;
-    esac ;;
+    if [ -n "${FM_TEST_CACHED_QUOTA:-}" ]; then cat "$FM_TEST_CACHED_QUOTA"; exit; fi ;;
 esac
 cat "$FM_TEST_QUOTA"
 SH
@@ -436,7 +430,7 @@ SH
     jq -n --argjson pct "$1" '{schemaVersion:5,providers:[{provider:"claude",state:{stale:false},windows:[{id:"five_hour",kind:"session",percentRemaining:$pct}],quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
   }
   check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary "${1:-}" "${2:-}" 2>&1; }
-  local out rc n cached_account
+  local out rc n
   export FM_TEST_CACHED_QUOTA="$CASE/cached-quota.json"
   for age in 300 1200; do
     quota_fixture 80
@@ -485,23 +479,15 @@ SH
   jq '.providers[].state = {status:"fresh",stale:false,reused:true,
     refreshedAt:((now-300)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"
   cp "$CASE/rate-limited.json" "$FM_TEST_QUOTA"
-  export FM_TEST_CACHED_ACCOUNT="$CASE/profile"
+  unset FM_TEST_CACHED_QUOTA
   out=$(fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate "$CASE/profile" "" "" 2>&1); rc=$?
-  expect_code 0 "$rc" "a pinned account reuses its own recent cached quota: $out"
-  assert_contains "$out" 'cached reading ' 'pinned admission exposes its cache age'
-  for cached_account in "$CASE/other-profile" ordinary; do
-    export FM_TEST_CACHED_ACCOUNT="$cached_account"
-    out=$(fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate "$CASE/profile" "" "" 2>&1); rc=$?
-    expect_code 1 "$rc" "a pinned account refuses cache evidence from $cached_account: $out"
-    assert_contains "$out" 'quota floor is unverifiable' 'a different credential context cannot establish the floor'
-  done
-  unset FM_TEST_CACHED_ACCOUNT
+  expect_code 1 "$rc" "a rate-limited pinned account remains unverifiable: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'pinned-account cache recovery remains a follow-up'
   jq '.providers[].state.error = "authentication failed"' "$FM_TEST_QUOTA" > "$CASE/auth-failure.json"
   cp "$CASE/auth-failure.json" "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "other failures cannot admit from a recent cache: $out"
   assert_contains "$out" 'quota floor is unverifiable' 'authentication failure stays unknown'
-  unset FM_TEST_CACHED_QUOTA
   quota_fixture 39
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "a 39% session refuses: $out"
@@ -579,13 +565,7 @@ SH
 #!/usr/bin/env bash
 case "$*" in
   *--max-age*)
-    case " $* " in *' --profile-only '*) ;; *)
-      if [ -n "${FM_TEST_CACHED_QUOTA:-}" ] &&
-         [ "${FM_TEST_CACHED_ACCOUNT:-ordinary}" = "${CLAUDE_CONFIG_DIR:-ordinary}" ]; then
-        cat "$FM_TEST_CACHED_QUOTA"
-        exit
-      fi ;;
-    esac ;;
+    if [ -n "${FM_TEST_CACHED_QUOTA:-}" ]; then cat "$FM_TEST_CACHED_QUOTA"; exit; fi ;;
 esac
 cat "$FM_TEST_QUOTA"
 SH
