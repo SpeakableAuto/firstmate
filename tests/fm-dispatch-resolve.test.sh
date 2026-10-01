@@ -1206,6 +1206,14 @@ assert_contains "$out" 'home: peer  best=cursor:cursor-grok-4.6-medium  scope=al
 assert_equals peer-host "$(cat "$SSH_CALLS")" "the remote quota is read through the registered route"
 pass "placement prefers a second mate whose headroom is materially better"
 
+write_quota "$REMOTE_QUOTA" 0.54 0.5
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-near-tie.json"
+mv "$TMP_ROOT/remote-near-tie.json" "$REMOTE_QUOTA"
+placement_case ok --project pager
+assert_contains "$out" 'home: peer  best=claude:sonnet' "remote configured order selects the first near-tied candidate"
+assert_contains "$out" 'near-tie broken by configured order: home=peer claude:sonnet=0.5, cursor:cursor-grok-4.6-medium=0.54 (within 0.05)' "remote near-tie evidence names the home, candidates, and band"
+pass "cross-home placement reports remote quota-balanced near-ties"
+
 write_quota "$REMOTE_QUOTA" 1.1
 placement_case ok --project pager
 assert_contains "$out" 'placement: local (no second mate beats local spendPriority 0.7597 by more than 0.5)' "similar remote headroom keeps the task local"

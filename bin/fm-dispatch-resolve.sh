@@ -55,7 +55,7 @@
 #     selection: quota-balanced | candidate-order
 #     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
 #     passed over: [home=<id>] <harness>:<model>: projected to run out before reset; later eligible candidate has runway through_reset
-#     near-tie broken by configured order: <harness>:<model>=<spendPriority>, ... (within <band>)   (quota-balanced only)
+#     near-tie broken by configured order: [home=<id>] <harness>:<model>=<spendPriority>, ... (within <band>)   (quota-balanced only)
 #     profile: --harness <h> [--model <m>] [--effort <e>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]     (status clear only)
 #     placement: local | secondmate <id> (<why>)   (cross-home placement only)
 #     home: <id> best=<harness>:<model> scope=.. remaining=..% spendPriority=.. runway=.. [placement-blocked=..] | home: <id> unknown: <reason>: disclosed uncertainty
@@ -385,6 +385,9 @@ CANDIDATE_JQ='
       [$eligible[] | select($top - .spendPriority <= near_tie_band + 1e-9)] as $near |
       {best: $near[0], near_tie: (if ($near | length) > 1 then $near else null end)}
     end;
+  def choice_evidence($pick):
+    {passed_over: ($pick.passed_over // [])}
+    + (if $pick.near_tie then {near_tie: $pick.near_tie, near_tie_band: near_tie_band} else {} end);
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
   def bare($m): ($m | split("/") | last);
@@ -524,8 +527,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", note: $sel.note, candidates: $cands}
     else
       (ranked_choice($elig; $mode)) as $pick |
-      $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $pick.best, passed_over: ($pick.passed_over // [])}
-        + (if $pick.near_tie then {near_tie: $pick.near_tie, near_tie_band: near_tie_band} else {} end)
+      $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $pick.best}
+        + choice_evidence($pick)
         + (if ($unranked | length) > 0 then
              {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
            else {} end)
@@ -605,8 +608,8 @@ if [ -n "$PLACEMENT_IDS" ]; then
           else (ranked_choice($elig; $sel.mode)) as $pick |
             ($pick.best) as $best |
             if $best.runway != "through_reset"
-            then {id: $h.id, best: $best, placement_blocked: "limiting runway \($best.runway // "unknown") is not through_reset", note: $sel.note}
-            else {id: $h.id, best: $best, note: $sel.note, passed_over: ($pick.passed_over // [])}
+            then {id: $h.id, best: $best, placement_blocked: "limiting runway \($best.runway // "unknown") is not through_reset", note: $sel.note} + choice_evidence($pick)
+            else {id: $h.id, best: $best, note: $sel.note} + choice_evidence($pick)
             end
           end
         end
@@ -670,7 +673,11 @@ TEXT=$(jq -r '
        + (if .placement_blocked then "  placement-blocked=\(.placement_blocked | flat)" else "" end)
        + (if .note then "  note=\(.note | flat)" else "" end)),
      (.placement.homes[] | .id as $home | .passed_over[]? |
-       "  passed over: home=\($home | flat) \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset")
+       "  passed over: home=\($home | flat) \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset"),
+     (.placement.homes[] | .id as $home | select(.near_tie) |
+       "  near-tie broken by configured order: home=\($home | flat) "
+       + ([.near_tie[] | "\(.profile.harness | flat):\(show(.profile.model))=\(show(.spendPriority))"] | join(", "))
+       + " (within \(.near_tie_band | flat))")
    else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
 printf '%s\n' "$TEXT"
 exit 0

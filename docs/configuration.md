@@ -1069,8 +1069,8 @@ Neither path allows order to override a gate or treats unknown evidence as healt
 A rule-level `select` overrides the file-level value only for that rule's `use`; no match or a rule-floor fallback uses the file's policy for `default`.
 Omitting `select` everywhere preserves `quota-balanced`: the highest known `spendPriority` among passing candidates wins, and configured order only breaks a near-tie.
 A near-tie is every rankable passing candidate whose `spendPriority` is at most 0.05 below the highest; the earliest of them in configured order wins, exact ties included, and the result reports them on a `near-tie broken by configured order` line.
+Cross-home placement reports the same evidence for each affected second mate with `home=<id>`.
 The band is fixed at 0.05, one tenth of the 0.5 margin that [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) treats as material.
-Because `spendPriority` divides projected unused allowance by the remaining share of the cycle, a 0.05 gap is at most five percentage points of allowance, so a near-tie never overrides a meaningful headroom difference.
 A rule can explicitly set `"select": "quota-balanced"` to retain that behavior inside an ordered file.
 Other values, including null and non-string values, are configuration errors.
 The [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy) owns manual selection and uncertainty handling.
