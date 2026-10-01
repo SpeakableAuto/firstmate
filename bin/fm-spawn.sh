@@ -318,14 +318,18 @@
 #   worktree, or record exists and names the accepted values. The file is read
 #   on every spawn and relaunch, so a change reaches the next launch without a
 #   restart, and it is inherited into secondmate homes (bin/fm-config-inherit-lib.sh).
-# Claude crew admission: bin/fm-claude-admission-lib.sh enforces the limits
-# documented in docs/configuration.md "Claude crew admission" before provisioning.
+# Claude crew admission: bin/fm-claude-admission-lib.sh guards directly
+# classified Claude launches before provisioning. Arbitrary raw shell
+# expressions remain an operator escape hatch whose indirection may bypass it;
+# docs/configuration.md "Claude crew admission" owns the complete boundary.
 # Worker account pin (config/claude-account, config/pi-account):
-#   Opt-in. With no file, a Claude or Pi launch is unchanged: Claude still
-#   receives this process's own CLAUDE_CONFIG_DIR when it is set, and Pi the
-#   destination pane's ambient account. A present file pins every launch of
-#   that runner from this home - ship, scout, local secondmate, raw Claude
-#   command, and relaunch - to the declared account root, and the spawn
+#   Opt-in. With no file, Pi retains the destination pane's ambient account.
+#   Direct Claude crew instead requires a provable config root or ordinary
+#   account, checks that exact identity's quota, refuses higher-precedence
+#   caller credentials, and removes pane credentials that could outrank it.
+#   A present file pins every launch of that runner from this home - ship,
+#   scout, local secondmate, raw Claude command, and relaunch - to the declared
+#   account root, and the spawn
 #   refuses before any endpoint, worktree, or record exists when the file is
 #   malformed, the root is unusable, or the runner's own check says it is not
 #   signed in. A pinned Claude launch sheds the environment credentials Claude

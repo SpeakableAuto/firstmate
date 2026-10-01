@@ -28,7 +28,7 @@ fm_claude_profile_floor_valid() {
 
 fm_claude_admission_check() {
   local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
-  local settings='{}' limits cap floor floors meta account backend target verdict count=0
+  local settings='{}' limits cap floor floors meta account backend target verdict absence count=0
   local snapshot row result gen started now recorded_harness recorded_family var
   local -a quota_env=(env)
   if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
@@ -75,8 +75,15 @@ fm_claude_admission_check() {
     target=$(fm_backend_target_of_meta "$meta")
     verdict=unreadable
     [ -z "$target" ] || verdict=$(fm_backend_agent_state "$backend" "$target")
+    if [ "$verdict" = missing ]; then
+      absence=$(fm_control_endpoint_absence_verdict "$backend" "$target")
+      case "${absence%%$'\t'*}" in
+        gone|dead) verdict=dead ;;
+        *) verdict=unreadable ;;
+      esac
+    fi
     case "$verdict" in
-      dead|missing)
+      dead)
         # Launch publication precedes vendor startup. Reserve that slot while
         # a newly launched process is still coming up in its shell.
         gen=$(fm_meta_get "$meta" spawn_gen)

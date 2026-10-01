@@ -526,6 +526,12 @@ SH
   echo unreadable > "$CASE/verdict-fm-3"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "unverified crew conservatively consume a slot: $out"
+  sed '/^spawn_gen=/d' "$HOME_DIR/state/crew3.meta" > "$CASE/meta"
+  cp "$CASE/meta" "$HOME_DIR/state/crew3.meta"
+  echo missing > "$CASE/verdict-fm-3"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "tmux absence that cannot be proved conservatively consumes a slot: $out"
+  assert_contains "$out" '3 live or unverified crew, limit 3' 'an unproven missing endpoint counts against the cap'
   sed 's/kind=ship/kind=secondmate/' "$HOME_DIR/state/crew3.meta" > "$CASE/meta"
   cp "$CASE/meta" "$HOME_DIR/state/crew3.meta"
   out=$(check_admission); rc=$?
@@ -645,9 +651,20 @@ SH
   pass 'simultaneous Claude spawns cannot both take the last account slot'
 }
 
+test_spawn_help_describes_claude_admission_boundaries() {
+  local help
+  help=$("$ROOT/bin/fm-spawn.sh" --help) || fail 'fm-spawn.sh --help failed'
+  assert_contains "$help" 'Direct Claude crew instead requires a provable config root or ordinary' \
+    'spawn help must describe exact-identity Claude admission without a pin'
+  assert_contains "$help" 'Arbitrary raw shell' \
+    'spawn help must disclose the raw-shell admission escape hatch'
+  pass 'spawn help describes Claude identity admission and its raw-shell boundary'
+}
+
 test_claude_admission_limits
 test_spawn_enforces_claude_admission
 test_concurrent_claude_spawns_share_last_slot
+test_spawn_help_describes_claude_admission_boundaries
 
 test_unpinned_claude_launch_uses_the_admitted_identity
 test_claude_pin_selects_the_root_and_sheds_ambient_credentials

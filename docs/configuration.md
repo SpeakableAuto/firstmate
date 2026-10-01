@@ -1137,7 +1137,8 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 
 ## Claude crew admission
 
-`fm-spawn.sh` enforces Claude ship and scout admission, including explicit, raw, batch, and relaunch paths, independently of typed dispatch resolution; raw executable basenames in the shared `claude*` harness family receive the same guard and count.
+`fm-spawn.sh` enforces directly classified Claude ship and scout admission, including explicit, raw, batch, and relaunch paths, independently of typed dispatch resolution; raw executable basenames in the shared `claude*` harness family receive the same guard and count.
+Arbitrary raw shell expressions remain a deliberate operator escape hatch: admission classifies only their leading executable after transparent `env` and `exec` prefixes, so shell indirection such as `sh -c` can hide a Claude process and bypass the guard.
 Optional top-level `claude_admission` in `config/crew-dispatch.json` may only make the fixed safeguards stricter: `max_concurrent` is an integer from 1 through 3 (default `3`), and `min_session_percent` is a number from 40 through 100 (default `40`):
 
 ```json
@@ -1149,7 +1150,7 @@ Account identity is the declared worker pin or a provable absolute ambient Claud
 An unpinned canonical launch refuses when a higher-precedence Claude credential is set because that credential cannot be mapped to a quota profile.
 Every admitted launch removes higher-precedence pane credentials and explicitly selects the same config root used for its quota snapshot.
 Unpinned raw commands count against every account and are refused because their credential selection and quota cannot be proved.
-Backend recovery-grade liveness excludes confirmed missing or dead agents; uncertain liveness counts conservatively, and a just-published launch reserves its slot for 60 seconds while the process starts.
+Backend recovery-grade liveness excludes confirmed dead agents and endpoints whose absence is proven; uncertain liveness counts conservatively, and a just-published launch reserves its slot for 60 seconds while the process starts.
 Backends without a recovery classifier retain their recorded slots conservatively until teardown removes the record.
 A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
