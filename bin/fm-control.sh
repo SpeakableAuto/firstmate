@@ -6,6 +6,8 @@
 #        fm-control.sh <task-id> exit
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>]
+#                                         [--profile-floor-scope <scope>
+#                                          --profile-floor-min-percent <percent>]
 #                                         (--note <text> | --note-file <path>)
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
@@ -72,10 +74,10 @@
 #              already recorded for it.
 #              A prefixed raw-command basename cannot reconstruct its launch
 #              command, so relaunch requires an explicit --harness for it.
-#              A replacement Claude or Pi profile must also pass this home's
-#              worker account pin (bin/fm-worker-account-lib.sh) here, so a pin
-#              that no longer resolves or is signed out refuses before the old
-#              agent stops.
+#              A replacement Claude or Pi profile must pass this home's worker
+#              account pin, and direct Claude crew must pass the account cap
+#              and quota floors, before the old agent stops. The launch owner
+#              repeats Claude admission against current state.
 #              --note is required for a ship or scout, whose replacement
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
@@ -174,8 +176,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-worker-account-lib.sh
-. "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-claude-admission-lib.sh
+. "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 
 POLL=${FM_CONTROL_POLL:-0.5}
 SETTLE_WAIT=${FM_CONTROL_SETTLE_WAIT:-5}
@@ -233,9 +235,13 @@ fi
 NEW_HARNESS=
 NEW_MODEL=
 NEW_EFFORT=
+NEW_PROFILE_FLOOR_SCOPE=
+NEW_PROFILE_FLOOR_MIN_PERCENT=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
+PROFILE_FLOOR_SCOPE_SET=0
+PROFILE_FLOOR_MIN_PERCENT_SET=0
 NOTE=
 NOTE_SET=0
 control_want_value=
@@ -248,6 +254,8 @@ for control_arg in "$@"; do
       harness) NEW_HARNESS=$control_arg; HARNESS_SET=1 ;;
       model) NEW_MODEL=$control_arg; MODEL_SET=1 ;;
       effort) NEW_EFFORT=$control_arg; EFFORT_SET=1 ;;
+      profile-floor-scope) NEW_PROFILE_FLOOR_SCOPE=$control_arg; PROFILE_FLOOR_SCOPE_SET=1 ;;
+      profile-floor-min-percent) NEW_PROFILE_FLOOR_MIN_PERCENT=$control_arg; PROFILE_FLOOR_MIN_PERCENT_SET=1 ;;
       note) NOTE=$control_arg; NOTE_SET=1 ;;
       note_file)
         [ -f "$control_arg" ] || die "--note-file '$control_arg' is not a readable file"
@@ -265,6 +273,10 @@ for control_arg in "$@"; do
     --model=*) NEW_MODEL=${control_arg#--model=}; MODEL_SET=1 ;;
     --effort) control_want_value=effort ;;
     --effort=*) NEW_EFFORT=${control_arg#--effort=}; EFFORT_SET=1 ;;
+    --profile-floor-scope) control_want_value=profile-floor-scope ;;
+    --profile-floor-scope=*) NEW_PROFILE_FLOOR_SCOPE=${control_arg#--profile-floor-scope=}; PROFILE_FLOOR_SCOPE_SET=1 ;;
+    --profile-floor-min-percent) control_want_value=profile-floor-min-percent ;;
+    --profile-floor-min-percent=*) NEW_PROFILE_FLOOR_MIN_PERCENT=${control_arg#--profile-floor-min-percent=}; PROFILE_FLOOR_MIN_PERCENT_SET=1 ;;
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
@@ -282,12 +294,22 @@ if [ -n "$control_want_value" ]; then
 fi
 
 if [ "$VERB" != relaunch ]; then
-  [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$NOTE_SET" = 0 ] \
-    || die "--harness, --model, --effort, and --note apply to 'relaunch' only"
+  [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] \
+    && [ "$PROFILE_FLOOR_SCOPE_SET" = 0 ] && [ "$PROFILE_FLOOR_MIN_PERCENT_SET" = 0 ] \
+    && [ "$NOTE_SET" = 0 ] \
+    || die "--harness, --model, --effort, --profile-floor-scope, --profile-floor-min-percent, and --note apply to 'relaunch' only"
 fi
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
 [ "$EFFORT_SET" = 0 ] || [ -n "$NEW_EFFORT" ] || die "--effort requires a non-empty value"
+[ "$PROFILE_FLOOR_SCOPE_SET" = 0 ] || [ -n "$NEW_PROFILE_FLOOR_SCOPE" ] || die "--profile-floor-scope requires a non-empty value"
+[ "$PROFILE_FLOOR_MIN_PERCENT_SET" = 0 ] || [ -n "$NEW_PROFILE_FLOOR_MIN_PERCENT" ] || die "--profile-floor-min-percent requires a non-empty value"
+[ "$PROFILE_FLOOR_SCOPE_SET" = "$PROFILE_FLOOR_MIN_PERCENT_SET" ] \
+  || die "--profile-floor-scope and --profile-floor-min-percent must be passed together"
+if [ "$PROFILE_FLOOR_SCOPE_SET" = 1 ]; then
+  fm_claude_profile_floor_valid "$NEW_PROFILE_FLOOR_SCOPE" "$NEW_PROFILE_FLOOR_MIN_PERCENT" \
+    || die "invalid selected Claude profile floor; scope must be non-empty and min_percent must be 0..100"
+fi
 case "$NEW_EFFORT" in
   ''|default|low|medium|high|xhigh|max|ultra) ;;
   *) die "--effort must be one of default, low, medium, high, xhigh, max, ultra" ;;
@@ -681,6 +703,8 @@ PRIOR_EFFORT=
 TARGET_HARNESS=$HARNESS
 TARGET_MODEL=
 TARGET_EFFORT=
+TARGET_PROFILE_FLOOR_SCOPE=
+TARGET_PROFILE_FLOOR_MIN_PERCENT=
 
 journal_write() {  # <phase> [extra-line]...
   local phase=$1
@@ -851,13 +875,56 @@ resolve_relaunch_profile() {
   if [ "$TARGET_EFFORT" = ultra ]; then
     "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "$TARGET_HARNESS" "$TARGET_MODEL" "$TARGET_EFFORT" || return 1
   fi
-  # The launch owner applies this home's worker account pin too, but only after
-  # the old agent has been stopped, so a pin that no longer resolves or is
-  # signed out must refuse here, while nothing has changed yet.
+  local prior_floor_scope prior_floor_min_percent
+  prior_floor_scope=$(fm_meta_get "$META" claude_profile_floor_scope)
+  prior_floor_min_percent=$(fm_meta_get "$META" claude_profile_floor_min_percent)
+  TARGET_PROFILE_FLOOR_SCOPE=
+  TARGET_PROFILE_FLOOR_MIN_PERCENT=
+  if [ "$TARGET_HARNESS" = claude ] && [ "$KIND" != secondmate ]; then
+    if [ "$TARGET_HARNESS" = "$PRIOR_RECORDED_HARNESS" ] \
+       && [ "$TARGET_MODEL" = "$PRIOR_MODEL" ] \
+       && [ "$TARGET_EFFORT" = "$PRIOR_EFFORT" ]; then
+      if [ -n "$prior_floor_scope$prior_floor_min_percent" ]; then
+        fm_claude_profile_floor_valid "$prior_floor_scope" "$prior_floor_min_percent" \
+          || die "task $ID records an invalid selected Claude profile floor; choose the candidate again and pass both profile floor flags"
+        if [ "$PROFILE_FLOOR_SCOPE_SET" = 1 ] \
+           && { [ "$NEW_PROFILE_FLOOR_SCOPE" != "$prior_floor_scope" ] \
+                || [ "$NEW_PROFILE_FLOOR_MIN_PERCENT" != "$prior_floor_min_percent" ]; }; then
+          die "an unchanged Claude profile must preserve its recorded selected-candidate floor"
+        fi
+        TARGET_PROFILE_FLOOR_SCOPE=$prior_floor_scope
+        TARGET_PROFILE_FLOOR_MIN_PERCENT=$prior_floor_min_percent
+      elif [ "$PROFILE_FLOOR_SCOPE_SET" = 1 ]; then
+        TARGET_PROFILE_FLOOR_SCOPE=$NEW_PROFILE_FLOOR_SCOPE
+        TARGET_PROFILE_FLOOR_MIN_PERCENT=$NEW_PROFILE_FLOOR_MIN_PERCENT
+      fi
+    elif [ "$PROFILE_FLOOR_SCOPE_SET" = 1 ]; then
+      TARGET_PROFILE_FLOOR_SCOPE=$NEW_PROFILE_FLOOR_SCOPE
+      TARGET_PROFILE_FLOOR_MIN_PERCENT=$NEW_PROFILE_FLOOR_MIN_PERCENT
+    else
+      die "relaunching task $ID onto a changed Claude profile requires --profile-floor-scope and --profile-floor-min-percent from the newly selected candidate"
+    fi
+  elif [ "$PROFILE_FLOOR_SCOPE_SET" = 1 ]; then
+    die "selected profile floors apply only to Claude crew"
+  fi
+  # Resolve the replacement account while the current agent and record are
+  # untouched; the admission preflight below uses this same selection.
   local account_model=$TARGET_MODEL
   [ "$account_model" != default ] || account_model=
-  fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
-    "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
+  TARGET_WORKER_ACCOUNT=$(fm_worker_account_select "$TARGET_HARNESS" \
+    "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$account_model" "$TARGET_HARNESS") || return 1
+}
+
+preflight_relaunch_admission() {
+  local identity
+  [ "$TARGET_HARNESS" = claude ] && [ "$KIND" != secondmate ] || return 0
+  if [ -n "$TARGET_WORKER_ACCOUNT" ]; then
+    identity=${TARGET_WORKER_ACCOUNT%%$'\t'*}
+  else
+    identity=$(fm_worker_account_claude_ambient_identity) || return 1
+  fi
+  fm_claude_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
+    "$identity" "$TARGET_PROFILE_FLOOR_SCOPE" "$TARGET_PROFILE_FLOOR_MIN_PERCENT"
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch
@@ -990,6 +1057,7 @@ do_relaunch() {
     note_line="note=none"
   fi
   safe_checkpoint
+  preflight_relaunch_admission
   cp -p "$META" "$META_PRIOR" || die "could not preserve task $ID's durable record before relaunching"
   RELAUNCH_ACTIVE=1
   journal_write checkpoint "${CHECKPOINT_LINES[@]}" "$note_line"
@@ -1008,6 +1076,8 @@ do_relaunch() {
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  [ -z "$TARGET_PROFILE_FLOOR_SCOPE" ] \
+    || spawn_args+=(--profile-floor-scope "$TARGET_PROFILE_FLOOR_SCOPE" --profile-floor-min-percent "$TARGET_PROFILE_FLOOR_MIN_PERCENT")
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1

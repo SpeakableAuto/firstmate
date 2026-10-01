@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
+| Worker permissions, accounts, quota admission, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [Claude crew admission](#claude-crew-admission), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Private operating guidance and multi-task outcomes | [Private workflow context](#private-workflow-context-configworkflow-context) and [accepted delivery programs](#accepted-delivery-programs) |
@@ -859,7 +859,7 @@ The [Claude adapter reference](../.agents/skills/harness-adapters/references/har
 ## Worker account pin (config/claude-account, config/pi-account)
 
 A home that mixes accounts for one runner, such as a work login and a personal one, can pin the account its own Claude and Pi workers launch on.
-The pin is opt-in: with neither file, every launch is unchanged, and Claude workers keep receiving firstmate's own `CLAUDE_CONFIG_DIR` when it is set.
+The pin is opt-in; without one, Pi retains its ambient behavior, while direct Claude crew follows the exact-identity rules in "Claude crew admission" below.
 
 Both files are local and gitignored.
 
@@ -894,7 +894,7 @@ The check runs with only `HOME`, `PATH`, `TMPDIR`, `USER`, `LOGNAME`, and the pi
 A pinned Claude launch also unsets the environment credentials Claude ranks above a stored login, such as `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and the Bedrock and Vertex switches ([authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)).
 Pi ranks a root's stored logins above environment variables, so a pinned Pi launch unsets nothing.
 
-A home that authenticates Claude through environment credentials on purpose should leave the pin absent.
+A home that authenticates Claude through an environment credential must add a config-root pin whose quota can be checked, or direct Claude crew admission refuses because the credential cannot be mapped to that quota identity.
 
 ### Failures, reporting, and inheritance
 
@@ -1015,7 +1015,7 @@ Per-machine Cursor `cli-config.json` attribution-off is not this contract: it do
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
 Firstmate chooses the best matching rule with judgment; shell scripts do not match the natural-language rules.
-Firstmate resolves the rule's profile object or array under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
+Firstmate resolves the rule's profile object or array under `AGENTS.md` section 4 and `quota-array-dispatch`, then passes concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`, plus `--profile-floor-scope` and `--profile-floor-min-percent` when the selected Claude candidate declares a floor.
 
 **Spawn requirements**
 
@@ -1025,7 +1025,8 @@ Firstmate resolves the rule's profile object or array under `AGENTS.md` section 
 
 **Contract owners**
 
-This section is the single owner of the canonical schema and its per-field semantics.
+This section is the single owner of the dispatch rule and profile schema and its per-field semantics.
+The [Claude crew admission](#claude-crew-admission) section owns the independent top-level `claude_admission` settings.
 `AGENTS.md` section 4 owns the always-loaded dispatch intake boundary, and `quota-array-dispatch` owns the completion-aware profile-array selection procedure.
 
 ```json
@@ -1071,9 +1072,10 @@ A rule can explicitly set `"select": "quota-balanced"` to retain that behavior i
 Other values, including null and non-string values, are configuration errors.
 The [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy) owns manual selection and uncertainty handling.
 
-**Fields applied only by typed resolution**
+**Typed resolution fields**
 
-Rule `approval`, `min_confidence`, and `floor`, and profile `provider` and `floor` are optional declarations that only [typed dispatch resolution](#typed-dispatch-resolution-env-typesafe_api_key) applies in code; without that opt-in they are inert, and firstmate's own intake reads them as ordinary hints.
+Rule `approval`, `min_confidence`, and `floor`, and profile `provider` and `floor` are optional declarations applied by [typed dispatch resolution](#typed-dispatch-resolution-env-typesafe_api_key).
+A selected Claude profile floor also applies at [spawn admission](#claude-crew-admission) through the concrete spawn flags; the other declarations remain hints without typed resolution.
 The resolver supplies the fixed neutral Choice option `No listed rule applies to this task.` for work that matches no listed rule.
 
 - `approval` accepts only `"captain"` and means a task the rule matches is never dispatched from the tool's answer alone.
@@ -1092,7 +1094,7 @@ Set it high when a wrong pick is costly and low when the rule is a safe runner-u
 **Provider identifiers and mappings**
 
 A profile `provider` optionally names the quota-axi provider family whose rows apply to that profile; when present, profile and rule-floor provider IDs must match the strict whole-string pattern `^[a-z0-9]+(-[a-z0-9]+)*\z`.
-Bootstrap validates resolver-only `approval`, `min_confidence`, `floor`, and present `provider` values only while typed resolution is active; without the key those inert fields and the pre-existing verified-harness baseline preserve bootstrap behavior.
+Bootstrap validates resolver-only `approval`, `min_confidence`, `floor`, and present `provider` values only while typed resolution is active; without the key the pre-existing verified-harness baseline preserves bootstrap behavior, while Claude spawn admission separately validates its settings and the selected floor passed to it.
 
 Typed resolution additively recognizes `gemini` because AGENTS.md section 4 verifies it for crewmate and scout dispatch.
 
@@ -1126,13 +1128,45 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 - When the file exists, bootstrap validates it with `jq`.
 - Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
 - Malformed JSON, malformed rules, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
-- While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic; without the key those inert declarations preserve the pre-existing bootstrap behavior.
+- While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic; without the key those declarations preserve the pre-existing bootstrap behavior; Claude spawn admission separately validates its settings and the selected floor passed to it.
 - Missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 - While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 
 **Inheritance**
 
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
+
+## Claude crew admission
+
+`fm-spawn.sh` enforces directly classified Claude ship and scout admission, including explicit, raw, batch, and relaunch paths, independently of typed dispatch resolution; raw executable basenames in the shared `claude*` harness family receive the same guard and count.
+Arbitrary raw shell expressions remain a deliberate operator escape hatch: admission classifies only their leading executable after transparent `env` and `exec` prefixes, so shell indirection such as `sh -c` can hide a Claude process and bypass the guard.
+Optional top-level `claude_admission` in `config/crew-dispatch.json` may only make the fixed safeguards stricter: `max_concurrent` is an integer from 1 through 3 (default `3`), and `min_session_percent` is a number from 40 through 100 (default `40`):
+
+```json
+{ "claude_admission": { "max_concurrent": 3, "min_session_percent": 40 } }
+```
+
+The cap counts this home's direct Claude crew on the selected account, excluding the task being relaunched and all secondmate agents.
+Account identity is the declared worker pin or a provable absolute ambient Claude config root; `ordinary` denotes the default account, and legacy records without a known identity count against every account.
+An unpinned canonical launch refuses when a higher-precedence Claude credential is set because that credential cannot be mapped to a quota profile.
+Every admitted launch removes higher-precedence pane credentials and explicitly selects the same config root used for its quota snapshot.
+Unpinned raw commands count against every account and are refused because their credential selection and quota cannot be proved.
+Backend recovery-grade liveness excludes confirmed dead agents and endpoints whose absence is proven; uncertain liveness counts conservatively, and a just-published launch reserves its slot for 60 seconds while the process starts.
+Backends without a recovery classifier retain their recorded slots conservatively until teardown removes the record.
+A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
+The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
+
+Admission reads one bounded, read-only `quota-axi --json` snapshot for Claude and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
+The selected Claude row is usable only when `state.stale` is explicitly `false`; an absent or malformed freshness signal is incomplete evidence and refuses admission.
+Explicit config roots use a profile-only quota read with higher-precedence credentials removed; the ordinary account uses a default read with those credentials and `CLAUDE_CONFIG_DIR` unset.
+The selected Claude candidate's own optional `floor` is carried by the resolver's concrete profile line as `--profile-floor-scope` and `--profile-floor-min-percent`; a manual selection passes the same pair.
+Admission enforces only that selected floor and records it with the concrete harness, model, and effort profile.
+An exact unchanged-profile relaunch retains the recorded floor, while a changed Claude profile must pass the newly selected candidate's floor pair.
+Malformed, incomplete, or looser admission settings and malformed selected floors refuse before provisioning.
+Missing, stale, timed-out, incomplete, or unknown quota refuses the Claude launch because neither the fixed floor nor a selected profile floor can be proved.
+A refusal names Codex or a second mate on another account as alternatives.
+OMP models backed by `claude-bridge` remain outside this direct-Claude guard and are a follow-up rather than an implemented account-consumer boundary.
+Portable admission and spawn regressions live in `tests/fm-worker-account.test.sh`.
 
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)
 

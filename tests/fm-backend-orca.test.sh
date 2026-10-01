@@ -3,8 +3,8 @@
 # terminal adapter primitives in bin/backends/orca.sh.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-backend-orca-tests)
 # A claude spawn writes workspace trust into the launching user's own store,
@@ -55,6 +55,7 @@ fi
 exit 0
 SH
   chmod +x "$fb/orca"
+  fm_test_fake_healthy_claude_quota "$fb"
   printf '%s\n' "$fb"
 }
 

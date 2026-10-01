@@ -160,6 +160,10 @@ The worktree and the task's records are unaffected either way.
 - An implicit relaunch from a prefixed raw-command basename is refused before the agent or durable state is touched because its original launch command cannot be reconstructed.
 - An adapter that is not verified for this task's kind is refused **before** the running agent is stopped, not after.
   Muse is a crewmate and scout adapter only, so relaunching a secondmate onto it refuses while its agent is still up rather than leaving that secondmate with no agent when the launch owner refuses.
+- An unchanged Claude harness, model, and effort profile reuses its recorded selected-candidate floor.
+  Changing any of those profile axes requires `--profile-floor-scope` and `--profile-floor-min-percent` for the newly selected Claude candidate before the running agent is stopped.
+- A direct Claude replacement must pass the same account cap and quota floors before the running agent is stopped.
+  The launch owner repeats that admission check against current state before publishing the replacement.
 - A backend that cannot deliver the harness's interrupt key, or the composer clear that key needs, is refused rather than sent a different key.
   Orca's terminal API exposes only an interrupt and an Enter, so it can deliver neither Escape nor Ctrl+U.
 - `exit` and `relaunch` require a backend with a recovery-grade agent-state classifier - tmux and herdr - because without one the "the agent stopped" postcondition cannot be proven.

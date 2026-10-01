@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -42,7 +42,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -87,6 +87,9 @@
 #   build agent's variant, keyed to the resolved model, inside the
 #   OPENCODE_CONFIG_CONTENT JSON its launch already carries (config schema
 #   verified on opencode 1.18.32); without a model the axis is recorded but omitted.
+#   --profile-floor-scope and --profile-floor-min-percent carry the selected
+#   Claude candidate's optional quota floor into admission. They must be passed
+#   together and are refused for every other harness and for secondmates.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -315,12 +318,18 @@
 #   worktree, or record exists and names the accepted values. The file is read
 #   on every spawn and relaunch, so a change reaches the next launch without a
 #   restart, and it is inherited into secondmate homes (bin/fm-config-inherit-lib.sh).
+# Claude crew admission: bin/fm-claude-admission-lib.sh guards directly
+# classified Claude launches before provisioning. Arbitrary raw shell
+# expressions remain an operator escape hatch whose indirection may bypass it;
+# docs/configuration.md "Claude crew admission" owns the complete boundary.
 # Worker account pin (config/claude-account, config/pi-account):
-#   Opt-in. With no file, a Claude or Pi launch is unchanged: Claude still
-#   receives this process's own CLAUDE_CONFIG_DIR when it is set, and Pi the
-#   destination pane's ambient account. A present file pins every launch of
-#   that runner from this home - ship, scout, local secondmate, raw Claude
-#   command, and relaunch - to the declared account root, and the spawn
+#   Opt-in. With no file, Pi retains the destination pane's ambient account.
+#   Direct Claude crew instead requires a provable config root or ordinary
+#   account, checks that exact identity's quota, refuses higher-precedence
+#   caller credentials, and removes pane credentials that could outrank it.
+#   A present file pins every launch of that runner from this home - ship,
+#   scout, local secondmate, raw Claude command, and relaunch - to the declared
+#   account root, and the spawn
 #   refuses before any endpoint, worktree, or record exists when the file is
 #   malformed, the root is unusable, or the runner's own check says it is not
 #   signed in. A pinned Claude launch sheds the environment credentials Claude
@@ -628,6 +637,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-claude-admission-lib.sh
+. "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -637,8 +648,11 @@ fm_refuse_if_gate_agent
 KIND=ship
 KIND_SET=0
 HARNESS_ARG=
+HARNESS_FAMILY=
 MODEL=
 EFFORT=
+PROFILE_FLOOR_SCOPE=
+PROFILE_FLOOR_MIN_PERCENT=
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -647,6 +661,8 @@ TRACEPARENT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
+PROFILE_FLOOR_SCOPE_SET=0
+PROFILE_FLOOR_MIN_PERCENT_SET=0
 BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
@@ -675,6 +691,14 @@ for a in "$@"; do
     effort)
       EFFORT=$a
       EFFORT_SET=1
+      ;;
+    profile-floor-scope)
+      PROFILE_FLOOR_SCOPE=$a
+      PROFILE_FLOOR_SCOPE_SET=1
+      ;;
+    profile-floor-min-percent)
+      PROFILE_FLOOR_MIN_PERCENT=$a
+      PROFILE_FLOOR_MIN_PERCENT_SET=1
       ;;
     backend)
       BACKEND_ARG=$a
@@ -729,6 +753,16 @@ for a in "$@"; do
     EFFORT=${a#--effort=}
     EFFORT_SET=1
     ;;
+  --profile-floor-scope) want_value=profile-floor-scope ;;
+  --profile-floor-scope=*)
+    PROFILE_FLOOR_SCOPE=${a#--profile-floor-scope=}
+    PROFILE_FLOOR_SCOPE_SET=1
+    ;;
+  --profile-floor-min-percent) want_value=profile-floor-min-percent ;;
+  --profile-floor-min-percent=*)
+    PROFILE_FLOOR_MIN_PERCENT=${a#--profile-floor-min-percent=}
+    PROFILE_FLOOR_MIN_PERCENT_SET=1
+    ;;
   --backend) want_value=backend ;;
   --backend=*)
     BACKEND_ARG=${a#--backend=}
@@ -773,6 +807,18 @@ done
   echo "error: --effort requires a non-empty value" >&2
   exit 1
 }
+[ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ] || [ -n "$PROFILE_FLOOR_SCOPE" ] || {
+  echo "error: --profile-floor-scope requires a non-empty value" >&2
+  exit 1
+}
+[ "$PROFILE_FLOOR_MIN_PERCENT_SET" -eq 0 ] || [ -n "$PROFILE_FLOOR_MIN_PERCENT" ] || {
+  echo "error: --profile-floor-min-percent requires a non-empty value" >&2
+  exit 1
+}
+if [ "$PROFILE_FLOOR_SCOPE_SET" -ne "$PROFILE_FLOOR_MIN_PERCENT_SET" ]; then
+  echo "error: --profile-floor-scope and --profile-floor-min-percent must be passed together" >&2
+  exit 1
+fi
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || {
   echo "error: --backend requires a non-empty value" >&2
   exit 1
@@ -1181,6 +1227,9 @@ HERDR_PRESENTATION_ORDER_LOCK=
 HERDR_PRESENTATION_ORDER_LOCK_HELD=0
 SPAWN_TASK_LOCK=
 SPAWN_TASK_LOCK_HELD=0
+CLAUDE_ADMISSION_LOCK=
+CLAUDE_ADMISSION_LOCK_HELD=0
+CLAUDE_QUOTA_IDENTITY=
 SPAWN_CONTROL_LOCK=
 SPAWN_CONTROL_LOCK_HELD=0
 SPAWN_CONTROL_PARENT=0
@@ -1375,6 +1424,9 @@ spawn_abort_cleanup() {
     fi
     fm_lock_release "$SPAWN_TASK_LOCK" || true
   fi
+  if [ "$CLAUDE_ADMISSION_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$CLAUDE_ADMISSION_LOCK" || true
+  fi
   return "$status"
 }
 trap spawn_abort_cleanup EXIT
@@ -1454,6 +1506,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
+  [ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ] || shared_args+=(--profile-floor-scope "$PROFILE_FLOOR_SCOPE" --profile-floor-min-percent "$PROFILE_FLOOR_MIN_PERCENT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
   # harness. Each pair still re-validates it against its own brief, so a batch
@@ -1670,6 +1723,7 @@ PROJ=
 ARG3=
 FIRSTMATE_HOME=
 RAW_LAUNCH=0
+RAW_LAUNCH_IDENTITY_SAFE=0
 
 # --relaunch adoption: every identity axis comes from the task's own validated
 # durable record, never from the command line, so a relaunch can only ever
@@ -1677,6 +1731,10 @@ RAW_LAUNCH=0
 # validation teardown uses, so a malformed, ambiguous, or foreign record
 # refuses here exactly as it refuses there.
 RELAUNCH_PRIOR_HARNESS=
+RELAUNCH_PRIOR_MODEL=default
+RELAUNCH_PRIOR_EFFORT=default
+RELAUNCH_PRIOR_FLOOR_SCOPE=
+RELAUNCH_PRIOR_FLOOR_MIN_PERCENT=
 # 1 when the recorded endpoint is authoritatively gone and this relaunch must
 # create a fresh one for the task rather than adopt its recorded address.
 RELAUNCH_REBIND=0
@@ -1764,6 +1822,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
       ;;
   esac
   RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
+  RELAUNCH_PRIOR_MODEL=$(fm_meta_get "$RELAUNCH_META" model)
+  RELAUNCH_PRIOR_EFFORT=$(fm_meta_get "$RELAUNCH_META" effort)
+  [ -n "$RELAUNCH_PRIOR_MODEL" ] || RELAUNCH_PRIOR_MODEL=default
+  [ -n "$RELAUNCH_PRIOR_EFFORT" ] || RELAUNCH_PRIOR_EFFORT=default
+  RELAUNCH_PRIOR_FLOOR_SCOPE=$(fm_meta_get "$RELAUNCH_META" claude_profile_floor_scope)
+  RELAUNCH_PRIOR_FLOOR_MIN_PERCENT=$(fm_meta_get "$RELAUNCH_META" claude_profile_floor_min_percent)
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
   # A secondmate whose endpoint is gone already has ONE owner for that
@@ -2202,18 +2266,96 @@ launch_template() {
   esac
 }
 
+raw_launch_info() {
+  perl -MText::ParseWords=shellwords -e '
+    my @words = eval { shellwords($ARGV[0]) };
+    exit 1 if $@;
+    my %protected = map { $_ => 1 } ("CLAUDE_CONFIG_DIR", split /\s+/, $ARGV[1]);
+    my $identity_safe = 1;
+    while (@words) {
+      my $word = shift @words;
+      if ($word =~ /\A([A-Za-z_][A-Za-z0-9_]*)=/) {
+        $identity_safe = 0 if $protected{$1};
+        next;
+      }
+      (my $base = $word) =~ s{.*/}{};
+      if ($base eq "exec") {
+        while (@words) {
+          if ($words[0] eq "-a") {
+            shift @words;
+            exit 1 unless @words;
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:-c|-l|--)\z/) {
+            shift @words;
+          } elsif ($words[0] =~ /\A-/) {
+            exit 1;
+          } else {
+            last;
+          }
+        }
+        next;
+      }
+      if ($base eq "env") {
+        while (@words) {
+          if ($words[0] =~ /\A([A-Za-z_][A-Za-z0-9_]*)=/) {
+            $identity_safe = 0 if $protected{$1};
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:-u|--unset|-C|--chdir)\z/) {
+            my $option = shift @words;
+            exit 1 unless @words;
+            my $value = shift @words;
+            $identity_safe = 0 if $option =~ /(?:-u|--unset)/ && $protected{$value};
+          } elsif ($words[0] =~ /\A(?:--unset=|-u)(.+)\z/) {
+            $identity_safe = 0 if $protected{$1};
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:--chdir=|-C.)/) {
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:-S|--split-string)\z/) {
+            shift @words;
+            exit 1 unless @words;
+            my $split = shift @words;
+            my @split = eval { shellwords($split) };
+            exit 1 if $@;
+            unshift @words, @split;
+          } elsif ($words[0] =~ /\A--split-string=(.*)\z/) {
+            my $split = $1;
+            shift @words;
+            my @split = eval { shellwords($split) };
+            exit 1 if $@;
+            unshift @words, @split;
+          } elsif ($words[0] =~ /\A(?:-i|--ignore-environment)\z/) {
+            $identity_safe = 0;
+            shift @words;
+          } elsif ($words[0] =~ /\A(?:-0|--null|-v|--debug)\z/) {
+            shift @words;
+          } elsif ($words[0] eq "--") {
+            shift @words;
+            last;
+          } elsif ($words[0] =~ /\A-/) {
+            exit 1;
+          } else {
+            last;
+          }
+        }
+        next;
+      }
+      print $base, "\t", $identity_safe, "\n";
+      exit 0;
+    }
+    exit 1;
+  ' -- "$1" "$FM_WORKER_ACCOUNT_CLAUDE_SHED"
+}
+
 case "$ARG3" in
 *' '*) # raw launch command (unverified-adapter escape hatch)
   RAW_LAUNCH=1
   LAUNCH=$ARG3
-  HARNESS=""
-  for word in $LAUNCH; do
-    case "$word" in [A-Za-z_]*=*) continue ;; *)
-      HARNESS=$(basename "$word")
-      break
-      ;;
-    esac
-  done
+  RAW_LAUNCH_INFO=$(raw_launch_info "$LAUNCH") || {
+    echo "error: raw launch command has no classifiable executable after its env or exec prefix" >&2
+    exit 1
+  }
+  HARNESS=${RAW_LAUNCH_INFO%%$'\t'*}
+  RAW_LAUNCH_IDENTITY_SAFE=${RAW_LAUNCH_INFO#*$'\t'}
   ;;
 '')
   # No explicit harness: resolve from config. A secondmate AGENT launches on the
@@ -2248,6 +2390,7 @@ case "$ARG3" in
   }
   ;;
 esac
+HARNESS_FAMILY=$(fm_control_harness_family "$HARNESS") || HARNESS_FAMILY=
 
 # muse, gemini, agy, and devin are verified as CREWMATE/SCOUT adapters only. A secondmate is
 # a firstmate instance, so it needs a primary supervision protocol.
@@ -2367,23 +2510,78 @@ fi
 if [ "$HARNESS" = agy ]; then
   agy_model_validate "$AGY_BIN" "$MODEL" || exit 1
 fi
+if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
+  RESOLVED_MODEL=${MODEL:-default}
+  RESOLVED_EFFORT=${EFFORT:-default}
+  if [ "$HARNESS" = "$RELAUNCH_PRIOR_HARNESS" ] \
+     && [ "$RESOLVED_MODEL" = "$RELAUNCH_PRIOR_MODEL" ] \
+     && [ "$RESOLVED_EFFORT" = "$RELAUNCH_PRIOR_EFFORT" ]; then
+    if [ -n "$RELAUNCH_PRIOR_FLOOR_SCOPE$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT" ]; then
+      fm_claude_profile_floor_valid "$RELAUNCH_PRIOR_FLOOR_SCOPE" "$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT" || {
+        echo "error: task $ID records an invalid selected Claude profile floor; choose the candidate again and pass both profile floor flags" >&2
+        exit 1
+      }
+      if [ "$PROFILE_FLOOR_SCOPE_SET" -eq 1 ] \
+         && { [ "$PROFILE_FLOOR_SCOPE" != "$RELAUNCH_PRIOR_FLOOR_SCOPE" ] \
+              || [ "$PROFILE_FLOOR_MIN_PERCENT" != "$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT" ]; }; then
+        echo "error: an unchanged Claude profile must preserve its recorded selected-candidate floor" >&2
+        exit 1
+      fi
+      PROFILE_FLOOR_SCOPE=$RELAUNCH_PRIOR_FLOOR_SCOPE
+      PROFILE_FLOOR_MIN_PERCENT=$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT
+    fi
+  elif [ "$HARNESS_FAMILY" = claude ] && [ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ]; then
+    echo "error: relaunching task $ID onto a changed Claude profile requires --profile-floor-scope and --profile-floor-min-percent from the newly selected candidate" >&2
+    exit 1
+  fi
+fi
+if [ "$PROFILE_FLOOR_SCOPE_SET" -eq 1 ] || [ -n "$PROFILE_FLOOR_SCOPE" ]; then
+  if [ "$HARNESS_FAMILY" != claude ] || [ "$KIND" = secondmate ]; then
+    echo "error: selected profile floors apply only to Claude crew" >&2
+    exit 1
+  fi
+  fm_claude_profile_floor_valid "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" || {
+    echo "error: invalid selected Claude profile floor; scope must be non-empty and min_percent must be 0..100" >&2
+    exit 1
+  }
+fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
-# record exists. An absent pin selects nothing and leaves every later launch
-# step exactly as it was. A pinned Claude root is exported here as well, so the
-# trust registration below writes the store the worker will actually read.
+# record exists. A pinned Claude root is exported here as well, so the trust
+# registration below writes the store the worker will actually read.
 RAW_COMMAND=
 [ "$RAW_LAUNCH" = 0 ] || RAW_COMMAND=$ARG3
-WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$HARNESS}" "$RAW_COMMAND") || exit 1
+WORKER_ACCOUNT_HARNESS=${HARNESS_FAMILY:-$HARNESS}
+WORKER_ACCOUNT=$(fm_worker_account_select "$WORKER_ACCOUNT_HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$WORKER_ACCOUNT_HARNESS}" "$RAW_COMMAND") || exit 1
 WORKER_ACCOUNT_DECLARED=${WORKER_ACCOUNT%%$'\t'*}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT#*$'\t'}
 WORKER_ACCOUNT_PROVIDER=${WORKER_ACCOUNT_ROOT#*$'\t'}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT_ROOT%%$'\t'*}
-if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
+if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS_FAMILY" = claude ]; then
   if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
     export CLAUDE_CONFIG_DIR=$WORKER_ACCOUNT_ROOT
   else
     unset CLAUDE_CONFIG_DIR
   fi
+fi
+
+# All Claude crew admission paths, including raw launches and relaunches, pass
+# this gate before allocating a worktree or endpoint. The lock survives until
+# EXIT cleanup, so another admission sees the finished launch or its rollback.
+if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
+  if [ "$RAW_LAUNCH" = 1 ] \
+     && { [ "$RAW_LAUNCH_IDENTITY_SAFE" != 1 ] || [ "$HARNESS" != claude ]; }; then
+    CLAUDE_QUOTA_IDENTITY=unknown
+  elif [ -n "$WORKER_ACCOUNT" ]; then
+    CLAUDE_QUOTA_IDENTITY=$WORKER_ACCOUNT_DECLARED
+  elif [ "$RAW_LAUNCH" = 1 ]; then
+    CLAUDE_QUOTA_IDENTITY=unknown
+  else
+    CLAUDE_QUOTA_IDENTITY=$(fm_worker_account_claude_ambient_identity) || exit 1
+  fi
+  CLAUDE_ADMISSION_LOCK="$STATE/.claude-admission.lock"
+  fm_lock_acquire_wait "$CLAUDE_ADMISSION_LOCK" || exit 1
+  CLAUDE_ADMISSION_LOCK_HELD=1
+  fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" || exit 1
 fi
 
 secondmate_registry_value() {
@@ -4859,7 +5057,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider claude_quota_identity claude_profile_floor_scope claude_profile_floor_min_percent busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -4878,12 +5076,14 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
-  # The worker account pin, only when this home declares one, so an unpinned
-  # task record stays byte-identical.
+  # The worker account pin is recorded only when this home declares one.
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
   [ -z "$WORKER_ACCOUNT_PROVIDER" ] || echo "account_provider=$WORKER_ACCOUNT_PROVIDER"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
+  [ -z "$CLAUDE_QUOTA_IDENTITY" ] || echo "claude_quota_identity=$CLAUDE_QUOTA_IDENTITY"
+  [ -z "$PROFILE_FLOOR_SCOPE" ] || echo "claude_profile_floor_scope=$PROFILE_FLOOR_SCOPE"
+  [ -z "$PROFILE_FLOOR_MIN_PERCENT" ] || echo "claude_profile_floor_min_percent=$PROFILE_FLOOR_MIN_PERCENT"
   # Default-off writes no traceparent= line.
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
@@ -5093,18 +5293,12 @@ claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse | rovo 
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac
-# Crewmate panes are created by a long-lived tmux/herdr daemon that does not
-# inherit firstmate's current environment, so a bare `claude` in the pane falls
-# back to the default ~/.claude store even when firstmate itself runs under a
-# different CLAUDE_CONFIG_DIR (for example a work-vs-personal subscription split).
-# Forward firstmate's own resolved store onto the claude launch so the crewmate
-# uses the same credential/config firstmate is authenticated with. Only when set;
-# an unset value is the single-store default and needs no prefix.
-# A home's worker account pin replaces that forwarding: the launch names the
-# pinned root (or unsets the variable for the ordinary Claude account) and
-# sheds the environment credentials Claude ranks above the root's login.
+# Direct Claude crew launch under the exact config-root identity whose quota
+# passed admission. Pinned and unpinned admitted crew shed variables ranked
+# above stored login and explicitly set or unset CLAUDE_CONFIG_DIR. Local
+# secondmates retain legacy root forwarding unless a worker pin selects one.
 if [ -n "$WORKER_ACCOUNT" ]; then
-  case "$HARNESS" in
+  case "$HARNESS_FAMILY" in
   claude)
     if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
       LAUNCH="$(fm_worker_account_claude_shed) CLAUDE_CONFIG_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
@@ -5116,6 +5310,12 @@ if [ -n "$WORKER_ACCOUNT" ]; then
     LAUNCH="PI_CODING_AGENT_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
     ;;
   esac
+elif [ "$HARNESS_FAMILY" = claude ] && [ -n "$CLAUDE_QUOTA_IDENTITY" ]; then
+  if [ "$CLAUDE_QUOTA_IDENTITY" = ordinary ]; then
+    LAUNCH="$(fm_worker_account_claude_shed) -u CLAUDE_CONFIG_DIR $LAUNCH"
+  else
+    LAUNCH="$(fm_worker_account_claude_shed) CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_QUOTA_IDENTITY") $LAUNCH"
+  fi
 elif [ "$HARNESS" = claude ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
   LAUNCH="CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_CONFIG_DIR") $LAUNCH"
 fi

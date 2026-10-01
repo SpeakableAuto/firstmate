@@ -54,7 +54,7 @@
 #     reason: <why the status is not clear>
 #     selection: quota-balanced | candidate-order
 #     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
-#     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
+#     profile: --harness <h> [--model <m>] [--effort <e>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]     (status clear only)
 #     placement: local | secondmate <id> (<why>)   (cross-home placement only)
 #     home: <id> best=<harness>:<model> scope=.. remaining=..% spendPriority=.. runway=.. [placement-blocked=..] | home: <id> unknown: <reason>: disclosed uncertainty
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
@@ -642,7 +642,10 @@ TEXT=$(jq -r '
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
-      + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end) else empty end),
+      + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end)
+      + (if .chosen.profile.harness == "claude" and .chosen.profile.floor then
+           " --profile-floor-scope \(.chosen.profile.floor.scope | shell_arg) --profile-floor-min-percent \(.chosen.profile.floor.min_percent | shell_arg)"
+         else "" end) else empty end),
   (if .placement then
      "  placement: \(if .placement.home == "local" then "local" else "secondmate \(.placement.home | flat)" end) (\(.placement.reason | flat))",
      (.placement.homes[] | "  home: \(.id | flat)"
