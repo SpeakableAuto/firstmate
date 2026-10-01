@@ -1,0 +1,20 @@
+# Portable executable evidence. Real admission guard and process table; canned Herdr read protocol; no Herdr lifecycle.
+registration=unknown process=exited absence=missing exit=0
+
+registration=unknown process=running absence=missing exit=1
+error: Claude crew admission refused for account ordinary: 1 live or unverified crew, limit 1; counted tasks: parked; choose Codex or route to a second mate on another account
+registration=unknown process=unreadable absence=missing exit=1
+error: Claude crew admission refused for account ordinary: 1 live or unverified crew, limit 1; counted tasks: parked; choose Codex or route to a second mate on another account
+registration=idle process=exited absence=missing exit=0
+
+registration=idle process=running absence=missing exit=1
+error: Claude crew admission refused for account ordinary: 1 live or unverified crew, limit 1; counted tasks: parked; choose Codex or route to a second mate on another account
+registration=idle process=unreadable absence=missing exit=1
+error: Claude crew admission refused for account ordinary: 1 live or unverified crew, limit 1; counted tasks: parked; choose Codex or route to a second mate on another account
+registration=idle process=gone absence=missing exit=0
+
+registration=idle process=gone absence=alive exit=1
+error: Claude crew admission refused for account ordinary: 1 live or unverified crew, limit 1; counted tasks: parked; choose Codex or route to a second mate on another account
+registration=idle process=gone absence=unreadable exit=1
+error: Claude crew admission refused for account ordinary: 1 live or unverified crew, limit 1; counted tasks: parked; choose Codex or route to a second mate on another account
+ok - Claude admission reads process evidence and preserves endpoint absence proof
