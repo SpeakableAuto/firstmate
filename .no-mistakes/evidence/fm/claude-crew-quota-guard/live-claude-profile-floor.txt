@@ -1,0 +1,12 @@
+# Live selected Claude candidate floor evidence
+claude=2.1.280 (Claude Code)
+quota-axi=0.1.55
+{"claude":[{"fresh":true,"all_models":[46]}]}
+
+## fm-spawn selected candidate
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.7vL0zO
+error: Claude crew admission refused for account ordinary: all_models remaining 46% below 100%; choose Codex or route to a second mate on another account
+exit=1
+
+## Cleanup
+Disposable marked lab home removed in this evidence turn; no endpoint was allocated.

@@ -1,0 +1,41 @@
+# Live Claude admission CLI evidence
+claude=2.1.280 (Claude Code)
+herdr=herdr 0.9.3
+quota-axi=0.1.55
+{"schemaVersion":5,"claude":[{"fresh":true,"five_hour":[76],"all_models":[47]}]}
+
+## Default cap with three real idle Claude processes
+session=fm-lab-qguard1790837902-28249-32707 default=false
+{"pane":"w1:p1","foreground":[{"name":"claude","argv0":"claude"}]}
+{"pane":"w1:p2","foreground":[{"name":"claude","argv0":"claude"}]}
+{"pane":"w1:p3","foreground":[{"name":"claude","argv0":"claude"}]}
+
+## cap-probe
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.c6ZzbB
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  3 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds 180.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+error: Claude crew admission refused for account ordinary: 3 live or unverified crew, limit 3; choose Codex or route to a second mate on another account
+exit=1
+
+## floor-probe
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.c6ZzbB
+error: Claude crew admission refused for account ordinary: five_hour remaining 76% below 100%; choose Codex or route to a second mate on another account
+exit=1
+
+## unknown-probe
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.c6ZzbB
+error: Claude crew admission refused because quota is unavailable or invalid; choose Codex or route to a second mate on another account
+exit=1
+
+## credential-probe
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.c6ZzbB
+error: Claude crew admission cannot prove which account ANTHROPIC_API_KEY selects without config/claude-account; add an account pin or unset ANTHROPIC_API_KEY, then choose Codex or route to a second mate on another account until quota is verifiable
+exit=1
+
+## Cleanup
+Named non-default Herdr session torn down and disposable lab home removed in this evidence turn.

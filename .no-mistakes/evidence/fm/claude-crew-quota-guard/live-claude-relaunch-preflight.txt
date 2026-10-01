@@ -1,0 +1,17 @@
+# Live Claude relaunch preflight evidence
+claude=2.1.280 (Claude Code)
+herdr=herdr 0.9.3
+session=fm-lab-relaunch17908379-44734-6176 default=false
+before: real Claude foreground process count=1
+
+## fm-control relaunch
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.KuBsc4
+error: Claude crew admission refused for account ordinary: five_hour remaining 76% below 100%; choose Codex or route to a second mate on another account
+exit=1
+
+after: real Claude foreground process count=1
+metadata_unchanged=true
+relaunch_journal_absent=true
+
+## Cleanup
+Named non-default Herdr session torn down and disposable lab home removed in this evidence turn.
