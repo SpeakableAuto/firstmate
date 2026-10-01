@@ -130,16 +130,13 @@ run code out err -- --secondmate peer
 expect_code 0 "$code" "remote snapshot exits 0"
 assert_equals 95 "$(jq -r '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining' <<<"$out")" "remote snapshot is the remote machine's quota"
 assert_equals peer-host "$(cat "$SSH_CALLS")" "remote snapshot travels through the registered SSH alias"
-assert_present "$CACHE/peer.json" "a good remote snapshot is cached"
+write_quota "$TMP_ROOT/remote.json" 96
 run code out err -- --secondmate peer
-expect_code 0 "$code" "cached remote snapshot exits 0"
-assert_equals 95 "$(jq -r '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining' <<<"$out")" "cached remote snapshot is served"
-assert_equals 1 "$(ssh_calls)" "a fresh cache costs no second remote read"
-fm_touch_epoch "$(( $(date +%s) - 600 ))" "$CACHE/peer.json"
-run code out err -- --secondmate peer
-expect_code 0 "$code" "expired cache rereads"
-assert_equals 2 "$(ssh_calls)" "a cache past its TTL is never reused"
-pass "remote snapshot reads through fm-on and caches briefly"
+expect_code 0 "$code" "a consecutive remote snapshot exits 0"
+assert_equals 96 "$(jq -r '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining' <<<"$out")" "a consecutive dispatch sees changed remote quota"
+assert_equals 2 "$(ssh_calls)" "every successful snapshot performs a remote read"
+assert_absent "$CACHE/peer.json" "successful snapshots are never cached"
+pass "remote snapshot reads current quota through fm-on every time"
 
 reset_remote unreachable
 run code out err -- --secondmate peer

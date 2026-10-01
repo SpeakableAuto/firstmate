@@ -54,7 +54,7 @@
 #     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
 #     placement: local | secondmate <id> (<why>)   (cross-home placement only)
-#     home: <id> best=<harness>:<model> scope=.. remaining=..% spendPriority=.. runway=.. | home: <id> unknown: <reason>: disclosed uncertainty
+#     home: <id> best=<harness>:<model> scope=.. remaining=..% spendPriority=.. runway=.. [placement-blocked=..] | home: <id> unknown: <reason>: disclosed uncertainty
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
 #   escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie
@@ -64,8 +64,8 @@
 #   that project and this home has not registered it local-only. Each such
 #   machine's quota comes from bin/fm-quota-snapshot.sh --secondmate and is
 #   judged by the same candidate gates; the quota-array-dispatch skill owns the
-#   placement rule, and config/crew-dispatch.json placement.min_advantage
-#   (default 0.5) is its margin. Status and the profile line never change.
+#   placement rule and fixed strict 0.5 margin. Status and the profile line
+#   never change.
 #   Every outcome exits 0 so an intake is never blocked by this tool.
 #   Exit 2 only for a usage or configuration error (unreadable brief, an
 #   existing unreadable rules file, malformed rules, or missing jq), which is
@@ -208,7 +208,6 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
   elif has("default") and duplicate_profiles(profiles(.default)) then "default must not contain duplicate harness, model, and effort profiles"
   elif has("default") and any(profiles(.default)[]; (verified(.harness) | not)) then "each default profile must name a verified harness"
   elif has("default") and any(profiles(.default)[]; (effort_ok(.harness; .model; .effort) | not)) then "each default profile effort must be supported by its harness and model"
-  elif has("placement") and ((.placement | type) != "object" or (.placement | has("min_advantage") and ((.min_advantage | type) != "number" or .min_advantage < 0))) then "placement must be an object whose optional min_advantage is a number of at least 0"
   else empty end
 ' "$RULES" 2>/dev/null) || die "malformed rules file: $RULES_PATH (not JSON)"
 [ -z "$rules_err" ] || die "malformed rules file: $RULES_PATH - $rules_err"
@@ -483,7 +482,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   def when_of($c): (if rule_at($c) == null then $none_criterion else rule_at($c).when end | .[0:60]);
   {
     model: $r.model, latency_ms: $lat, tokens: ($r.usage // null),
-    rule: $picked,
+    rule: $picked, resolved_rule: $choice,
     rule_when: when_of($picked),
     confidence: $a.confidence, probabilities: $a.probabilities
   }
@@ -518,9 +517,9 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
 # Runs only for a named project on a clear result or a tie or nothing-rankable
 # escalation, and only for remote routes whose registered projects include it
 # when this home has not registered the project local-only. Each machine's
-# snapshot comes from fm-quota-snapshot.sh --secondmate (bounded, briefly
-# cached, read-only); an unreachable or unknown machine is disclosed on its own
-# home line and never changes the local result.
+# snapshot comes from fm-quota-snapshot.sh --secondmate (bounded and read-only);
+# an unreachable or unknown machine is disclosed on its own home line and never
+# changes the local result.
 placement_ids() {
   local line entry mode
   local -a entries
@@ -564,30 +563,48 @@ if [ -n "$PLACEMENT_IDS" ]; then
     fi
   done <<<"$PLACEMENT_IDS" > "$HOMES" || emit_error "placement evidence failed"
   RESULT=$(jq -n --argjson pmap "$PMAP" --argjson result "$RESULT" --slurpfile rules "$RULES" --slurpfile homes "$HOMES" "$FM_QUOTA_ROW_JQ"'
-    ($rules[0].placement.min_advantage // 0.5) as $margin |
-    ($result.candidates | map(.profile)) as $profiles |
+    ($rules[0]) as $cfg |
+    ($result.resolved_rule) as $choice |
     ([$result.candidates[] | select(.eligible and ((.unranked // false) | not)) | .spendPriority] | max) as $local |
     [$homes[] | . as $h |
       if $h.snapshot == null then {id: $h.id, reason: $h.reason}
       else ($h.snapshot) as $q |
         '"$CANDIDATE_JQ"'
-        ([$profiles[] | evaluate(.) | select(.eligible and ((.unranked // false) | not))]) as $elig |
-        if ($elig | length) == 0 then {id: $h.id, reason: "no rankable eligible candidate there"}
-        else {id: $h.id, best: ($elig | max_by(.spendPriority))} end
+        (if $choice == "default" then {profiles: profiles($cfg.default // null)}
+         else ($choice | ltrimstr("rule_") | tonumber) as $n |
+           ($cfg.rules[$n - 1]) as $rule |
+           (floor_state($rule.floor; $rule.floor.provider; "")) as $state |
+           if $state == "unknown" then {reason: "rule \($choice) floor \($rule.floor.provider)/\($rule.floor.scope) is unverifiable there"}
+           elif $state == "below" then {profiles: profiles($cfg.default // null), note: "rule \($choice) floor failed there; used default"}
+           else {profiles: profiles($rule.use)}
+           end
+         end) as $sel |
+        if $sel.reason then {id: $h.id, reason: $sel.reason}
+        else ([$sel.profiles[] | evaluate(.) | select(.eligible and ((.unranked // false) | not))]) as $elig |
+          if ($elig | length) == 0 then {id: $h.id, reason: "no rankable eligible candidate there", note: $sel.note}
+          else ($elig | max_by(.spendPriority)) as $best |
+            if ([$elig[] | select(.spendPriority == $best.spendPriority)] | length) > 1
+            then {id: $h.id, reason: "genuine spendPriority tie there", note: $sel.note}
+            elif $best.runway != "through_reset"
+            then {id: $h.id, best: $best, placement_blocked: "limiting runway \($best.runway // "unknown") is not through_reset", note: $sel.note}
+            else {id: $h.id, best: $best, note: $sel.note}
+            end
+          end
+        end
       end] as $evaluated |
-    ([$evaluated[] | select(.best)]) as $ranked |
+    ([$evaluated[] | select(.best and ((.placement_blocked // null) == null))]) as $ranked |
     (if $local == null then $ranked
-     else [$ranked[] | select(.best.spendPriority - $local >= $margin)] end) as $better |
+     else [$ranked[] | select(.best.spendPriority - $local > 0.5)] end) as $better |
     (if ($better | length) == 0 then
        {home: "local",
         reason: (if $local == null then "no second mate has rankable quota either"
-                 else "no second mate beats local spendPriority \($local) by \($margin)" end)}
+                 else "no second mate beats local spendPriority \($local) by more than 0.5" end)}
      else ($better | max_by(.best.spendPriority)) as $top |
        if ([$better[] | select(.best.spendPriority == $top.best.spendPriority)] | length) > 1
        then {home: "local", reason: "second mates tie at spendPriority \($top.best.spendPriority)"}
        else {home: $top.id,
              reason: (if $local == null then "no local candidate is rankable; \($top.id) has spendPriority \($top.best.spendPriority)"
-                      else "\($top.id) spendPriority \($top.best.spendPriority) beats local \($local) by at least \($margin)" end)}
+                      else "\($top.id) spendPriority \($top.best.spendPriority) beats local \($local) by more than 0.5" end)}
        end
      end) as $decision |
     $result + {placement: ($decision + {homes: $evaluated})}') || emit_error "placement resolution failed"
@@ -618,7 +635,9 @@ TEXT=$(jq -r '
      "  placement: \(if .placement.home == "local" then "local" else "secondmate \(.placement.home | flat)" end) (\(.placement.reason | flat))",
      (.placement.homes[] | "  home: \(.id | flat)"
        + (if .best then "  best=\(.best.profile.harness | flat):\(show(.best.profile.model))  scope=\(show(.best.scope))  remaining=\(show(.best.pct))%  spendPriority=\(show(.best.spendPriority))  runway=\(show(.best.runway))"
-          else "  unknown: \(.reason | flat): disclosed uncertainty" end))
+          else "  unknown: \(.reason | flat): disclosed uncertainty" end)
+       + (if .placement_blocked then "  placement-blocked=\(.placement_blocked | flat)" else "" end)
+       + (if .note then "  note=\(.note | flat)" else "" end))
    else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
 printf '%s\n' "$TEXT"
 exit 0

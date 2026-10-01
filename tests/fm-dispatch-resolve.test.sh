@@ -1039,7 +1039,7 @@ placement_case() { # <ssh-mode> [args...]
   printf '%s\n' "$1" > "$SSH_MODE"
   shift
   reset_log
-  write_response "$RESPONSE" rule_4 0.9
+  write_response "$RESPONSE" "${PLACEMENT_RULE:-rule_4}" 0.9
   TYPESAFE_API_KEY="$KEY" run code out err "$BRIEF" "$@"
 }
 ssh_calls() { if [ -f "$SSH_CALLS" ]; then wc -l < "$SSH_CALLS" | tr -d ' '; else printf 0; fi; }
@@ -1049,20 +1049,41 @@ placement_case ok --project pager
 expect_code 0 "$code" "placement exits 0"
 assert_contains "$out" 'status: clear' "the local result stays clear"
 assert_contains "$out" "profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the local profile is still published"
-assert_contains "$out" 'placement: secondmate peer (peer spendPriority 2.25 beats local 0.7597 by at least 0.5)' "materially better remote headroom places the task on the second mate"
+assert_contains "$out" 'placement: secondmate peer (peer spendPriority 2.25 beats local 0.7597 by more than 0.5)' "materially better remote headroom places the task on the second mate"
 assert_contains "$out" 'home: peer  best=cursor:cursor-grok-4.6-medium  scope=all_models  remaining=91%  spendPriority=2.25  runway=through_reset' "the remote evidence is shown"
 assert_equals peer-host "$(cat "$SSH_CALLS")" "the remote quota is read through the registered route"
 pass "placement prefers a second mate whose headroom is materially better"
 
 write_quota "$REMOTE_QUOTA" 1.1
 placement_case ok --project pager
-assert_contains "$out" 'placement: local (no second mate beats local spendPriority 0.7597 by 0.5)' "similar remote headroom keeps the task local"
+assert_contains "$out" 'placement: local (no second mate beats local spendPriority 0.7597 by more than 0.5)' "similar remote headroom keeps the task local"
 assert_contains "$out" 'home: peer  best=cursor:cursor-grok-4.6-medium' "the similar remote is still shown"
-jq '. + {placement: {min_advantage: 0.2}}' "$BASE_RULES" > "$RULES"
+write_quota "$REMOTE_QUOTA" 1.2597
 placement_case ok --project pager
-assert_contains "$out" 'placement: secondmate peer (peer spendPriority 1.1 beats local 0.7597 by at least 0.2)' "a configured min_advantage is honoured"
-cp "$BASE_RULES" "$RULES"
-pass "placement keeps the local home when headroom is similar"
+assert_contains "$out" 'placement: local (no second mate beats local spendPriority 0.7597 by more than 0.5)' "an exact 0.5 advantage stays local"
+write_quota "$REMOTE_QUOTA" 1.2598
+placement_case ok --project pager
+assert_contains "$out" 'placement: secondmate peer (peer spendPriority 1.2598 beats local 0.7597 by more than 0.5)' "a strictly greater advantage places remotely"
+pass "placement uses the fixed strict 0.5 margin"
+
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability) |= map(
+  if .scope == "all_models" then .runway.status = "through_reset" | .selection.spendPriority = 2.5
+  elif .scope == "model:fable" then .effectivePercentRemaining = 95 | .runway.status = "through_reset" | .selection.spendPriority = 2.25
+  else . end
+)' "$QUOTA" > "$REMOTE_QUOTA"
+PLACEMENT_RULE=rule_1 placement_case ok --project pager
+assert_contains "$out" "profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "the local rule floor falls through to local defaults"
+assert_contains "$out" 'placement: secondmate peer (peer spendPriority 2.25 beats local 0.7597 by more than 0.5)' "the remote home evaluates the matched rule against its own floor"
+assert_contains "$out" 'home: peer  best=claude:fable' "the remote home uses the matched rule instead of the local default profiles"
+pass "each home resolves the matched rule floor from its own quota"
+
+write_quota "$REMOTE_QUOTA" 2.25
+jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[].runway.status) = "projected_exhaustion"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-projected.json"
+mv "$TMP_ROOT/remote-projected.json" "$REMOTE_QUOTA"
+placement_case ok --project pager
+assert_contains "$out" 'placement: local' "projected remote runway keeps the task local"
+assert_contains "$out" 'placement-blocked=limiting runway projected_exhaustion is not through_reset' "the remote runway veto is visible"
+pass "automatic remote placement requires through-reset runway"
 
 placement_case unreachable --project pager
 expect_code 0 "$code" "an unreachable second mate still exits 0"
@@ -1090,15 +1111,5 @@ QUOTA_AXI_FIXTURE="$TMP_ROOT/exhausted.json" placement_case ok --project pager
 assert_contains "$out" 'status: escalate' "nothing rankable locally still escalates"
 assert_contains "$out" 'placement: secondmate peer (no local candidate is rankable; peer has spendPriority 0.3)' "a rankable second mate is offered when nothing local is rankable"
 pass "an exhausted local machine can place work on a second mate with headroom"
-
-jq '. + {placement: {min_advantage: -1}}' "$BASE_RULES" > "$RULES"
-placement_case ok --project pager
-expect_code 2 "$code" "a negative min_advantage is a configuration error"
-assert_contains "$err" 'placement must be an object whose optional min_advantage is a number of at least 0' "the malformed placement is named"
-jq '. + {placement: 0.5}' "$BASE_RULES" > "$RULES"
-placement_case ok --project pager
-expect_code 2 "$code" "a non-object placement is a configuration error"
-cp "$BASE_RULES" "$RULES"
-pass "malformed placement configuration is refused"
 
 printf '# all fm-dispatch-resolve tests passed\n'

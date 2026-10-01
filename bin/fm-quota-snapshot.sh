@@ -15,12 +15,11 @@
 # route <id> in data/secondmates.md, through bin/fm-on.sh, bounded by
 # FM_REMOTE_QUOTA_TIMEOUT seconds (default 25), and validates it again here.
 # The remote host's quota-axi must be on the remote job PATH that
-# bin/fm-remote-job-lib.sh composes. Nothing changes on either machine except
-# this home's cache under state/quota-remote/: <id>.json holds the last good
-# snapshot and <id>.err the last failure reason. Either is reused while it is
-# younger than FM_REMOTE_QUOTA_TTL seconds (default 120), so repeated intakes
-# cost one remote read per window and an unreachable host costs one bounded
-# wait per window. Nothing is reused past the TTL.
+# bin/fm-remote-job-lib.sh composes. Successful snapshots are never cached, so
+# every dispatch reads current remote quota. A failure reason is kept under
+# state/quota-remote/<id>.err and reused while it is younger than
+# FM_REMOTE_QUOTA_TTL seconds (default 120), so an unreachable host costs one
+# bounded wait per window. Nothing is reused past the TTL.
 #
 # Exit 0 prints a validated snapshot. Exit 1 prints nothing on stdout and one
 # "quota-snapshot: unavailable (<reason>)" line on stderr: that quota is
@@ -82,7 +81,6 @@ TTL=${FM_REMOTE_QUOTA_TTL:-120}
 positive_int FM_REMOTE_QUOTA_TIMEOUT "$REMOTE_TIMEOUT"
 positive_int FM_REMOTE_QUOTA_TTL "$TTL"
 CACHE_DIR="$STATE/quota-remote"
-CACHE_JSON="$CACHE_DIR/$SECONDMATE.json"
 CACHE_ERR="$CACHE_DIR/$SECONDMATE.err"
 
 fresh() { # <file>
@@ -92,14 +90,7 @@ fresh() { # <file>
   [ "$age" -ge 0 ] && [ "$age" -lt "$TTL" ]
 }
 
-# The newer of the two cache files is the last observation; an older one of
-# the other kind is superseded even while it is still inside the TTL.
-if fresh "$CACHE_JSON" && { [ ! -f "$CACHE_ERR" ] || [ "$CACHE_JSON" -nt "$CACHE_ERR" ]; }; then
-  if fm_quota_json_valid < "$CACHE_JSON"; then
-    cat "$CACHE_JSON"
-    exit 0
-  fi
-elif fresh "$CACHE_ERR"; then
+if fresh "$CACHE_ERR"; then
   reason=$(head -c 300 "$CACHE_ERR" | tr -d '\n')
   unavailable "${reason:-remote read failed} (cached)"
 fi
@@ -128,11 +119,6 @@ case "$rc" in
   *) record_failure "remote read of $SECONDMATE exited $rc${detail:+: $detail}" ;;
 esac
 fm_quota_json_valid < "$OUT" || record_failure "$SECONDMATE returned an invalid snapshot"
-mkdir -p "$CACHE_DIR" 2>/dev/null || unavailable "cannot create $CACHE_DIR"
-tmp=$(mktemp "$CACHE_DIR/.$SECONDMATE.json.XXXXXX") || unavailable "cannot write the quota cache"
-if ! { cp "$OUT" "$tmp" && mv -f "$tmp" "$CACHE_JSON"; }; then
-  rm -f "$tmp"
-  unavailable "cannot write the quota cache"
-fi
+rm -f "$CACHE_ERR" 2>/dev/null || true
 cat "$OUT"
 exit 0

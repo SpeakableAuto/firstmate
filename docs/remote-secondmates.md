@@ -492,7 +492,7 @@ Its recovery request rings the doorbell again when it is enqueued.
 
 `fm-peek.sh` and `fm-crew-state.sh` route remote-secondmate reads to the endpoint's host instead of consulting local worktree or backend state.
 An unreachable or unreadable remote read is unknown, not evidence that the endpoint is dead.
-`fm-quota-snapshot.sh --secondmate <id>` reads the remote machine's quota the same way, read-only and briefly cached, for [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement); unknown remote quota never blocks local dispatch.
+`fm-quota-snapshot.sh --secondmate <id>` reads the remote machine's quota fresh for each dispatch, with a short failure back-off for an unreachable machine, for [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement); unknown remote quota never blocks local dispatch.
 
 ### Replies and the parent channel
 

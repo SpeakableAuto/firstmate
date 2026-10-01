@@ -147,9 +147,10 @@ A remote second mate is a placement candidate only when all of these hold:
 - This home has not registered the project `local-only`.
 - Its scope fits the work, which firstmate judges as for any secondmate routing.
 
-Read each candidate machine's quota with `bin/fm-quota-snapshot.sh --secondmate <id>`; its header owns the bound, cache, and failure mechanics.
-Evaluate the same rule's candidate profiles against that snapshot with the same three gates, and take that machine's best known `spendPriority`.
-Place the task on the second mate whose best exceeds the local best by at least `placement.min_advantage` (default 0.5, declared in `config/crew-dispatch.json`), or on one with a rankable candidate when no local candidate is rankable.
+Read each candidate machine's quota with `bin/fm-quota-snapshot.sh --secondmate <id>`; its header owns the bound and short failure back-off mechanics.
+Resolve the matched rule and its rule-level floor independently against each machine's snapshot, falling through to the default profiles only on the machines where that floor has a known shortfall, then evaluate that machine's profiles with the same three gates and take its best known `spendPriority`.
+Automatic remote placement additionally requires that chosen remote candidate's limiting runway is `through_reset`; `projected_exhaustion`, `exhausted_now`, or unknown runway keeps the task local.
+Place the task on the second mate whose best exceeds the local best by strictly more than 0.5 `spendPriority`, or on one with a rankable `through_reset` candidate when no local candidate is rankable.
 Otherwise keep the task local: similar headroom, a tie between second mates, or no comparison at all is no reason to move work off this machine.
 An unreachable machine or unknown remote quota is disclosed uncertainty about that machine only; it never blocks, delays, or downgrades local dispatch.
 Placing a task sends it through the ordinary secondmate routing path, and the second mate resolves its own worker profile from its own quota.
