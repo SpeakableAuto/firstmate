@@ -2,7 +2,7 @@
 # fm-worker-account-lib.sh - the single owner of the opt-in per-home worker
 # account pin: which runners can be pinned, how a pin file is parsed and
 # resolved, the launch-time sign-in check under it, and the environment
-# credentials a pinned Claude launch sheds.
+# credentials an admitted Claude launch sheds.
 #
 # docs/configuration.md "Worker account pin" owns the operator-facing contract.
 # Sourced by bin/fm-spawn.sh and bin/fm-control.sh.
@@ -12,10 +12,9 @@
 #   claude          CLAUDE_CONFIG_DIR     config/claude-account
 #   pi, pi-signed   PI_CODING_AGENT_DIR   config/pi-account
 #
-# The pin is opt-in: an absent file is no pin, and the launch keeps today's
-# ambient behavior byte for byte. A present file must resolve, or the launch
-# refuses; nothing falls back to an ambient or vendor-default login once a
-# home has declared one. `ordinary` selects the vendor default: for Claude
+# The pin is opt-in: an absent file is no pin. A present file must resolve, or
+# the launch refuses; nothing falls back to an ambient or vendor-default login
+# once a home has declared one. `ordinary` selects the vendor default: for Claude
 # that is CLAUDE_CONFIG_DIR unset, because Claude reads $CLAUDE_CONFIG_DIR/
 # .claude.json and keys its macOS Keychain entry to any CLAUDE_CONFIG_DIR that
 # is set, even $HOME/.claude; for Pi it is $HOME/.pi/agent. Any other value is
@@ -47,9 +46,9 @@
 #           a root can authenticate; a row whose provider column is exactly
 #           <p> passes. --no-refresh keeps the check from rewriting a root's
 #           tokens while other workers use them.
-# A pinned Claude launch also unsets the environment credentials Claude ranks
-# above the root's stored login, so an ambient API key or token cannot outrank
-# the pin. Pi ranks a root's stored credentials above environment variables,
+# An admitted Claude launch unsets the environment credentials Claude ranks
+# above the selected root's stored login, so an ambient API key or token cannot
+# select another account. Pi ranks a root's stored credentials above environment variables,
 # and the check refuses a provider the root has not stored, so a pinned Pi
 # launch unsets nothing.
 
@@ -270,7 +269,7 @@ fm_worker_account_select() {
 
 # fm_worker_account_claude_shed
 # Prints the `env` launch prefix that unsets the environment credentials Claude
-# ranks above a pinned root's stored login. The caller appends the root
+# ranks above a selected root's stored login. The caller appends the root
 # assignment, or -u CLAUDE_CONFIG_DIR for the ordinary account.
 fm_worker_account_claude_shed() {
   local var prefix=env
@@ -278,4 +277,30 @@ fm_worker_account_claude_shed() {
     prefix="$prefix -u $var"
   done
   printf '%s\n' "$prefix"
+}
+
+fm_worker_account_claude_ambient_identity() {
+  local var root=${CLAUDE_CONFIG_DIR:-}
+  for var in $FM_WORKER_ACCOUNT_CLAUDE_SHED; do
+    if [ -n "${!var:-}" ]; then
+      echo "error: Claude crew admission cannot prove which account ${var} selects without config/claude-account; add an account pin or unset ${var}, then choose Codex or route to a second mate on another account until quota is verifiable" >&2
+      return 1
+    fi
+  done
+  if [ -n "$root" ]; then
+    case "$root" in
+    /*) ;;
+    *)
+      echo "error: Claude crew admission cannot bind the launch to relative CLAUDE_CONFIG_DIR '$root'; use an absolute root, add config/claude-account, choose Codex, or route to a second mate on another account" >&2
+      return 1
+      ;;
+    esac
+    if [ ! -d "$root" ] || [ ! -r "$root" ] || [ ! -x "$root" ]; then
+      echo "error: Claude crew admission cannot bind the launch to unreadable CLAUDE_CONFIG_DIR '$root'; fix the root, add config/claude-account, choose Codex, or route to a second mate on another account" >&2
+      return 1
+    fi
+    printf '%s\n' "$root"
+  else
+    printf '%s\n' ordinary
+  fi
 }

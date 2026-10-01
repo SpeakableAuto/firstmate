@@ -12,6 +12,10 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-quota-axi-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-control-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-control-lib.sh"
+# shellcheck source=bin/fm-worker-account-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-worker-account-lib.sh"
 
 fm_claude_profile_floor_valid() {
   jq -en --arg scope "$1" --arg min_percent "$2" '
@@ -24,7 +28,8 @@ fm_claude_profile_floor_valid() {
 fm_claude_admission_check() {
   local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
   local settings='{}' limits cap floor floors meta account backend target verdict count=0
-  local snapshot row result gen started now
+  local snapshot row result gen started now recorded_harness recorded_family var
+  local -a quota_env=(env)
   if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
     settings=$(cat "$config/crew-dispatch.json") || return 1
   fi
@@ -57,7 +62,9 @@ fm_claude_admission_check() {
   for meta in "$state"/*.meta; do
     [ -f "$meta" ] || continue
     [ "$meta" != "$state/$id.meta" ] || continue
-    [ "$(fm_meta_get "$meta" harness)" = claude ] || continue
+    recorded_harness=$(fm_meta_get "$meta" harness)
+    recorded_family=$(fm_control_harness_family "$recorded_harness") || continue
+    [ "$recorded_family" = claude ] || continue
     [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
     account=$(fm_meta_get "$meta" claude_quota_identity)
     [ -n "$account" ] || account=$(fm_meta_get "$meta" account)
@@ -84,16 +91,20 @@ fm_claude_admission_check() {
     return 1
   fi
   if [ "$identity" = unknown ]; then
-    echo 'error: Claude crew admission refused because quota is unverifiable for an unpinned raw command; choose Codex or route to a second mate on another account' >&2
+    echo 'error: Claude crew admission refused because quota is unverifiable for a raw command whose credential selection cannot be proved; choose Codex or route to a second mate on another account' >&2
     return 1
   fi
-  # Explicit roots use profile-only so another credential source cannot answer
-  # for the selected account. Ordinary Claude uses quota-axi's default row.
+  for var in $FM_WORKER_ACCOUNT_CLAUDE_SHED; do
+    quota_env+=(-u "$var")
+  done
   if [ "$identity" != ordinary ]; then
-    snapshot=$(CLAUDE_CONFIG_DIR="$identity" fm_run_timed 15 quota-axi --provider claude --profile-only --no-credential-refresh --json 2>/dev/null) || snapshot=
+    quota_env+=("CLAUDE_CONFIG_DIR=$identity")
+    quota_env+=(quota-axi --provider claude --profile-only --no-credential-refresh --json)
   else
-    snapshot=$(fm_run_timed 15 quota-axi --provider claude --no-credential-refresh --json 2>/dev/null) || snapshot=
+    quota_env+=(-u CLAUDE_CONFIG_DIR)
+    quota_env+=(quota-axi --provider claude --no-credential-refresh --json)
   fi
+  snapshot=$(fm_run_timed 15 "${quota_env[@]}" 2>/dev/null) || snapshot=
   if ! printf '%s\n' "$snapshot" | fm_quota_json_valid; then
     echo 'error: Claude crew admission refused because quota is unavailable or invalid; choose Codex or route to a second mate on another account' >&2
     return 1

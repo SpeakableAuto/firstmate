@@ -93,7 +93,7 @@ signed_in_claude_root() {
 }
 
 # spawn_ship <id> [fm-spawn args...]: a ship spawn from HOME_DIR whose invoking
-# process carries an ambient signed-in Claude root and an ambient API key.
+# process carries an ambient signed-in Claude root and an optional ambient API key.
 spawn_ship() {
   local id=$1
   shift
@@ -101,7 +101,7 @@ spawn_ship() {
   signed_in_claude_root "$CASE/ambient-claude"
   : > "$CASE/launch.log"
   FM_FAKE_LAUNCH_LOG="$CASE/launch.log" FM_TEST_CLAUDE_CONFIG_DIR="$CASE/ambient-claude" \
-    ANTHROPIC_API_KEY=ambient-invoker-key \
+    ANTHROPIC_API_KEY="${FM_TEST_INVOKER_ANTHROPIC_API_KEY:-}" \
     fm_test_run_spawn "$HOME_DIR" "$WT" "$FAKEBIN" "$id" "$PROJ" --mode no-mistakes --yolo off "$@"
 }
 
@@ -123,19 +123,46 @@ assert_refused_before_launch() {
   [ ! -s "$CASE/launch.log" ] || fail "a refused spawn must not launch a worker: $(cat "$CASE/launch.log")"
 }
 
-test_absent_pin_keeps_the_launch_unchanged() {
+test_unpinned_claude_launch_uses_the_admitted_identity() {
   local out rc id=acct-absent
   new_case absent claude
+  cat > "$FAKEBIN/quota-axi" <<SH
+#!/usr/bin/env bash
+{
+  printf 'CLAUDE_CONFIG_DIR=%s\n' "\${CLAUDE_CONFIG_DIR-unset}"
+  printf 'ANTHROPIC_API_KEY=%s\n' "\${ANTHROPIC_API_KEY-unset}"
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "\${CLAUDE_CODE_OAUTH_TOKEN-unset}"
+  printf 'ARGS=%s\n' "\$*"
+} > '$CASE/quota-environment'
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","kind":"session","percentRemaining":80}],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"}}]}}]}'
+SH
+  chmod +x "$FAKEBIN/quota-axi"
   out=$(spawn_ship "$id"); rc=$?
   expect_code 0 "$rc" "an unpinned Claude spawn should succeed: $out"
   assert_not_contains "$out" "account=" "an unpinned spawn must not report an account"
   assert_no_grep "account=" "$HOME_DIR/state/$id.meta" "an unpinned task record must not carry an account"
+  assert_grep "claude_quota_identity=$CASE/ambient-claude" "$HOME_DIR/state/$id.meta" \
+    "an unpinned Claude record must name the exact admitted config root"
   assert_absent "$CASE/claude-checks" "an unpinned spawn must not run a sign-in check"
+  assert_grep "CLAUDE_CONFIG_DIR=$CASE/ambient-claude" "$CASE/quota-environment" \
+    "quota must be measured from the selected config root"
+  assert_grep "ANTHROPIC_API_KEY=unset" "$CASE/quota-environment" \
+    "an API key must not answer the selected root's quota check"
+  assert_grep "CLAUDE_CODE_OAUTH_TOKEN=unset" "$CASE/quota-environment" \
+    "an OAuth token must not answer the selected root's quota check"
+  assert_grep "ARGS=--provider claude --profile-only --no-credential-refresh --json" "$CASE/quota-environment" \
+    "an explicit config root must use an isolated profile-only quota read"
   run_pane
   assert_grep "CLAUDE_CONFIG_DIR=$CASE/ambient-claude" "$CASE/claude-worker" \
-    "an unpinned launch must keep forwarding the invoking process's own Claude root"
-  assert_grep "ANTHROPIC_API_KEY=ambient-pane-key" "$CASE/claude-worker" \
-    "an unpinned launch must leave the pane's environment credentials alone"
+    "an unpinned launch must use the config root whose quota was admitted"
+  assert_grep "ANTHROPIC_API_KEY=unset" "$CASE/claude-worker" \
+    "a pane API key must not outrank the admitted config root"
+  assert_grep "CLAUDE_CODE_OAUTH_TOKEN=unset" "$CASE/claude-worker" \
+    "a pane OAuth token must not outrank the admitted config root"
+
+  out=$(FM_TEST_INVOKER_ANTHROPIC_API_KEY=ambient-invoker-key spawn_ship "$id-key"); rc=$?
+  expect_code 1 "$rc" "an unpinned caller credential with no provable quota identity must refuse"
+  assert_refused_before_launch "$id-key" "$out" "cannot prove which account ANTHROPIC_API_KEY selects"
 
   new_case absent-pi pi
   out=$(spawn_ship acct-absent-pi --model gpt-5.5); rc=$?
@@ -144,7 +171,7 @@ test_absent_pin_keeps_the_launch_unchanged() {
   run_pane
   assert_grep "PI_CODING_AGENT_DIR=$CASE/ambient-pi" "$CASE/pi-worker" \
     "an unpinned Pi launch must keep the pane's own Pi root"
-  pass "an absent pin leaves Claude and Pi launches exactly as they were"
+  pass "an unpinned Claude launch uses its admitted identity and Pi remains unchanged"
 }
 
 test_claude_pin_selects_the_root_and_sheds_ambient_credentials() {
@@ -152,7 +179,7 @@ test_claude_pin_selects_the_root_and_sheds_ambient_credentials() {
   new_case claude-pin claude
   signed_in_claude_root "$CASE/work"
   printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
-  out=$(spawn_ship "$id"); rc=$?
+  out=$(FM_TEST_INVOKER_ANTHROPIC_API_KEY=ambient-invoker-key spawn_ship "$id"); rc=$?
   expect_code 0 "$rc" "a Claude spawn pinned to a signed-in root should succeed: $out"
   assert_contains "$out" "account=$CASE/work" "the spawn should report the pinned account"
   assert_grep "account=$CASE/work" "$HOME_DIR/state/$id.meta" "the task record should carry the pinned account"
@@ -174,7 +201,7 @@ test_claude_pin_refuses_a_signed_out_root_despite_an_ambient_login() {
   new_case claude-signed-out claude
   mkdir -p "$CASE/work"
   printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
-  out=$(spawn_ship "$id"); rc=$?
+  out=$(FM_TEST_INVOKER_ANTHROPIC_API_KEY=ambient-invoker-key spawn_ship "$id"); rc=$?
   expect_code 1 "$rc" "a Claude pin to a signed-out root must refuse"
   assert_refused_before_launch "$id" "$out" "config/claude-account pins Claude workers to $CASE/work, which is not signed in"
   assert_absent "$CASE/work/.claude.json" "a refused spawn must not register trust in the pinned root"
@@ -352,7 +379,7 @@ test_raw_claude_account_override_refuses_without_a_pin() {
   mkdir -p "$CASE/other"
   out=$(spawn_ship "$id" --harness "CLAUDE_CONFIG_DIR=$CASE/other ANTHROPIC_API_KEY=override-key claude --print raw"); rc=$?
   expect_code 1 "$rc" "an unpinned home must refuse a raw Claude account override: $out"
-  assert_refused_before_launch "$id" "$out" "quota is unverifiable for an unpinned raw command"
+  assert_refused_before_launch "$id" "$out" "raw command whose credential selection cannot be proved"
   pass "an unpinned home refuses a raw Claude account override with unverifiable quota"
 }
 
@@ -466,7 +493,11 @@ SH
   chmod +x "$FAKEBIN/quota-axi"
   quota_fixture 80
   for n in 1 2 3; do
-    printf 'harness=claude\nkind=ship\nwindow=firstmate:fm-%s\naccount=ordinary\n' "$n" > "$HOME_DIR/state/crew$n.meta"
+    if [ "$n" -eq 3 ]; then
+      printf 'harness=claude-wrapper\nkind=ship\nwindow=firstmate:fm-%s\naccount=ordinary\n' "$n" > "$HOME_DIR/state/crew$n.meta"
+    else
+      printf 'harness=claude\nkind=ship\nwindow=firstmate:fm-%s\naccount=ordinary\n' "$n" > "$HOME_DIR/state/crew$n.meta"
+    fi
     echo alive > "$CASE/verdict-fm-$n"
   done
   out=$(check_admission); rc=$?
@@ -509,9 +540,20 @@ SH
   expect_code 1 "$rc" "real spawn refuses a depleted session: $out"
   assert_refused_before_launch guarded "$out" 'five_hour remaining 39% below 40%'
   assert_absent "$HOME_DIR/state/.claude-admission.lock" 'refusal releases admission lock'
+  cat > "$FAKEBIN/claude-wrapper" <<'SH'
+#!/usr/bin/env bash
+exec claude "$@"
+SH
+  chmod +x "$FAKEBIN/claude-wrapper"
+  signed_in_claude_root "$CASE/work"
+  printf '%s\n' "$CASE/work" > "$HOME_DIR/config/claude-account"
+  out=$(spawn_ship raw-prefixed --harness "$FAKEBIN/claude-wrapper --print raw"); rc=$?
+  expect_code 1 "$rc" "a Claude-prefixed raw command with an unprovable identity must refuse"
+  assert_refused_before_launch raw-prefixed "$out" 'raw command whose credential selection cannot be proved'
+  rm "$HOME_DIR/config/claude-account"
   out=$(spawn_ship raw-unknown 'claude --dangerously-skip-permissions'); rc=$?
   expect_code 1 "$rc" "an unpinned raw Claude launch refuses unverifiable quota: $out"
-  assert_refused_before_launch raw-unknown "$out" 'quota is unverifiable for an unpinned raw command'
+  assert_refused_before_launch raw-unknown "$out" 'raw command whose credential selection cannot be proved'
   cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","kind":"session","percentRemaining":80}],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"}}]}}]}'
@@ -585,7 +627,7 @@ test_claude_admission_limits
 test_spawn_enforces_claude_admission
 test_concurrent_claude_spawns_share_last_slot
 
-test_absent_pin_keeps_the_launch_unchanged
+test_unpinned_claude_launch_uses_the_admitted_identity
 test_claude_pin_selects_the_root_and_sheds_ambient_credentials
 test_claude_pin_refuses_a_signed_out_root_despite_an_ambient_login
 test_claude_ordinary_pin_unsets_the_config_root

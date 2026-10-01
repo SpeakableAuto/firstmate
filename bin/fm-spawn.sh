@@ -644,6 +644,7 @@ fm_refuse_if_gate_agent
 KIND=ship
 KIND_SET=0
 HARNESS_ARG=
+HARNESS_FAMILY=
 MODEL=
 EFFORT=
 PROFILE_FLOOR_SCOPE=
@@ -2306,6 +2307,7 @@ case "$ARG3" in
   }
   ;;
 esac
+HARNESS_FAMILY=$(fm_control_harness_family "$HARNESS") || HARNESS_FAMILY=
 
 # muse, gemini, agy, and devin are verified as CREWMATE/SCOUT adapters only. A secondmate is
 # a firstmate instance, so it needs a primary supervision protocol.
@@ -2445,13 +2447,13 @@ if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
       PROFILE_FLOOR_SCOPE=$RELAUNCH_PRIOR_FLOOR_SCOPE
       PROFILE_FLOOR_MIN_PERCENT=$RELAUNCH_PRIOR_FLOOR_MIN_PERCENT
     fi
-  elif [ "$HARNESS" = claude ] && [ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ]; then
+  elif [ "$HARNESS_FAMILY" = claude ] && [ "$PROFILE_FLOOR_SCOPE_SET" -eq 0 ]; then
     echo "error: relaunching task $ID onto a changed Claude profile requires --profile-floor-scope and --profile-floor-min-percent from the newly selected candidate" >&2
     exit 1
   fi
 fi
 if [ "$PROFILE_FLOOR_SCOPE_SET" -eq 1 ] || [ -n "$PROFILE_FLOOR_SCOPE" ]; then
-  if [ "$HARNESS" != claude ] || [ "$KIND" = secondmate ]; then
+  if [ "$HARNESS_FAMILY" != claude ] || [ "$KIND" = secondmate ]; then
     echo "error: selected profile floors apply only to Claude crew" >&2
     exit 1
   fi
@@ -2461,17 +2463,17 @@ if [ "$PROFILE_FLOOR_SCOPE_SET" -eq 1 ] || [ -n "$PROFILE_FLOOR_SCOPE" ]; then
   }
 fi
 # Worker account pin (header above): resolved before any endpoint, worktree, or
-# record exists. An absent pin selects nothing and leaves every later launch
-# step exactly as it was. A pinned Claude root is exported here as well, so the
-# trust registration below writes the store the worker will actually read.
+# record exists. A pinned Claude root is exported here as well, so the trust
+# registration below writes the store the worker will actually read.
 RAW_COMMAND=
 [ "$RAW_LAUNCH" = 0 ] || RAW_COMMAND=$ARG3
-WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$HARNESS}" "$RAW_COMMAND") || exit 1
+WORKER_ACCOUNT_HARNESS=${HARNESS_FAMILY:-$HARNESS}
+WORKER_ACCOUNT=$(fm_worker_account_select "$WORKER_ACCOUNT_HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$WORKER_ACCOUNT_HARNESS}" "$RAW_COMMAND") || exit 1
 WORKER_ACCOUNT_DECLARED=${WORKER_ACCOUNT%%$'\t'*}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT#*$'\t'}
 WORKER_ACCOUNT_PROVIDER=${WORKER_ACCOUNT_ROOT#*$'\t'}
 WORKER_ACCOUNT_ROOT=${WORKER_ACCOUNT_ROOT%%$'\t'*}
-if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
+if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS_FAMILY" = claude ]; then
   if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
     export CLAUDE_CONFIG_DIR=$WORKER_ACCOUNT_ROOT
   else
@@ -2482,9 +2484,16 @@ fi
 # All Claude crew admission paths, including raw launches and relaunches, pass
 # this gate before allocating a worktree or endpoint. The lock survives until
 # EXIT cleanup, so another admission sees the finished launch or its rollback.
-if [ "$HARNESS" = claude ] && [ "$KIND" != secondmate ]; then
-  CLAUDE_QUOTA_IDENTITY=${WORKER_ACCOUNT_DECLARED:-${CLAUDE_CONFIG_DIR:-ordinary}}
-  [ "$RAW_LAUNCH" = 0 ] || [ -n "$WORKER_ACCOUNT" ] || CLAUDE_QUOTA_IDENTITY=unknown
+if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
+  if [ "$RAW_LAUNCH" = 1 ] && [ "$HARNESS" != claude ]; then
+    CLAUDE_QUOTA_IDENTITY=unknown
+  elif [ -n "$WORKER_ACCOUNT" ]; then
+    CLAUDE_QUOTA_IDENTITY=$WORKER_ACCOUNT_DECLARED
+  elif [ "$RAW_LAUNCH" = 1 ]; then
+    CLAUDE_QUOTA_IDENTITY=unknown
+  else
+    CLAUDE_QUOTA_IDENTITY=$(fm_worker_account_claude_ambient_identity) || exit 1
+  fi
   CLAUDE_ADMISSION_LOCK="$STATE/.claude-admission.lock"
   fm_lock_acquire_wait "$CLAUDE_ADMISSION_LOCK" || exit 1
   CLAUDE_ADMISSION_LOCK_HELD=1
@@ -4983,8 +4992,7 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
-  # The worker account pin, only when this home declares one, so an unpinned
-  # task record stays byte-identical.
+  # The worker account pin is recorded only when this home declares one.
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
   [ -z "$WORKER_ACCOUNT_PROVIDER" ] || echo "account_provider=$WORKER_ACCOUNT_PROVIDER"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
@@ -5201,18 +5209,12 @@ claude | codex | opencode | pi | pi-signed | grok | kimi | gemini | muse | rovo 
   LAUNCH="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI $LAUNCH"
   ;;
 esac
-# Crewmate panes are created by a long-lived tmux/herdr daemon that does not
-# inherit firstmate's current environment, so a bare `claude` in the pane falls
-# back to the default ~/.claude store even when firstmate itself runs under a
-# different CLAUDE_CONFIG_DIR (for example a work-vs-personal subscription split).
-# Forward firstmate's own resolved store onto the claude launch so the crewmate
-# uses the same credential/config firstmate is authenticated with. Only when set;
-# an unset value is the single-store default and needs no prefix.
-# A home's worker account pin replaces that forwarding: the launch names the
-# pinned root (or unsets the variable for the ordinary Claude account) and
-# sheds the environment credentials Claude ranks above the root's login.
+# Direct Claude crew launch under the exact config-root identity whose quota
+# passed admission. Pinned and unpinned admitted crew shed variables ranked
+# above stored login and explicitly set or unset CLAUDE_CONFIG_DIR. Local
+# secondmates retain legacy root forwarding unless a worker pin selects one.
 if [ -n "$WORKER_ACCOUNT" ]; then
-  case "$HARNESS" in
+  case "$HARNESS_FAMILY" in
   claude)
     if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
       LAUNCH="$(fm_worker_account_claude_shed) CLAUDE_CONFIG_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
@@ -5224,6 +5226,12 @@ if [ -n "$WORKER_ACCOUNT" ]; then
     LAUNCH="PI_CODING_AGENT_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
     ;;
   esac
+elif [ "$HARNESS_FAMILY" = claude ] && [ -n "$CLAUDE_QUOTA_IDENTITY" ]; then
+  if [ "$CLAUDE_QUOTA_IDENTITY" = ordinary ]; then
+    LAUNCH="$(fm_worker_account_claude_shed) -u CLAUDE_CONFIG_DIR $LAUNCH"
+  else
+    LAUNCH="$(fm_worker_account_claude_shed) CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_QUOTA_IDENTITY") $LAUNCH"
+  fi
 elif [ "$HARNESS" = claude ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
   LAUNCH="CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_CONFIG_DIR") $LAUNCH"
 fi

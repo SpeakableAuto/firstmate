@@ -859,7 +859,7 @@ The [Claude adapter reference](../.agents/skills/harness-adapters/references/har
 ## Worker account pin (config/claude-account, config/pi-account)
 
 A home that mixes accounts for one runner, such as a work login and a personal one, can pin the account its own Claude and Pi workers launch on.
-The pin is opt-in: with neither file, every launch is unchanged, and Claude workers keep receiving firstmate's own `CLAUDE_CONFIG_DIR` when it is set.
+The pin is opt-in; without one, Pi retains its ambient behavior, while direct Claude crew follows the exact-identity rules in "Claude crew admission" below.
 
 Both files are local and gitignored.
 
@@ -894,7 +894,7 @@ The check runs with only `HOME`, `PATH`, `TMPDIR`, `USER`, `LOGNAME`, and the pi
 A pinned Claude launch also unsets the environment credentials Claude ranks above a stored login, such as `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and the Bedrock and Vertex switches ([authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)).
 Pi ranks a root's stored logins above environment variables, so a pinned Pi launch unsets nothing.
 
-A home that authenticates Claude through environment credentials on purpose should leave the pin absent.
+A home that authenticates Claude through an environment credential must add a config-root pin whose quota can be checked, or direct Claude crew admission refuses because the credential cannot be mapped to that quota identity.
 
 ### Failures, reporting, and inheritance
 
@@ -1137,7 +1137,7 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 
 ## Claude crew admission
 
-`fm-spawn.sh` enforces Claude ship and scout admission, including explicit, raw, batch, and relaunch paths, independently of typed dispatch resolution.
+`fm-spawn.sh` enforces Claude ship and scout admission, including explicit, raw, batch, and relaunch paths, independently of typed dispatch resolution; raw executable basenames in the shared `claude*` harness family receive the same guard and count.
 Optional top-level `claude_admission` in `config/crew-dispatch.json` may only make the fixed safeguards stricter: `max_concurrent` is an integer from 1 through 3 (default `3`), and `min_session_percent` is a number from 40 through 100 (default `40`):
 
 ```json
@@ -1145,7 +1145,9 @@ Optional top-level `claude_admission` in `config/crew-dispatch.json` may only ma
 ```
 
 The cap counts this home's direct Claude crew on the selected account, excluding the task being relaunched and all secondmate agents.
-Account identity is the declared worker pin or ambient Claude config root; `ordinary` denotes the default account, and legacy records without a known identity count against every account.
+Account identity is the declared worker pin or a provable absolute ambient Claude config root; `ordinary` denotes the default account, and legacy records without a known identity count against every account.
+An unpinned canonical launch refuses when a higher-precedence Claude credential is set because that credential cannot be mapped to a quota profile.
+Every admitted launch removes higher-precedence pane credentials and explicitly selects the same config root used for its quota snapshot.
 Unpinned raw commands count against every account and are refused because their credential selection and quota cannot be proved.
 Backend recovery-grade liveness excludes confirmed missing or dead agents; uncertain liveness counts conservatively, and a just-published launch reserves its slot for 60 seconds while the process starts.
 Backends without a recovery classifier retain their recorded slots conservatively until teardown removes the record.
@@ -1154,7 +1156,7 @@ The supported boundary is per home; homes sharing one Claude account share the c
 
 Admission reads one bounded, read-only `quota-axi --json` snapshot for Claude and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
 The selected Claude row is usable only when `state.stale` is explicitly `false`; an absent or malformed freshness signal is incomplete evidence and refuses admission.
-Explicit config roots use quota-axi's profile-only read so a different credential source cannot supply their quota; the ordinary account uses the default Claude row.
+Explicit config roots use a profile-only quota read with higher-precedence credentials removed; the ordinary account uses a default read with those credentials and `CLAUDE_CONFIG_DIR` unset.
 The selected Claude candidate's own optional `floor` is carried by the resolver's concrete profile line as `--profile-floor-scope` and `--profile-floor-min-percent`; a manual selection passes the same pair.
 Admission enforces only that selected floor and records it with the concrete harness, model, and effort profile.
 An exact unchanged-profile relaunch retains the recorded floor, while a changed Claude profile must pass the newly selected candidate's floor pair.
