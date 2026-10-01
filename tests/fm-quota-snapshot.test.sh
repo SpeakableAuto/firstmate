@@ -45,6 +45,7 @@ for side in local remote; do
   cat > "$bin/quota-axi" <<SH
 #!/usr/bin/env bash
 [ "\${1:-}" = --json ] || exit 2
+printf '%s\\n' "\${QUOTA_AXI_MAX_AGE:-unset}" > "$TMP_ROOT/$side.max-age"
 case "\${FAKE_QUOTA_MODE:-ok}" in
   fail) exit 3 ;;
   hang) exec sleep 30 ;;
@@ -107,7 +108,10 @@ run code out err --
 expect_code 0 "$code" "local snapshot exits 0"
 assert_equals 58 "$(jq -r '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining' <<<"$out")" "local snapshot is this machine's quota"
 assert_equals '' "$err" "a good local snapshot is silent on stderr"
-pass "local snapshot prints the validated quota-axi --json output"
+assert_equals 15m "$(cat "$TMP_ROOT/local.max-age")" "snapshot reads opt into vendor cache reuse"
+run code out err QUOTA_AXI_MAX_AGE=2m --
+assert_equals 2m "$(cat "$TMP_ROOT/local.max-age")" "an explicit vendor reuse age is preserved"
+pass "local snapshot prints validated output and requests configurable credential-aware cache reuse"
 
 run code out err FAKE_QUOTA_MODE=invalid --
 expect_code 1 "$code" "invalid local snapshot exits 1"

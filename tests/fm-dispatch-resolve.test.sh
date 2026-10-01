@@ -146,6 +146,10 @@ fi
 printf '%s\n' "$*" >> "${QUOTA_AXI_CALLS:?}"
 [ "${FAKE_QUOTA_FAIL:-0}" = 1 ] && exit 1
 [ "${1:-}" = --json ] || exit 2
+case "$*" in
+  *--max-age*)
+    if [ -n "${QUOTA_AXI_RECOVERY_FIXTURE:-}" ]; then cat "$QUOTA_AXI_RECOVERY_FIXTURE"; exit; fi ;;
+esac
 cat "${QUOTA_AXI_FIXTURE:?}"
 SH
 chmod +x "$FAKEBIN/quota-axi"
@@ -1232,5 +1236,58 @@ mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
 QUOTA_AXI_FIXTURE="$TMP_ROOT/local-ordered.json" placement_case ok --project pager
 assert_contains "$out" 'placement: local' "unselected remote Claude quota cannot trigger placement"
 pass "cross-home placement respects candidate order on both machines"
+
+# Rate-limit recovery reuses vendor semantics; old and other failures stay unknown.
+export TYPESAFE_API_KEY="$KEY"
+write_response "$RESPONSE" default 0.95
+jq '.default = [{harness:"codex",model:"gpt-5.6-sol"},{harness:"claude",model:"opus"}]' "$BASE_RULES" > "$RULES"
+write_quota "$QUOTA" 0.1 1.2
+export QUOTA_AXI_RECOVERY_FIXTURE="$TMP_ROOT/recovered.json"
+cp "$QUOTA" "$TMP_ROOT/fresh.json"
+jq '.providers |= map(select(.provider == "claude")) |
+  .providers[].state = {status:"fresh",stale:false,reused:true,refreshedAt:((now-300)|floor|todateiso8601|sub("Z$";".000Z"))}' \
+    "$TMP_ROOT/fresh.json" > "$QUOTA_AXI_RECOVERY_FIXTURE"
+jq '(.providers[] | select(.provider == "claude")) |=
+  (.state = {status:"stale",stale:true,error:"Claude quota endpoint rate limited"} |
+   .quotaSemantics = {status:"unknown",effectiveAvailability:[]})' "$TMP_ROOT/fresh.json" > "$QUOTA"
+reset_log
+run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'claude'" "recent rate-limited Claude is ranked using the cached priority"
+assert_contains "$out" 'cached=' "resolver discloses the cached reading age"
+assert_equals 2 "$(wc -l < "$QUOTA_AXI_CALLS" | tr -d ' ')" "only the rate-limited provider gets one cache retry"
+# A one-provider recovery may be schema 5 while the original multi-account
+# report is schema 6. The original join key must survive that replacement.
+jq '.schemaVersion = 6 | .providers[].accountKey = "default"' "$QUOTA" > "$TMP_ROOT/expanded.json"
+cp "$TMP_ROOT/expanded.json" "$QUOTA"
+run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'claude'" "schema-5 cache recovery preserves the schema-6 default account key"
+jq '.schemaVersion = 6 | .providers[].accountKey = "other-account"' \
+    "$QUOTA_AXI_RECOVERY_FIXTURE" > "$TMP_ROOT/other-account.json"
+QUOTA_AXI_RECOVERY_FIXTURE="$TMP_ROOT/other-account.json" run code out err "$BRIEF"
+assert_contains "$out" 'provider claude unmeasured (unknown)' "a different account cannot supply cached evidence"
+jq '.select = "candidate-order"' "$RULES" > "$TMP_ROOT/ordered.json"
+cp "$TMP_ROOT/ordered.json" "$RULES"
+run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'codex'" "Codex-first ordering is unchanged by higher cached Claude priority"
+for age in 1200 -300; do
+  jq --argjson age "$age" '.providers[].state.refreshedAt = ((now-$age)|floor|todateiso8601)' \
+    "$QUOTA_AXI_RECOVERY_FIXTURE" > "$TMP_ROOT/recovered-edit.json"
+  cp "$TMP_ROOT/recovered-edit.json" "$QUOTA_AXI_RECOVERY_FIXTURE"
+  run code out err "$BRIEF"
+  assert_contains "$out" 'provider claude unmeasured (unknown)' "old or future-dated cache is unranked"
+  assert_not_contains "$out" 'cached=' "unusable cache is not advertised as evidence"
+done
+jq '.providers[].state.refreshedAt = ((now-300)|floor|todateiso8601)' \
+    "$QUOTA_AXI_RECOVERY_FIXTURE" > "$TMP_ROOT/recovered-edit.json"
+cp "$TMP_ROOT/recovered-edit.json" "$QUOTA_AXI_RECOVERY_FIXTURE"
+jq '(.providers[] | select(.provider == "claude") | .state.error) = "authentication failed"' \
+    "$QUOTA" > "$TMP_ROOT/auth-failure.json"
+cp "$TMP_ROOT/auth-failure.json" "$QUOTA"
+reset_log
+run code out err "$BRIEF"
+assert_contains "$out" 'provider claude unmeasured (unknown)' "other failures remain unknown"
+assert_equals 1 "$(wc -l < "$QUOTA_AXI_CALLS" | tr -d ' ')" "other failures never retry the cache"
+unset QUOTA_AXI_RECOVERY_FIXTURE
+pass "bounded Claude cache recovery ranks recent evidence, preserves candidate order, and discloses age"
 
 printf '# all fm-dispatch-resolve tests passed\n'

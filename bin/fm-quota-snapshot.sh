@@ -6,17 +6,18 @@
 #   fm-quota-snapshot.sh
 #   fm-quota-snapshot.sh --secondmate <id>
 #
-# With no arguments it runs `quota-axi --json` once on this machine, bounded by
+# With no arguments it reads `quota-axi --json` on this machine, bounded by
 # FM_QUOTA_SNAPSHOT_TIMEOUT seconds (default 10), checks the result with
 # fm_quota_json_valid from bin/fm-quota-axi-lib.sh, and prints it on stdout.
+# Cache reuse is owned by docs/configuration.md "Quota snapshot reuse".
 # This is also the command the --secondmate form runs on the remote host.
 #
 # --secondmate <id> reads the same snapshot from the machine hosting the remote
 # route <id> in data/secondmates.md, through bin/fm-on.sh, bounded by
 # FM_REMOTE_QUOTA_TIMEOUT seconds (default 25), and validates it again here.
 # The remote host's quota-axi must be on the remote job PATH that
-# bin/fm-remote-job-lib.sh composes. Successful snapshots are never cached, so
-# every dispatch reads current remote quota. A failure reason is kept under
+# bin/fm-remote-job-lib.sh composes. The parent never caches successful reads;
+# every dispatch invokes the remote snapshot reader. A failure is kept under
 # state/quota-remote/<id>.err and reused while it is younger than
 # FM_REMOTE_QUOTA_TTL seconds (default 120), so an unreachable host costs one
 # bounded wait per window. Nothing is reused past the TTL.
@@ -39,7 +40,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 
-usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
 die_usage() { printf 'error: %s\n' "$1" >&2; exit 2; }
 unavailable() { printf 'quota-snapshot: unavailable (%s)\n' "$1" >&2; exit 1; }
 
@@ -68,7 +69,7 @@ if [ -z "$SECONDMATE" ]; then
   LOCAL_TIMEOUT=${FM_QUOTA_SNAPSHOT_TIMEOUT:-10}
   positive_int FM_QUOTA_SNAPSHOT_TIMEOUT "$LOCAL_TIMEOUT"
   command -v quota-axi >/dev/null 2>&1 || unavailable "quota-axi not installed"
-  snapshot=$(fm_run_timed "$LOCAL_TIMEOUT" quota-axi --json 2>/dev/null </dev/null); rc=$?
+  snapshot=$(fm_quota_read_json "$LOCAL_TIMEOUT" quota-axi --json 2>/dev/null </dev/null); rc=$?
   if fm_timed_out "$rc"; then unavailable "quota-axi --json exceeded ${LOCAL_TIMEOUT}s"; fi
   [ "$rc" -eq 0 ] || unavailable "quota-axi --json exited $rc"
   printf '%s\n' "$snapshot" | fm_quota_json_valid || unavailable "quota-axi --json returned an invalid snapshot"

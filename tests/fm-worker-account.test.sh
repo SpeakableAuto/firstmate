@@ -417,6 +417,10 @@ test_claude_admission_limits() (
   new_case admission claude
   cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
+case "$*" in
+  *--max-age*)
+    if [ -n "${FM_TEST_CACHED_QUOTA:-}" ]; then cat "$FM_TEST_CACHED_QUOTA"; exit; fi ;;
+esac
 cat "$FM_TEST_QUOTA"
 SH
   chmod +x "$FAKEBIN/quota-axi"
@@ -427,6 +431,52 @@ SH
   }
   check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary "${1:-}" "${2:-}" 2>&1; }
   local out rc n
+  export FM_TEST_CACHED_QUOTA="$CASE/cached-quota.json"
+  for age in 300 3540; do
+    quota_fixture 80
+    jq --argjson age "$age" '.providers[].state = {status:"fresh",stale:false,reused:true,
+      refreshedAt:((now-$age)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"
+    jq '.providers[].state = {status:"stale",stale:true,error:"Claude quota endpoint rate limited"} |
+      .providers[].quotaSemantics = {status:"unknown",effectiveAvailability:[]}' \
+    "$FM_TEST_QUOTA" > "$CASE/rate-limited.json"
+    cp "$CASE/rate-limited.json" "$FM_TEST_QUOTA"
+    out=$(check_admission); rc=$?
+    if [ "$age" = 300 ]; then
+      expect_code 0 "$rc" "five-minute-old rate-limited quota admits: $out"
+      assert_contains "$out" 'cached reading ' 'admission exposes cache age'
+    else
+      expect_code 1 "$rc" "59-minute-old quota refuses: $out"
+      assert_contains "$out" 'quota floor is unverifiable' 'old quota cannot establish the floor'
+    fi
+  done
+  quota_fixture 39
+  jq '.providers[].state = {status:"fresh",stale:false,reused:true,
+    refreshedAt:((now-300)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"
+  cp "$CASE/rate-limited.json" "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "recent cached quota below floor refuses: $out"
+  assert_contains "$out" 'five_hour remaining 39% below 40%' 'cached reading preserves the fixed floor'
+  for stamp in 'bad timestamp' '2039-01-01T00:00:00Z' ''; do
+    jq --arg stamp "$stamp" '.providers[].state.refreshedAt = $stamp' \
+    "$FM_TEST_CACHED_QUOTA" > "$CASE/invalid-age.json"
+    cp "$CASE/invalid-age.json" "$FM_TEST_CACHED_QUOTA"
+    out=$(check_admission); rc=$?
+    expect_code 1 "$rc" "an unproved cached age refuses: $out"
+    assert_contains "$out" 'quota floor is unverifiable' 'bad age never establishes a floor'
+  done
+  quota_fixture 80
+  jq '.providers[].state = {status:"fresh",stale:false,reused:true,
+    refreshedAt:((now-300)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"
+  cp "$CASE/rate-limited.json" "$FM_TEST_QUOTA"
+  unset FM_TEST_CACHED_QUOTA
+  out=$(fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate "$CASE/profile" "" "" 2>&1); rc=$?
+  expect_code 1 "$rc" "a rate-limited pinned account remains unverifiable: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'pinned-account cache recovery remains a follow-up'
+  jq '.providers[].state.error = "authentication failed"' "$FM_TEST_QUOTA" > "$CASE/auth-failure.json"
+  cp "$CASE/auth-failure.json" "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "other failures cannot admit from a recent cache: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'authentication failure stays unknown'
   quota_fixture 39
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "a 39% session refuses: $out"
@@ -502,6 +552,10 @@ SH
   expect_code 1 "$rc" "a timed-out quota read refuses: $out"
   cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
+case "$*" in
+  *--max-age*)
+    if [ -n "${FM_TEST_CACHED_QUOTA:-}" ]; then cat "$FM_TEST_CACHED_QUOTA"; exit; fi ;;
+esac
 cat "$FM_TEST_QUOTA"
 SH
   chmod +x "$FAKEBIN/quota-axi"

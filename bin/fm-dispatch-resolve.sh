@@ -24,7 +24,7 @@
 #   rule's declared `min_confidence` on that rule's probability, falling to the
 #   most probable other option that clears its own floor), the rule's declared
 #   `approval` and `floor`, each profile's declared `provider` and `floor`, the
-#   quota rows from ONE quota-axi --json snapshot (schema 5 or 6; each
+#   quota rows from a quota-axi --json snapshot (schema 5 or 6; each
 #   candidate binds to one row through quota_row in
 #   bin/fm-quota-axi-lib.sh, so a Pi lane such as openai-codex-work/...
 #   reads its own account's row and an expanded provider with no row for the
@@ -357,9 +357,9 @@ jq -e --slurpfile rules "$RULES" '
        (.usage.output_tokens | type) == "number"))' \
   "$RESP_FILE" >/dev/null 2>&1 || emit_error "response is not a rule Choice answer"
 
-# ---- quota evidence: one quota-axi --json snapshot -----------------------------
+# ---- quota evidence: shared bounded snapshot read -----------------------------
 command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
-quota-axi --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
+fm_quota_read_json "${FM_QUOTA_SNAPSHOT_TIMEOUT:-10}" quota-axi --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
 fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
 
 # Candidate evaluation against one snapshot bound to $q, with $pmap in scope.
@@ -441,7 +441,7 @@ CANDIDATE_JQ='
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
-    end;
+    end | . + {cache: (prov($p; $lane).firstmateCache // null)};
 '
 
 # ---- resolution: declared gates + quota evidence + selection, all in jq ------------
@@ -639,6 +639,7 @@ TEXT=$(jq -r '
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
       + (if .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
+      + (if .cache then "  cached=\(.cache.ageSeconds)s old" else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
@@ -651,6 +652,7 @@ TEXT=$(jq -r '
      (.placement.homes[] | "  home: \(.id | flat)"
        + (if .best then "  best=\(.best.profile.harness | flat):\(show(.best.profile.model))  scope=\(show(.best.scope))  remaining=\(show(.best.pct))%  spendPriority=\(show(.best.spendPriority))  runway=\(show(.best.runway))"
           else "  unknown: \(.reason | flat): disclosed uncertainty" end)
+       + (if .best.cache then "  cached=\(.best.cache.ageSeconds)s old" else "" end)
        + (if .placement_blocked then "  placement-blocked=\(.placement_blocked | flat)" else "" end)
        + (if .note then "  note=\(.note | flat)" else "" end))
    else empty end)' <<<"$RESULT") || emit_error "output rendering failed"

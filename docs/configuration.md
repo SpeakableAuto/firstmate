@@ -1156,8 +1156,8 @@ Backends without a recovery classifier retain their recorded slots conservativel
 A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
 
-Admission reads one bounded, read-only `quota-axi --json` snapshot for Claude and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
-The selected Claude row is usable only when `state.stale` is explicitly `false`; an absent or malformed freshness signal is incomplete evidence and refuses admission.
+Admission obtains one bounded, read-only Claude quota result through the shared snapshot reader and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
+The selected Claude row must have `state.stale` explicitly `false`, including any bounded cached recovery under [Quota snapshot reuse](#quota-snapshot-reuse); an absent or malformed freshness signal is incomplete evidence and refuses admission.
 Explicit config roots use a profile-only quota read with higher-precedence credentials removed; the ordinary account uses a default read with those credentials and `CLAUDE_CONFIG_DIR` unset.
 The selected Claude candidate's own optional `floor` is carried by the resolver's concrete profile line as `--profile-floor-scope` and `--profile-floor-min-percent`; a manual selection passes the same pair.
 Admission enforces only that selected floor and records it with the concrete harness, model, and effort profile.
@@ -1167,6 +1167,22 @@ Missing, stale, timed-out, incomplete, or unknown quota refuses the Claude launc
 A refusal names Codex or a second mate on another account as alternatives.
 OMP models backed by `claude-bridge` remain outside this direct-Claude guard and are a follow-up rather than an implemented account-consumer boundary.
 Portable admission and spawn regressions live in `tests/fm-worker-account.test.sh`.
+
+## Quota snapshot reuse
+
+`bin/fm-quota-axi-lib.sh` owns the shared JSON read used by typed dispatch, local and remote dispatch snapshots, and Claude admission.
+These reads default `QUOTA_AXI_MAX_AGE` to `15m`, allowing quota-axi to reuse recent successful readings and coalesce concurrent vendor requests while checking that credential selection and credential files still match.
+Set `QUOTA_AXI_MAX_AGE` explicitly to a quota-axi duration (for example `2m`, or `0` to disable ordinary reuse); quota-axi owns duration validation and its cache.
+Each remote host applies its own environment settings.
+
+Only a stale Claude row with the exact endpoint rate-limit error triggers one additional Claude-only read with `--max-age`, within the original command timeout.
+Recovery and all reused Claude evidence are limited to strictly less than `900` seconds.
+The recovery must be a fresh, explicitly reused reading for the same account row, with a valid original `refreshedAt` no later than the current time.
+Firstmate retains quota-axi's availability, runway, and spend priority rather than deriving a ranking from stale window percentages.
+The resolver and admission guard disclose the cached reading's age in seconds.
+Expired, malformed, future-dated, missing, or non-rate-limit failure evidence remains unknown or unverifiable, and admission still applies the same five-hour floor and concurrent crew cap.
+Cached recovery applies only to unpinned accounts; pinned-account reads remain cacheless and their rate-limit recovery is a known follow-up.
+`tests/fm-quota-snapshot.test.sh`, `tests/fm-dispatch-resolve.test.sh`, and `tests/fm-worker-account.test.sh` exercise these boundaries without vendor access.
 
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)
 
@@ -1225,7 +1241,7 @@ After the answer, code applies all remaining checks and ranking:
 
 - The confidence floor and the matched rule's `approval` and `floor`.
 - Each candidate's `provider` and `floor`.
-- Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
+- Every applicable account-wide and model/product row returned by the [shared bounded quota snapshot read](#quota-snapshot-reuse).
 - The [configured candidate selection policy](#crew-dispatch-profiles-configcrew-dispatchjson), using each candidate's limiting quota row and retaining the existing rankability gates.
 - With `--project`, [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) for a `clear`, tied, or nothing-rankable result: the same candidates are evaluated against each eligible remote second mate's snapshot from `bin/fm-quota-snapshot.sh --secondmate`, and the result gains one `placement:` line plus one `home:` line per second mate.
 
