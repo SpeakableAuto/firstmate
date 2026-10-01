@@ -8,6 +8,7 @@ BIN="$FM_ROOT/bin"
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-procevent-quota.XXXXXX")
 FAKEBIN="$LAB/fakebin"
 COUNT="$LAB/count"
+ENV_LOG="$LAB/env.log"
 
 cleanup() { rm -rf "$LAB"; }
 trap cleanup EXIT
@@ -19,6 +20,7 @@ if [ "${1:-}" = "--version" ]; then
   printf 'quota-axi 0.1.55\n'
   exit 0
 fi
+[ -z "${QUOTA_AXI_ENV_LOG:-}" ] || printf '%s\n' "${QUOTA_AXI_MAX_AGE-unset}" >> "$QUOTA_AXI_ENV_LOG"
 case "${QUOTA_AXI_MALFORMED:-}" in
   schema)
     printf '{"schemaVersion":4,"providers":[]}\n'
@@ -204,11 +206,15 @@ printf '%s\n' "$out" | grep -qx 'status: exhausted' || fail "leading-zero thresh
 printf '%s\n' "$out" | grep -qx 'condition_polls: 2' || fail "leading-zero threshold stopped before exhaustion"
 ok "poll accepts a leading-zero threshold"
 
-rm -f "$COUNT"
-out=$(QUOTA_AXI_AT_THRESHOLD=1 QUOTA_AXI_COUNT="$COUNT" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll --interval 0.01 --threshold 10 --provider codex --timeout 1)
+rm -f "$COUNT" "$ENV_LOG"
+out=$(QUOTA_AXI_AT_THRESHOLD=1 QUOTA_AXI_COUNT="$COUNT" QUOTA_AXI_ENV_LOG="$ENV_LOG" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll --interval 0.01 --threshold 10 --provider codex --timeout 1)
 printf '%s\n' "$out" | grep -qx 'status: low' || fail "quota below the threshold did not report low"
 printf '%s\n' "$out" | grep -qx 'condition_polls: 2' || fail "quota at the threshold fired before dropping below it"
-ok "poll fires only after quota drops below the threshold"
+[ "$(wc -l < "$ENV_LOG" | tr -d ' ')" = 2 ] || fail "threshold watch did not perform two vendor reads"
+if grep -vx 'unset' "$ENV_LOG" >/dev/null; then
+  fail "quota polling unexpectedly enabled cache reuse: $(tr '\n' ' ' < "$ENV_LOG")"
+fi
+ok "poll uses live reads and fires only after quota drops below the threshold"
 
 if err=$(QUOTA_AXI_COUNT="$COUNT" PATH="$FAKEBIN:$PATH" "$BIN/fm-procevent-quota.sh" poll --provider 2>&1); then
   fail "missing poll provider value unexpectedly succeeded"

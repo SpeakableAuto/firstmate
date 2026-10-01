@@ -1170,7 +1170,7 @@ Portable admission and spawn regressions live in `tests/fm-worker-account.test.s
 
 ## Quota snapshot reuse
 
-`bin/fm-quota-axi-lib.sh` owns the shared JSON read used by typed dispatch, local and remote quota snapshots, Claude admission, and quota event polling.
+`bin/fm-quota-axi-lib.sh` owns the shared JSON read used by typed dispatch, local and remote dispatch snapshots, and Claude admission.
 These reads default `QUOTA_AXI_MAX_AGE` to `15m`, allowing quota-axi to reuse recent successful readings and coalesce concurrent vendor requests while checking that credential selection and credential files still match.
 Set `QUOTA_AXI_MAX_AGE` explicitly to a quota-axi duration (for example `2m`, or `0` to disable ordinary reuse); quota-axi owns duration validation and its cache.
 Each remote host applies its own environment settings.
