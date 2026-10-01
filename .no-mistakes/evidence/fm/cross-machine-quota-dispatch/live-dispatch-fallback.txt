@@ -1,0 +1,11 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 1000   tokens: 583/53
+  rule: rule_1 (The task is a trivial mechanical edit: a rote rename, a form)   confidence: 1.0
+  probabilities: rule_2=0.0 default=0.0 rule_1=1.0 rule_3=0.0
+  note: rule matched
+  candidate: claude:sonnet  provider=claude  scope=all_models  remaining=42%  spendPriority=11.16  runway=through_reset  -> eligible
+  candidate: codex:gpt-6-luna  provider=codex  scope=all_models  remaining=79%  spendPriority=1.2119  runway=through_reset  -> eligible
+  profile: --harness 'claude' --model 'sonnet' --effort 'high'
+  placement: local (no second mate beats local spendPriority 11.16 by more than 0.5)
+  home: peter  unknown: remote read of peter exited 64: error: command is not a genuine executable in the configured remote root: fm-quota-snapshot.sh: disclosed uncertainty

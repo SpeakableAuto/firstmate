@@ -1,0 +1,9 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 582/53
+  rule: rule_1 (The task is a trivial mechanical edit: a rote rename, a form)   confidence: 1.0
+  probabilities: rule_2=0.0 rule_3=0.0 rule_1=1.0 default=0.0
+  note: rule matched
+  candidate: claude:sonnet  provider=claude  scope=all_models  remaining=42%  spendPriority=11.17  runway=through_reset  -> eligible
+  candidate: codex:gpt-6-luna  provider=codex  scope=all_models  remaining=79%  spendPriority=1.212  runway=through_reset  -> eligible
+  profile: --harness 'claude' --model 'sonnet' --effort 'high'

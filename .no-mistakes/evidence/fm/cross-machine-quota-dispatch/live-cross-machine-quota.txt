@@ -1,0 +1,5 @@
+LIVE CROSS-MACHINE QUOTA SNAPSHOT
+Local command: bin/fm-quota-snapshot.sh
+Local result: {"generatedAt":"2026-10-01T03:12:59.867Z","schemaVersion":5,"quota":[{"provider":"claude","accountKey":"default","scope":"all_models","remaining":42,"runway":"through_reset","spendPriority":11.1276},{"provider":"claude","accountKey":"default","scope":"model:fable","remaining":42,"runway":"through_reset","spendPriority":13.3802},{"provider":"codex","accountKey":"default","scope":"all_models","remaining":79,"runway":"through_reset","spendPriority":1.2114}]}
+Remote command: bin/fm-quota-snapshot.sh --secondmate peter
+Remote result: 
