@@ -4,7 +4,7 @@ description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
   array from quota-axi's default TOON, applying configured preference after three
   orthogonal gates, and for placing a task on a remote second mate's machine
-  when its quota headroom is materially better.
+  when its runway is safer or its quota headroom is materially better.
   Load when a dispatch rule or default resolves to more than one profile
   candidate, or when a registered remote second mate's projects include the
   task's project.
@@ -115,7 +115,9 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 ## Rank by the configured selection policy
 
 Resolve `select` from the chosen rule and file under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson), including the default policy when a rule floor falls through.
-For `candidate-order`, take the first candidate in configured order that passes the three gates and has rankable evidence under the uncertainty rules below.
+For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, and rankability checks under the uncertainty rules below.
+Pass over a candidate with `projected_exhaustion` runway only when a later passing candidate has `through_reset` runway; otherwise retain the configured order.
+Select the first candidate not passed over, and account for each skipped candidate as "passed over: projected to run out before reset".
 Earlier candidates with failed gates or unrankable evidence remain in the accounting with their reasons; preference never overrides those gates.
 For `quota-balanced` (the unchanged default), candidates have equal configured preference: pick the highest known `spendPriority` among those that pass all three gates.
 Do not use `spendPriority` to reorder an explicitly ordered array.
@@ -157,6 +159,7 @@ Resolve the matched rule and its rule-level floor independently against each mac
 Compare the resulting selected candidates' `spendPriority` across homes, not the scalar of a candidate rejected by the configured preference.
 Automatic remote placement additionally requires that chosen remote candidate's limiting runway is `through_reset`; `projected_exhaustion`, `exhausted_now`, or unknown runway keeps the task local.
 Place the task on the second mate whose best exceeds the local best by strictly more than 0.5 `spendPriority`, or on one with a rankable `through_reset` candidate when no local candidate is rankable.
+When the selected local candidate has `projected_exhaustion` runway and an eligible remote candidate has `through_reset` runway, ignore the 0.5 margin and place on the highest-`spendPriority` remote candidate; a tie between remote candidates still keeps the task local because no home wins.
 Otherwise keep the task local: similar headroom, a tie between second mates, or no comparison at all is no reason to move work off this machine.
 An unreachable machine or unknown remote quota is disclosed uncertainty about that machine only; it never blocks, delays, or downgrades local dispatch.
 Placing a task sends it through the ordinary secondmate routing path, and the second mate resolves its own worker profile from its own quota.
