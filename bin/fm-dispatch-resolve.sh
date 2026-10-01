@@ -28,9 +28,10 @@
 #   candidate binds to one row through quota_row in
 #   bin/fm-quota-axi-lib.sh, so a Pi lane such as openai-codex-work/...
 #   reads its own account's row and an expanded provider with no row for the
-#   candidate is unmeasured, never blocked), and the spendPriority argmax over
-#   the eligible candidates. The model never sees quota, catalogs, approvals,
-#   confidence floors, `why`, or `use`. With no rules, it returns a non-clear
+#   candidate is unmeasured, never blocked), and the configured selection among
+#   eligible candidates (quota ranking by default, candidate order by opt-in).
+#   The model never sees quota, catalogs, approvals, selection policy, confidence
+#   floors, `why`, or `use`. With no rules, it returns a non-clear
 #   result so firstmate keeps using the existing intake.
 #   docs/configuration.md "Crew dispatch profiles" owns the declared fields and
 #   "Typed dispatch resolution" owns this tool's operator contract.
@@ -51,6 +52,7 @@
 #     model/latency_ms/tokens, rule (when excerpt) and confidence, probabilities
 #     fallback: <runner-up rule taken when the picked rule missed its own floor>
 #     reason: <why the status is not clear>
+#     selection: quota-balanced | candidate-order
 #     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
 #     profile: --harness <h> [--model <m>] [--effort <e>]     (status clear only)
 #     placement: local | secondmate <id> (<why>)   (cross-home placement only)
@@ -195,9 +197,9 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
   elif any((.rules // [])[]; (profiles(.use) | length) == 0) then "each rule needs at least one use profile"
   elif any((.rules // [])[]; has("approval") and .approval != "captain") then "approval must be \"captain\" when present"
   elif any((.rules // [])[]; has("min_confidence") and ((.min_confidence | type) != "number" or .min_confidence < 0 or .min_confidence > 1)) then "min_confidence must be a number from 0 through 1 when present"
-  elif any((.rules // [])[]; has("select") and ((.select | type) != "string" or (.select | length) == 0)) then "select must be a non-empty string"
-  elif any((.rules // [])[]; has("select") and .select != "quota-balanced") then
-    "unknown select: " + ([.rules[] | select(has("select") and .select != "quota-balanced") | .select] | unique | join(", "))
+  elif any((., (.rules // [])[]); has("select") and ((.select | type) != "string" or (.select | length) == 0)) then "select must be a non-empty string"
+  elif any((., (.rules // [])[]); has("select") and (.select != "quota-balanced" and .select != "candidate-order")) then
+    "unknown select: " + ([(., (.rules // [])[]) | select(has("select") and (.select != "quota-balanced" and .select != "candidate-order")) | .select] | unique | join(", "))
   elif any((.rules // [])[]; has("floor") and floor_bad(.floor; true)) then "rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\\z"
   elif any((.rules // [])[] | profiles(.use)[]; profile_bad(.)) then "each use profile needs harness; model, effort, and floor must be well formed, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
   elif any((.rules // [])[]; duplicate_profiles(profiles(.use))) then "each rule use must not contain duplicate harness, model, and effort profiles"
@@ -366,6 +368,12 @@ fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an inval
 # shellcheck disable=SC2016  # jq program text, not shell expansion
 CANDIDATE_JQ='
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
+  def selection_mode($cfg; $rule): ($rule.select // $cfg.select // "quota-balanced");
+  def ranked_choice($eligible; $mode):
+    if $mode == "candidate-order" then {best: $eligible[0], tied: false}
+    else ($eligible | max_by(.spendPriority)) as $best |
+      {best: $best, tied: ([$eligible[] | select(.spendPriority == $best.spendPriority)] | length > 1)}
+    end;
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
   def bare($m): ($m | split("/") | last);
@@ -436,7 +444,7 @@ CANDIDATE_JQ='
     end;
 '
 
-# ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
+# ---- resolution: declared gates + quota evidence + selection, all in jq ------------
 RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" \
   --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ"'
   ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
@@ -497,14 +505,16 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     $ev + {status: "escalate", reason: $sel.escalate, candidates: ($answer_use | map(evaluate(.)))}
   elif ($sel.use | length) == 0 then $ev + {status: "escalate", reason: "no profiles configured for \($sel.source)", note: $sel.note, candidates: []}
   else
+    (selection_mode($cfg; if $sel.source == "default" then null else $rule end)) as $mode |
+    ($ev + {selection: $mode}) as $ev |
     ($sel.use | map(evaluate(.))) as $cands |
     ([$cands[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
     ([$cands[] | select(.unranked)]) as $unranked |
     if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", note: $sel.note, candidates: $cands}
     else
-      ($elig | max_by(.spendPriority)) as $best |
-      ([$elig[] | select(.spendPriority == $best.spendPriority)] | length) as $ties |
-      if $ties > 1 then $ev + {status: "escalate", reason: "genuine spendPriority tie", note: $sel.note, candidates: $cands}
+      (ranked_choice($elig; $mode)) as $pick |
+      ($pick.best) as $best |
+      if $pick.tied then $ev + {status: "escalate", reason: "genuine spendPriority tie", note: $sel.note, candidates: $cands}
       else $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $best}
         + (if ($unranked | length) > 0 then
              {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
@@ -565,25 +575,26 @@ if [ -n "$PLACEMENT_IDS" ]; then
   RESULT=$(jq -n --argjson pmap "$PMAP" --argjson result "$RESULT" --slurpfile rules "$RULES" --slurpfile homes "$HOMES" "$FM_QUOTA_ROW_JQ"'
     ($rules[0]) as $cfg |
     ($result.resolved_rule) as $choice |
-    ([$result.candidates[] | select(.eligible and ((.unranked // false) | not)) | .spendPriority] | max) as $local |
+    ($result.chosen.spendPriority // ([$result.candidates[] | select(.eligible and ((.unranked // false) | not)) | .spendPriority] | max)) as $local |
     [$homes[] | . as $h |
       if $h.snapshot == null then {id: $h.id, reason: $h.reason}
       else ($h.snapshot) as $q |
         '"$CANDIDATE_JQ"'
-        (if $choice == "default" then {profiles: profiles($cfg.default // null)}
+        (if $choice == "default" then {profiles: profiles($cfg.default // null), mode: selection_mode($cfg; null)}
          else ($choice | ltrimstr("rule_") | tonumber) as $n |
            ($cfg.rules[$n - 1]) as $rule |
            (floor_state($rule.floor; $rule.floor.provider; "")) as $state |
            if $state == "unknown" then {reason: "rule \($choice) floor \($rule.floor.provider)/\($rule.floor.scope) is unverifiable there"}
-           elif $state == "below" then {profiles: profiles($cfg.default // null), note: "rule \($choice) floor failed there; used default"}
-           else {profiles: profiles($rule.use)}
+           elif $state == "below" then {profiles: profiles($cfg.default // null), mode: selection_mode($cfg; null), note: "rule \($choice) floor failed there; used default"}
+           else {profiles: profiles($rule.use), mode: selection_mode($cfg; $rule)}
            end
          end) as $sel |
         if $sel.reason then {id: $h.id, reason: $sel.reason}
         else ([$sel.profiles[] | evaluate(.) | select(.eligible and ((.unranked // false) | not))]) as $elig |
           if ($elig | length) == 0 then {id: $h.id, reason: "no rankable eligible candidate there", note: $sel.note}
-          else ($elig | max_by(.spendPriority)) as $best |
-            if ([$elig[] | select(.spendPriority == $best.spendPriority)] | length) > 1
+          else (ranked_choice($elig; $sel.mode)) as $pick |
+            ($pick.best) as $best |
+            if $pick.tied
             then {id: $h.id, reason: "genuine spendPriority tie there", note: $sel.note}
             elif $best.runway != "through_reset"
             then {id: $h.id, best: $best, placement_blocked: "limiting runway \($best.runway // "unknown") is not through_reset", note: $sel.note}
@@ -621,6 +632,7 @@ TEXT=$(jq -r '
   "  probabilities: \([.probabilities | to_entries[] | "\(.key | flat)=\(.value | flat)"] | join(" "))",
   (if .fallback then "  fallback: \(.fallback | flat)" else empty end),
   (if .reason then "  reason: \(.reason | flat)" else empty end),
+  (if .selection then "  selection: \(.selection | flat)" else empty end),
   (if .note then "  note: \(.note | flat)" else empty end),
   (if .unranked_note then "  note: \(.unranked_note | flat)" else empty end),
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"

@@ -2,7 +2,7 @@
 name: quota-array-dispatch
 description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
-  array from quota-axi's default TOON, ranking by spendPriority after three
+  array from quota-axi's default TOON, applying configured preference after three
   orthogonal gates, and for placing a task on a remote second mate's machine
   when its quota headroom is materially better.
   Load when a dispatch rule or default resolves to more than one profile
@@ -58,10 +58,10 @@ Read `quota-axi auth --json` only when a candidate's credential surface is in qu
 
 For each candidate, preserve explicit `harness`, `model`, and `provider`; `harness-adapters` owns identity, and model/provider never infer harness.
 
-## Three gates, then spendPriority
+## Three gates, then configured preference
 
 Apply the three cheap orthogonal gates first.
-`spendPriority` ranks only among candidates that pass all three.
+Configured preference and `spendPriority` apply only among candidates that pass all three.
 It cannot override a hard-gate failure, and it is never hidden inside a new composite score.
 
 ### 1. Eligibility
@@ -112,9 +112,13 @@ A high `spendPriority` on a nearly empty window that will exhaust soon must not 
 Unknown or unmeasurable runway stays eligible with disclosed uncertainty and is never assumed to pass.
 Do not invent a generic percentage floor, and honor an explicit captain floor for a candidate when one exists.
 
-## Rank by spendPriority
+## Rank by the configured selection policy
 
-Among candidates that pass all three gates, pick the highest known `spendPriority`.
+Resolve `select` from the chosen rule and file under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson), including the default policy when a rule floor falls through.
+For `candidate-order`, take the first candidate in configured order that passes the three gates and has rankable evidence under the uncertainty rules below.
+Earlier candidates with failed gates or unrankable evidence remain in the accounting with their reasons; preference never overrides those gates.
+For `quota-balanced` (the unchanged default), candidates have equal configured preference: pick the highest known `spendPriority` among those that pass all three gates.
+Do not use `spendPriority` to reorder an explicitly ordered array.
 A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
 Rank only from comparable known scalars.
 Never treat absent, `unknown`, or unmeasurable `spendPriority` as zero or as healthy; `0` means exact utilization, a different claim from unknown.
@@ -128,8 +132,9 @@ Do not compare headroom against runway by hand.
 Do not use pace or signed reserve as a later tie-break layer.
 Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWindowIds`, or other window-id lists to reconstruct what `spendPriority` already computed.
 
-Genuine ties: stop and report every tied candidate for captain choice.
-Do not select by array order, harness name, or another arbitrary identity ordering.
+Genuine ties within `quota-balanced`: stop and report every tied candidate for captain choice.
+Do not invent array-order or harness-name preferences when the configuration has not declared them.
+In `candidate-order`, equal scalar evidence does not erase the explicit preference.
 Report duplicate concrete profiles as a configuration error.
 
 Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, `spendPriority`, and runway-versus-horizon result.
@@ -148,7 +153,8 @@ A remote second mate is a placement candidate only when all of these hold:
 - Its scope fits the work, which firstmate judges as for any secondmate routing.
 
 Read each candidate machine's quota with `bin/fm-quota-snapshot.sh --secondmate <id>`; its header owns the bound and short failure back-off mechanics.
-Resolve the matched rule and its rule-level floor independently against each machine's snapshot, falling through to the default profiles only on the machines where that floor has a known shortfall, then evaluate that machine's profiles with the same three gates and take its best known `spendPriority`.
+Resolve the matched rule and its rule-level floor independently against each machine's snapshot, falling through to the default profiles only on the machines where that floor has a known shortfall, then evaluate that machine's profiles with the same three gates and configured selection policy.
+Compare the resulting selected candidates' `spendPriority` across homes, not the scalar of a candidate rejected by the configured preference.
 Automatic remote placement additionally requires that chosen remote candidate's limiting runway is `through_reset`; `projected_exhaustion`, `exhausted_now`, or unknown runway keeps the task local.
 Place the task on the second mate whose best exceeds the local best by strictly more than 0.5 `spendPriority`, or on one with a rankable `through_reset` candidate when no local candidate is rankable.
 Otherwise keep the task local: similar headroom, a tie between second mates, or no comparison at all is no reason to move work off this machine.
