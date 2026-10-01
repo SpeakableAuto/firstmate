@@ -109,7 +109,7 @@ test_the_bound_replaces_the_calling_shell() {
     rm -f "$dir/caller" "$dir/parent"
     (
       . "$ROOT/bin/fm-timeout-lib.sh"
-      printf '%s\n' "$BASHPID" > "$dir/caller"
+      printf '%s\n' "${BASHPID:-$(exec /bin/sh -c 'printf "%s\n" "$PPID"')}" > "$dir/caller"
       PATH=$path fm_exec_timed 5 1 bash -c 'echo "$PPID" > "$1"' _ "$dir/parent"
     ) || fail "the bounded probe failed under PATH=$path"
     caller=$(cat "$dir/caller")
@@ -211,7 +211,7 @@ test_an_owner_that_dies_during_startup_ends_the_command() {
   PATH=$PERL_ONLY bash -c '
     . "$1/bin/fm-timeout-lib.sh"
     (
-      echo "$BASHPID" > "$2/watchdog"
+      echo "${BASHPID:-$(exec /bin/sh -c '\''printf "%s\n" "$PPID"'\'')}" > "$2/watchdog"
       while kill -0 "$$" 2>/dev/null; do sleep 0.05; done
       fm_exec_timed 60 1 bash -c "exec sleep 300"
     ) >/dev/null 2>&1 &
@@ -219,6 +219,9 @@ test_an_owner_that_dies_during_startup_ends_the_command() {
   ' _ "$ROOT" "$dir"
   wait_for_file "$dir/watchdog"
   watchdog=$(cat "$dir/watchdog")
+  case "$watchdog" in
+    ''|*[!0-9]*) fail "the watchdog wrote an invalid pid '$watchdog'" ;;
+  esac
   started=$SECONDS
   while kill -0 "$watchdog" 2>/dev/null; do
     if [ "$((SECONDS - started))" -ge 15 ]; then
@@ -327,6 +330,21 @@ test_run_timed_passes_a_natural_exit_through_a_fired_bound() {
   pass 'fm_run_timed passes a natural exit through when the bound fired after completion'
 }
 
+# bash 3.2, the stock macOS /bin/bash, has no BASHPID; unsetting it in a newer
+# bash drops its special meaning the same way, so CI covers that shell too.
+test_runs_under_nounset_without_bashpid() {
+  local out rc=0
+  out=$(
+    set -u
+    unset BASHPID
+    . "$ROOT/bin/fm-timeout-lib.sh"
+    PATH=$PERL_ONLY fm_exec_timed 5 1 bash -c 'echo bounded; exit 7'
+  ) || rc=$?
+  [ "$rc" -eq 7 ] || fail "fm_exec_timed without BASHPID did not pass the command status through (rc=$rc)"
+  [ "$out" = bounded ] || fail 'fm_exec_timed without BASHPID lost the command output'
+  pass 'fm_exec_timed runs under nounset on a bash without BASHPID'
+}
+
 test_passes_the_command_status_and_output_through
 test_run_timed_reports_the_bound_when_the_wrapper_records_a_signal_death
 test_run_timed_passes_a_natural_exit_through_a_fired_bound
@@ -342,3 +360,4 @@ test_refuses_rather_than_running_unbounded
 test_rejects_malformed_bounds_before_running_anything
 test_gnu_timeout_kills_a_term_ignoring_command_after_the_grace
 test_timed_out_names_exactly_the_bound_statuses
+test_runs_under_nounset_without_bashpid
