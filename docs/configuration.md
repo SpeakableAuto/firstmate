@@ -1156,7 +1156,7 @@ Backends without a recovery classifier retain their recorded slots conservativel
 A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
 
-Admission reads one bounded, read-only `quota-axi --json` snapshot for Claude and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
+Admission obtains one bounded, read-only Claude quota result through the shared snapshot reader and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
 The selected Claude row must have `state.stale` explicitly `false`, including any bounded cached recovery under [Quota snapshot reuse](#quota-snapshot-reuse); an absent or malformed freshness signal is incomplete evidence and refuses admission.
 Explicit config roots use a profile-only quota read with higher-precedence credentials removed; the ordinary account uses a default read with those credentials and `CLAUDE_CONFIG_DIR` unset.
 The selected Claude candidate's own optional `floor` is carried by the resolver's concrete profile line as `--profile-floor-scope` and `--profile-floor-min-percent`; a manual selection passes the same pair.
@@ -1241,7 +1241,7 @@ After the answer, code applies all remaining checks and ranking:
 
 - The confidence floor and the matched rule's `approval` and `floor`.
 - Each candidate's `provider` and `floor`.
-- Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
+- Every applicable account-wide and model/product row returned by the [shared bounded quota snapshot read](#quota-snapshot-reuse).
 - The [configured candidate selection policy](#crew-dispatch-profiles-configcrew-dispatchjson), using each candidate's limiting quota row and retaining the existing rankability gates.
 - With `--project`, [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) for a `clear`, tied, or nothing-rankable result: the same candidates are evaluated against each eligible remote second mate's snapshot from `bin/fm-quota-snapshot.sh --secondmate`, and the result gains one `placement:` line plus one `home:` line per second mate.
 
