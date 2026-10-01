@@ -1,0 +1,10 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 1738/51
+  rule: default (No listed rule applies to this task.)   confidence: 0.66
+  probabilities: rule_3=0.25 rule_2=0.0 rule_1=0.0 default=0.75
+  selection: quota-balanced
+  note: no rule matched
+  candidate: codex:gpt-5.5  provider=codex  scope=all_models  remaining=39%  spendPriority=-0.0757  runway=projected_exhaustion  -> eligible
+  candidate: pi:anthropic/claude-sonnet-5  provider=claude  scope=all_models  remaining=98%  spendPriority=0.4394  runway=through_reset  cached=19s old  -> eligible
+  profile: --harness 'pi' --model 'anthropic/claude-sonnet-5' --effort 'medium'

@@ -1,0 +1,2 @@
+exit=0
+Claude quota: cached reading 47s old

@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 5,
+  "providers": [
+    {
+      "provider": "claude",
+      "accountKey": null,
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "reused": true,
+        "error": null,
+        "refreshedAt": "2026-10-01T16:28:40.675Z"
+      },
+      "firstmateCache": {
+        "ageSeconds": 4
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 98,
+            "boundedBy": [
+              "five_hour",
+              "seven_day"
+            ],
+            "limitingWindowIds": [
+              "five_hour",
+              "seven_day"
+            ],
+            "pace": {
+              "status": "behind",
+              "worstReservePercentPoints": 1.2614,
+              "worstReserveWindowId": "seven_day"
+            },
+            "runway": {
+              "status": "through_reset",
+              "projectionConfidence": "early"
+            },
+            "selection": {
+              "status": "known",
+              "spendPriority": 0.4366
+            }
+          },
+          {
+            "scope": "model:fable",
+            "status": "known",
+            "effectivePercentRemaining": 98,
+            "boundedBy": [
+              "five_hour",
+              "seven_day",
+              "model:fable"
+            ],
+            "limitingWindowIds": [
+              "five_hour",
+              "seven_day"
+            ],
+            "pace": {
+              "status": "behind",
+              "worstReservePercentPoints": 1.2614,
+              "worstReserveWindowId": "seven_day"
+            },
+            "runway": {
+              "status": "through_reset",
+              "projectionConfidence": "early"
+            },
+            "selection": {
+              "status": "known",
+              "spendPriority": 0.7308
+            }
+          }
+        ]
+      }
+    },
+    {
+      "provider": "codex",
+      "accountKey": null,
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "reused": true,
+        "error": null,
+        "refreshedAt": "2026-10-01T16:28:40.676Z"
+      },
+      "firstmateCache": null,
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 39,
+            "boundedBy": [
+              "weekly"
+            ],
+            "limitingWindowIds": [
+              "weekly"
+            ],
+            "pace": {
+              "status": "ahead",
+              "aheadWindowIds": [
+                "weekly"
+              ],
+              "worstReservePercentPoints": -1.8418,
+              "worstReserveWindowId": "weekly"
+            },
+            "runway": {
+              "status": "projected_exhaustion",
+              "usableRunwaySeconds": 228750,
+              "projectedExhaustedAt": "2026-10-04T08:01:15.009Z",
+              "limitingWindowId": "weekly",
+              "projectionConfidence": "established"
+            },
+            "selection": {
+              "status": "known",
+              "spendPriority": -0.0762
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
