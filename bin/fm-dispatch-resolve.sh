@@ -55,14 +55,15 @@
 #     selection: quota-balanced | candidate-order
 #     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
 #     passed over: [home=<id>] <harness>:<model>: projected to run out before reset; later eligible candidate has runway through_reset
+#     near-tie broken by configured order: [home=<id>] <harness>:<model>=<spendPriority>, ... (within <band>)   (quota-balanced only)
 #     profile: --harness <h> [--model <m>] [--effort <e>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]     (status clear only)
 #     placement: local | secondmate <id> (<why>)   (cross-home placement only)
 #     home: <id> best=<harness>:<model> scope=.. remaining=..% spendPriority=.. runway=.. [placement-blocked=..] | home: <id> unknown: <reason>: disclosed uncertainty
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
-#   escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie
+#   escalate  -> the rule requires captain approval or no candidate is rankable
 #   error     -> API, network, response, or quota-axi failure; decide as today
-#   placement and home lines appear only with --project, for a clear, tied, or
+#   placement and home lines appear only with --project, for a clear or
 #   nothing-rankable result, when a remote route in data/secondmates.md lists
 #   that project and this home has not registered it local-only. Each such
 #   machine's quota comes from bin/fm-quota-snapshot.sh --secondmate and is
@@ -370,16 +371,23 @@ fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an inval
 CANDIDATE_JQ='
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def selection_mode($cfg; $rule): ($rule.select // $cfg.select // "quota-balanced");
+  # quota-balanced near-tie band in spendPriority units; docs/configuration.md
+  # "Candidate selection policy" owns the value and its rationale.
+  def near_tie_band: 0.05;
   def ranked_choice($eligible; $mode):
     if $mode == "candidate-order" then
       ([$eligible | to_entries[] | select(.value.runway == "through_reset") | .key] | first) as $safe |
       ([$eligible | to_entries[] | select(
         .value.runway != "projected_exhaustion" or $safe == null or .key >= $safe
       )] | first) as $pick |
-      {best: $pick.value, tied: false, passed_over: $eligible[:$pick.key]}
-    else ($eligible | max_by(.spendPriority)) as $best |
-      {best: $best, tied: ([$eligible[] | select(.spendPriority == $best.spendPriority)] | length > 1)}
+      {best: $pick.value, passed_over: $eligible[:$pick.key]}
+    else ($eligible | max_by(.spendPriority).spendPriority) as $top |
+      [$eligible[] | select($top - .spendPriority <= near_tie_band + 1e-9)] as $near |
+      {best: $near[0], near_tie: (if ($near | length) > 1 then $near else null end)}
     end;
+  def choice_evidence($pick):
+    {passed_over: ($pick.passed_over // [])}
+    + (if $pick.near_tie then {near_tie: $pick.near_tie, near_tie_band: near_tie_band} else {} end);
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
   def bare($m): ($m | split("/") | last);
@@ -519,18 +527,16 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", note: $sel.note, candidates: $cands}
     else
       (ranked_choice($elig; $mode)) as $pick |
-      ($pick.best) as $best |
-      if $pick.tied then $ev + {status: "escalate", reason: "genuine spendPriority tie", note: $sel.note, candidates: $cands}
-      else $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $best, passed_over: ($pick.passed_over // [])}
+      $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $pick.best}
+        + choice_evidence($pick)
         + (if ($unranked | length) > 0 then
              {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
            else {} end)
-      end
     end
   end') || emit_error "resolution failed"
 
 # ---- cross-home placement: the same candidates on each second mate's machine ---
-# Runs only for a named project on a clear result or a tie or nothing-rankable
+# Runs only for a named project on a clear result or a nothing-rankable
 # escalation, and only for remote routes whose registered projects include it
 # when this home has not registered the project local-only. Each machine's
 # snapshot comes from fm-quota-snapshot.sh --secondmate (bounded and read-only);
@@ -559,7 +565,7 @@ placement_ids() {
   done < "$DATA/secondmates.md"
 }
 
-placement_stage=$(jq -r 'if .status == "clear" or (.status == "escalate" and (.reason == "no rankable eligible candidate" or .reason == "genuine spendPriority tie")) then "yes" else "no" end' <<<"$RESULT")
+placement_stage=$(jq -r 'if .status == "clear" or (.status == "escalate" and .reason == "no rankable eligible candidate") then "yes" else "no" end' <<<"$RESULT")
 if [ "$placement_stage" = yes ]; then
   PLACEMENT_IDS=$(placement_ids)
 else
@@ -601,11 +607,9 @@ if [ -n "$PLACEMENT_IDS" ]; then
           if ($elig | length) == 0 then {id: $h.id, reason: "no rankable eligible candidate there", note: $sel.note}
           else (ranked_choice($elig; $sel.mode)) as $pick |
             ($pick.best) as $best |
-            if $pick.tied
-            then {id: $h.id, reason: "genuine spendPriority tie there", note: $sel.note}
-            elif $best.runway != "through_reset"
-            then {id: $h.id, best: $best, placement_blocked: "limiting runway \($best.runway // "unknown") is not through_reset", note: $sel.note}
-            else {id: $h.id, best: $best, note: $sel.note, passed_over: ($pick.passed_over // [])}
+            if $best.runway != "through_reset"
+            then {id: $h.id, best: $best, placement_blocked: "limiting runway \($best.runway // "unknown") is not through_reset", note: $sel.note} + choice_evidence($pick)
+            else {id: $h.id, best: $best, note: $sel.note} + choice_evidence($pick)
             end
           end
         end
@@ -651,6 +655,9 @@ TEXT=$(jq -r '
       + (if .cache then "  cached=\(.cache.ageSeconds)s old" else "" end)
       + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
   (.passed_over[]? | "  passed over: \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset"),
+  (if .near_tie then "  near-tie broken by configured order: "
+      + ([.near_tie[] | "\(.profile.harness | flat):\(show(.profile.model))=\(show(.spendPriority))"] | join(", "))
+      + " (within \(.near_tie_band | flat))" else empty end),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
       + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end)
@@ -666,7 +673,11 @@ TEXT=$(jq -r '
        + (if .placement_blocked then "  placement-blocked=\(.placement_blocked | flat)" else "" end)
        + (if .note then "  note=\(.note | flat)" else "" end)),
      (.placement.homes[] | .id as $home | .passed_over[]? |
-       "  passed over: home=\($home | flat) \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset")
+       "  passed over: home=\($home | flat) \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset"),
+     (.placement.homes[] | .id as $home | select(.near_tie) |
+       "  near-tie broken by configured order: home=\($home | flat) "
+       + ([.near_tie[] | "\(.profile.harness | flat):\(show(.profile.model))=\(show(.spendPriority))"] | join(", "))
+       + " (within \(.near_tie_band | flat))")
    else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
 printf '%s\n' "$TEXT"
 exit 0

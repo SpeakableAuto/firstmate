@@ -1067,7 +1067,10 @@ At manual intake, this policy follows the [quota-array-dispatch procedure](../.a
 Typed resolution applies the same runway-aware ordering after its documented rankability checks and reports candidates passed over; its `clear` result remains subject to Firstmate's full intake gates as described below under **Firstmate retains the dispatch decision**.
 Neither path allows order to override a gate or treats unknown evidence as healthy.
 A rule-level `select` overrides the file-level value only for that rule's `use`; no match or a rule-floor fallback uses the file's policy for `default`.
-Omitting `select` everywhere preserves `quota-balanced`: all passing candidates have equal configured preference and the highest known `spendPriority` wins, with genuine scalar ties escalating.
+Omitting `select` everywhere preserves `quota-balanced`: the highest known `spendPriority` among passing candidates wins, and configured order only breaks a near-tie.
+A near-tie is every rankable passing candidate whose `spendPriority` is at most 0.05 below the highest; the earliest of them in configured order wins, exact ties included, and the result reports them on a `near-tie broken by configured order` line.
+Cross-home placement reports the same evidence for each affected second mate with `home=<id>`.
+The band is fixed at 0.05, one tenth of the 0.5 margin that [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) treats as material.
 A rule can explicitly set `"select": "quota-balanced"` to retain that behavior inside an ordered file.
 Other values, including null and non-string values, are configuration errors.
 The [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy) owns manual selection and uncertainty handling.
@@ -1245,7 +1248,7 @@ After the answer, code applies all remaining checks and ranking:
 - Each candidate's `provider` and `floor`.
 - Every applicable account-wide and model/product row returned by the [shared bounded quota snapshot read](#quota-snapshot-reuse).
 - The [configured candidate selection policy](#crew-dispatch-profiles-configcrew-dispatchjson), using each candidate's limiting quota row and retaining the existing rankability gates.
-- With `--project`, [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) for a `clear`, tied, or nothing-rankable result: the same candidates are evaluated against each eligible remote second mate's snapshot from `bin/fm-quota-snapshot.sh --secondmate`, and the result gains one `placement:` line plus one `home:` line per second mate.
+- With `--project`, [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) for a `clear` or nothing-rankable result: the same candidates are evaluated against each eligible remote second mate's snapshot from `bin/fm-quota-snapshot.sh --secondmate`, and the result gains one `placement:` line plus one `home:` line per second mate.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
 
@@ -1276,7 +1279,7 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 | --- | --- |
 | `clear` | A `profile:` line ready for `fm-spawn.sh`. |
 | `ambiguous` | Confidence below the floor with no runner-up taken. |
-| `escalate` | An approval-gated rule, unverifiable rule floor, nothing rankable, or a genuine tie. |
+| `escalate` | An approval-gated rule, unverifiable rule floor, or nothing rankable. |
 | `error` | API, network, malformed response metadata, rendering, or quota-axi failure. |
 
 Every result above exits 0.

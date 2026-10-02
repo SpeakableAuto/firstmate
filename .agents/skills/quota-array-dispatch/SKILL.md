@@ -50,7 +50,7 @@ It already computes the economics that older instructions reconstructed by hand 
 Do not read `--json` on the normal path, and do not reach for `--full` to rebuild that economics.
 
 After reading the TOON, fall back to one `quota-axi --json --max-age 900s` call only when that TOON is genuinely ambiguous for the decision, or when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`.
-Ambiguous means a candidate's `spendPriority` is the literal `unknown` or unmeasurable, a real tie still needs extra evidence, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
+Ambiguous means a candidate's `spendPriority` is the literal `unknown` or unmeasurable, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
 The fallback therefore has an explicit TOON-then-JSON call sequence; reuse its JSON result and do not take any further quota snapshots.
 Below-floor is rare: bootstrap enforces `FM_QUOTA_AXI_MIN` and normally reports `MISSING` before dispatch; if an intake somehow reaches an older build whose TOON lacks `spendPriority`, use the defensive `--json` fallback rather than treating the missing scalar as healthy.
 `--json` is a defensive belt, not a habit; never reach for it because it feels more complete.
@@ -119,7 +119,7 @@ For `candidate-order`, walk the candidates in configured order after the three g
 Pass over a candidate with `projected_exhaustion` runway only when a later passing candidate has `through_reset` runway; otherwise retain the configured order.
 Select the first candidate not passed over, and account for each skipped candidate as "passed over: projected to run out before reset".
 Earlier candidates with failed gates or unrankable evidence remain in the accounting with their reasons; preference never overrides those gates.
-For `quota-balanced` (the unchanged default), candidates have equal configured preference: pick the highest known `spendPriority` among those that pass all three gates.
+For `quota-balanced` (the default), quota decides: pick the highest known `spendPriority` among those that pass all three gates, and use configured order only to break a near-tie under the [configuration schema's band](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
 Do not use `spendPriority` to reorder an explicitly ordered array.
 A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
 Rank only from comparable known scalars.
@@ -134,8 +134,8 @@ Do not compare headroom against runway by hand.
 Do not use pace or signed reserve as a later tie-break layer.
 Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWindowIds`, or other window-id lists to reconstruct what `spendPriority` already computed.
 
-Genuine ties within `quota-balanced`: stop and report every tied candidate for captain choice.
-Do not invent array-order or harness-name preferences when the configuration has not declared them.
+Near-ties within `quota-balanced`, exact ties included: select the earliest near-tied candidate in configured order and report every near-tied candidate with its scalar.
+Do not invent harness-name or other preferences beyond that configured order.
 In `candidate-order`, equal scalar evidence does not erase the explicit preference.
 Report duplicate concrete profiles as a configuration error.
 

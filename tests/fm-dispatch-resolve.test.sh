@@ -843,15 +843,41 @@ assert_contains "$out" '  note: no rule matched' "default is explained"
 assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "default resolves by argmax"
 pass "default: no rule matched resolves among the default profiles"
 
-# --- genuine tie escalates ---------------------------------------------------------
-reset_log
+# --- quota-balanced near-ties break by configured order ---------------------------
+# The default array lists claude:opus before cursor:cursor-grok-4.6-high.
 TIE="$TMP_ROOT/tie.json"
-write_quota "$TIE" 0.5 0.5
 write_response "$RESPONSE" default 0.88
+
+reset_log
+write_quota "$TIE" 0.6 0.5
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
-assert_contains "$out" '  status: escalate' "tie escalates"
-assert_contains "$out" '  reason: genuine spendPriority tie' "tie is named"
-pass "tie: equal spendPriority never breaks by array order"
+assert_contains "$out" '  status: clear' "a clear spendPriority winner resolves"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "a clear winner wins even when configured later"
+assert_not_contains "$out" 'near-tie' "a clear winner reports no near-tie"
+
+reset_log
+write_quota "$TIE" 0.54 0.5
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "a near-tie resolves instead of escalating"
+assert_contains "$out" "  profile: --harness 'claude' --model 'opus'" "a near-tie resolves to the first configured candidate"
+assert_contains "$out" '  near-tie broken by configured order: claude:opus=0.5, cursor:cursor-grok-4.6-high=0.54 (within 0.05)' "the near-tie is reported with every tied candidate"
+
+reset_log
+write_quota "$TIE" 0.5 0.5
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "an exact tie resolves instead of escalating"
+assert_contains "$out" "  profile: --harness 'claude' --model 'opus'" "an exact tie resolves to the first configured candidate"
+assert_contains "$out" '  near-tie broken by configured order: claude:opus=0.5, cursor:cursor-grok-4.6-high=0.5 (within 0.05)' "the exact tie is reported"
+
+reset_log
+jq '.default[0].floor = {scope: "all_models", min_percent: 80}' "$BASE_RULES" > "$RULES"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "a near-tie beside a below-floor candidate resolves"
+assert_contains "$out" 'candidate: claude:opus  provider=claude  scope=all_models  remaining=79%  spendPriority=-  runway=projected_exhaustion  -> not eligible: profile floor all_models below 80%' "the below-floor candidate stays excluded"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "configured order never revives a below-floor candidate"
+assert_not_contains "$out" 'near-tie' "an excluded candidate never joins a near-tie"
+cp "$BASE_RULES" "$RULES"
+pass "near-tie: configured order breaks quota-balanced ties within the band; clear winners and floors are unchanged"
 
 # --- nothing rankable escalates -------------------------------------------------
 reset_log
@@ -950,8 +976,7 @@ pass "native Codex binds to codex-home before default, independently of Pi accou
 jq '.schemaVersion = 5 | .providers |= map(select(.accountKey != "openai-codex")) | del(.providers[].accountKey)' "$SCHEMA6" > "$SCHEMA5_PAIR"
 reset_log
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SCHEMA5_PAIR" run code out err "$BRIEF"
-assert_contains "$out" '  status: escalate' "schema 5 keeps joining by provider alone"
-assert_contains "$out" '  reason: genuine spendPriority tie' "every codex profile reads the one schema 5 codex row"
+assert_contains "$out" '  near-tie broken by configured order: pi:openai-codex-work/gpt-5.6-terra=-5.6819, pi:openai-codex/gpt-5.6-sol=-5.6819, codex:gpt-5.6-sol=-5.6819 (within 0.05)' "every codex profile reads the one schema 5 codex row"
 assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=11%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a schema 5 row never needs accountKey"
 
 SCHEMA6_PI_NATIVE="$TMP_ROOT/schema6-pi-native.json"
@@ -1180,6 +1205,14 @@ assert_contains "$out" 'placement: secondmate peer (peer spendPriority 2.25 beat
 assert_contains "$out" 'home: peer  best=cursor:cursor-grok-4.6-medium  scope=all_models  remaining=91%  spendPriority=2.25  runway=through_reset' "the remote evidence is shown"
 assert_equals peer-host "$(cat "$SSH_CALLS")" "the remote quota is read through the registered route"
 pass "placement prefers a second mate whose headroom is materially better"
+
+write_quota "$REMOTE_QUOTA" 0.54 0.5
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-near-tie.json"
+mv "$TMP_ROOT/remote-near-tie.json" "$REMOTE_QUOTA"
+placement_case ok --project pager
+assert_contains "$out" 'home: peer  best=claude:sonnet' "remote configured order selects the first near-tied candidate"
+assert_contains "$out" 'near-tie broken by configured order: home=peer claude:sonnet=0.5, cursor:cursor-grok-4.6-medium=0.54 (within 0.05)' "remote near-tie evidence names the home, candidates, and band"
+pass "cross-home placement reports remote quota-balanced near-ties"
 
 write_quota "$REMOTE_QUOTA" 1.1
 placement_case ok --project pager
