@@ -238,3 +238,60 @@ fm_quota_read_json() {
       else . end)
   '
 }
+
+# A quota feed is a quota-axi --json snapshot file that another process on this
+# machine refreshes from a session where every vendor credential store is
+# readable. config/quota-feed names it on one line: an absolute path, or one
+# beginning with ~/ for this machine's home directory. docs/configuration.md
+# "Quota snapshot reuse" owns the contract.
+# Usage: fm_quota_feed_merge <config-dir> <snapshot-file>
+# Prints the snapshot with every provider row it could not measure replaced by
+# the feed's measured row for the same provider and account, plus measured feed
+# rows the snapshot lacks, each marked firstmateFeed.ageSeconds. An empty or
+# missing snapshot file prints the feed alone. An absent, unreadable, invalid,
+# or older-than-FM_QUOTA_FEED_MAX_AGE (default 900 seconds) feed leaves the
+# snapshot unchanged. Returns 1 only when neither yields a valid snapshot.
+fm_quota_feed_merge() {
+  local config=$1 snapshot=$2 path='' age max_age=${FM_QUOTA_FEED_MAX_AGE:-900} merged
+  local -a live=()
+  if [ -s "$snapshot" ] && fm_quota_json_valid < "$snapshot"; then
+    live=("$snapshot")
+  fi
+  if [ -f "$config/quota-feed" ] && [ ! -L "$config/quota-feed" ]; then
+    IFS= read -r path < "$config/quota-feed" || true
+  fi
+  # A literal ~/ prefix in the file names $HOME.
+  # shellcheck disable=SC2088
+  case "$path" in
+    '~/'*) path="${HOME:-}/${path#\~/}" ;;
+  esac
+  case "$max_age" in ''|*[!0-9]*) max_age=900 ;; esac
+  if [ "${path#/}" != "$path" ] && [ -f "$path" ] && [ -r "$path" ] && fm_quota_json_valid < "$path" \
+     && age=$(perl -e 'my @s = stat $ARGV[0] or exit 1; print int(time - $s[9])' "$path" 2>/dev/null) \
+     && [ "$age" -ge 0 ] && [ "$age" -lt "$max_age" ]; then
+    merged=$(jq -nc --slurpfile feed "$path" --slurpfile live "${live[0]:-/dev/null}" --argjson age "$age" '
+      def measured: ((.quotaSemantics.status // "") == "known" or (.quotaSemantics.status // "") == "partial")
+        and ((.quotaSemantics.effectiveAvailability // []) | length) > 0 and (.state.stale != true);
+      ($feed[0]) as $f | ($live | length) as $has_live |
+      (if $has_live == 0 then $f else $live[0] end) as $base |
+      ($base.schemaVersion) as $schema |
+      def key: .provider + "|" + (if $schema == 6 then (.accountKey // "default") else "" end);
+      ([$f.providers[]
+        | if $schema == 6 then .accountKey = (.accountKey // "default")
+          elif (.accountKey // "default") == "default" then del(.accountKey)
+          else empty end
+        | select(measured) | . + {firstmateFeed: {ageSeconds: $age}}]) as $rows |
+      if $has_live == 0 then $base | .providers = ([$rows[]] + [$base.providers[] | select(measured | not)
+        | . as $p | select(all($rows[]; key != ($p | key)))])
+      else $base | .providers |= (map(. as $p |
+          if measured then . else (([$rows[] | select(key == ($p | key))] | first) // .) end)
+        + [$rows[] | . as $r | select(all($base.providers[]; key != ($r | key)))])
+      end' 2>/dev/null) || merged=
+    if [ -n "$merged" ] && printf '%s\n' "$merged" | fm_quota_json_valid; then
+      printf '%s\n' "$merged"
+      return 0
+    fi
+  fi
+  [ "${#live[@]}" -gt 0 ] || return 1
+  cat "$snapshot"
+}

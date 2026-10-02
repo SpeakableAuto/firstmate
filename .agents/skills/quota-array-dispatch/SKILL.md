@@ -3,8 +3,8 @@ name: quota-array-dispatch
 description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
   array from quota-axi's default TOON, applying configured preference after three
-  orthogonal gates, and for placing a task on a remote second mate's machine
-  when its runway is safer or its quota headroom is materially better.
+  orthogonal gates, and for treating every machine that has the task's project,
+  this one and each remote second mate's, as one pool of candidates.
   Load when a dispatch rule or default resolves to more than one profile
   candidate, or when a registered remote second mate's projects include the
   task's project.
@@ -114,12 +114,14 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 
 ## Rank by the configured selection policy
 
-Resolve `select` from the chosen rule and file under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson), including the default policy when a rule floor falls through.
+Decide the selection policy once per intake under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson): use the matched rule's `select`, else the file's `select`, else `quota-balanced`.
+A per-machine rule-floor shortfall changes only the profiles that machine contributes and never changes the intake's selection policy.
 For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, and rankability checks under the uncertainty rules below.
 Pass over a candidate with `projected_exhaustion` runway only when a later passing candidate has `through_reset` runway; otherwise retain the configured order.
 Select the first candidate not passed over, and account for each skipped candidate as "passed over: projected to run out before reset".
 Earlier candidates with failed gates or unrankable evidence remain in the accounting with their reasons; preference never overrides those gates.
 For `quota-balanced` (the default), quota decides: pick the highest known `spendPriority` among those that pass all three gates, and use configured order only to break a near-tie under the [configuration schema's band](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
+While any passing candidate has `through_reset` runway, pass over every candidate with `projected_exhaustion` runway, however high its scalar, and account for each one passed over that would otherwise have won or tied.
 Do not use `spendPriority` to reorder an explicitly ordered array.
 A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
 Rank only from comparable known scalars.
@@ -143,24 +145,32 @@ Account for every candidate visibly before selecting or escalating, naming its c
 A blocked credential report must name `harness`, `model`, authentication surface, and concrete failure evidence; never emit a bare `Grok unauthenticated` statement.
 Never conclude with an unexplained "best quota" label.
 
-## Cross-home placement
+## One pool across machines
 
-Each remote second mate runs on its own machine with its own accounts, so its quota is separate headroom the fleet can spend.
-This section owns when a task goes to a remote second mate because of quota; scope fit stays the ordinary secondmate routing judgment in `AGENTS.md` section 7.
+Each remote second mate runs on its own machine with its own accounts, so every dispatch starts from all of those machines' allowances together.
+This section owns which machine runs a task because of quota; scope fit stays the ordinary secondmate routing judgment in `AGENTS.md` section 7.
 
-A remote second mate is a placement candidate only when all of these hold:
+The pool for a task's project is this machine plus every remote second mate where all of these hold:
 
 - Its route in `data/secondmates.md` is remote and its `projects:` list names the task's project.
 - This home has not registered the project `local-only`.
 - Its scope fits the work, which firstmate judges as for any secondmate routing.
 
-Read each candidate machine's quota with `bin/fm-quota-snapshot.sh --secondmate <id>`; its header owns the bound and short failure back-off mechanics.
-Resolve the matched rule and its rule-level floor independently against each machine's snapshot, falling through to the default profiles only on the machines where that floor has a known shortfall, then evaluate that machine's profiles with the same three gates and configured selection policy.
-Compare the resulting selected candidates' `spendPriority` across homes, not the scalar of a candidate rejected by the configured preference.
-Automatic remote placement additionally requires that chosen remote candidate's limiting runway is `through_reset`; `projected_exhaustion`, `exhausted_now`, or unknown runway keeps the task local.
-Place the task on the second mate whose best exceeds the local best by strictly more than 0.5 `spendPriority`, or on one with a rankable `through_reset` candidate when no local candidate is rankable.
-When the selected local candidate has `projected_exhaustion` runway and an eligible remote candidate has `through_reset` runway, ignore the 0.5 margin and place on the highest-`spendPriority` remote candidate; a tie between remote candidates still keeps the task local because no home wins.
-Otherwise keep the task local: similar headroom, a tie between second mates, or no comparison at all is no reason to move work off this machine.
-An unreachable machine or unknown remote quota is disclosed uncertainty about that machine only; it never blocks, delays, or downgrades local dispatch.
-Placing a task sends it through the ordinary secondmate routing path, and the second mate resolves its own worker profile from its own quota.
-The opt-in [typed resolver](../../../docs/configuration.md#typed-dispatch-resolution-env-typesafe_api_key) applies this rule in code and prints `placement:` and `home:` lines; without it, apply the same rule by hand at intake.
+This machine leaves the pool only when the project is absent from its own registry while a remote route lists it, so genuinely machine-bound work stays on the machine registered for it.
+Read each remote machine's quota with `bin/fm-quota-snapshot.sh --secondmate <id>`; its header owns the bound, the short reuse of a good read, and the failure back-off.
+That snapshot also carries the remote home's own Claude crew evidence, so its guard is judged from its own live crew and accounts, and a home's optional quota feed fills the provider rows a remote shell cannot read.
+
+Form one candidate set: each machine's profiles for the matched rule, with the rule-level floor resolved against that machine's own snapshot and falling through to the default profiles only on the machines where it has a known shortfall.
+Judge every candidate with the same three gates and declared floors, plus the [Claude crew admission](../../../docs/configuration.md#claude-crew-admission) cap and session floor of that machine's account and live crew; a candidate the guard would refuse at spawn is not eligible.
+Rank the whole set with the configured selection policy as though it were one array: no machine is a default, and no home-machine margin applies.
+For `candidate-order`, configured position orders the set and quota orders the same profile across machines.
+For `quota-balanced`, the `projected_exhaustion` pass-over above spans the whole pool, and a near-tie prefers configured position first, then the higher scalar.
+When candidates on different machines tie exactly on configured position and scalar, both policies prefer fewer live workers plus recent charges on that machine and account, then use a stable hash of the task key to spread a remaining tie; report the tied candidates and the rule that decided them.
+Unknown runway beside a known healthy percentage is disclosed uncertainty that keeps a candidate eligible, never a block.
+An unreachable machine or unknown remote quota is disclosed uncertainty about that machine only; it never blocks, delays, or downgrades the other machines.
+
+Charge every placement against its account before placing the next task, in one batch or across separate intakes: one more Claude crew slot on that machine, and the fixed estimated draw on that account's quota, for the charge window the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns.
+That charge is what spreads a burst across accounts and machines instead of sending every task to the first candidate.
+
+Placing a task on a second mate sends it through the ordinary secondmate routing path with the chosen profile; the second mate's own spawn admission still applies.
+The opt-in [typed resolver](../../../docs/configuration.md#typed-dispatch-resolution-env-typesafe_api_key) applies this rule in code, including a batch of several briefs, and prints `placement:` and `home:` lines; without it, apply the same rule by hand at intake.

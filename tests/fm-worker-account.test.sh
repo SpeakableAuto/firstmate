@@ -679,6 +679,8 @@ SH
     expect_code 1 "$rc" "an unreadable process probe with $fixture_registration registration consumes its slot: $out"
     assert_contains "$out" 'counted tasks: parked' 'unreadable task remains actionable'
   done
+  # The sourced admission library invokes this test override indirectly.
+  # shellcheck disable=SC2329
   fm_backend_herdr_endpoint_absence_recheck() {
     : > "$CASE/absence-recheck"
     printf '%s' "$fixture_absence"

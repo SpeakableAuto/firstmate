@@ -21,7 +21,8 @@ BASE_PATH=$PATH
 CACHE="$HOME_DIR/state/quota-remote"
 SSH_CALLS="$TMP_ROOT/ssh.calls"
 SSH_MODE="$TMP_ROOT/ssh.mode"
-mkdir -p "$HOME_DIR/data"
+mkdir -p "$HOME_DIR/data" "$TMP_ROOT/remote-home/state"
+printf 'harness=claude\nkind=ship\nbackend=unknown\nwindow=recorded\naccount=ordinary\n' > "$TMP_ROOT/remote-home/state/crew.meta"
 
 write_quota() { # <path> <claude-percent>
   cat > "$1" <<JSON
@@ -77,7 +78,7 @@ while IFS= read -r -d '' arg; do args+=("\$arg"); done < <(printf '%s' "\$argv_b
 quota_mode=ok
 [ "\$mode" = remote-invalid ] && quota_mode=invalid
 [ "\$mode" = remote-fail ] && quota_mode=fail
-exec env -u FM_HOME -u FM_STATE_OVERRIDE -u FM_REMOTE_QUOTA_TTL FAKE_QUOTA_MODE="\$quota_mode" PATH="$REMOTE_BIN:$BASE_PATH" "$ROOT/bin/\${args[0]}" "\${args[@]:1}"
+exec env -u FM_STATE_OVERRIDE -u FM_REMOTE_QUOTA_TTL -u FM_REMOTE_QUOTA_OK_TTL FM_HOME="$TMP_ROOT/remote-home" FAKE_QUOTA_MODE="\$quota_mode" PATH="$REMOTE_BIN:$BASE_PATH" "$ROOT/bin/\${args[0]}" "\${args[@]:1}"
 SH
 chmod +x "$FAKEBIN/ssh"
 
@@ -94,7 +95,7 @@ run() { # <exit-var> <out-var> <err-var> [env...] -- [args...]
   shift 3
   while [ "$#" -gt 0 ] && [ "$1" != -- ]; do envs+=("$1"); shift; done
   shift
-  _out=$(env PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" FM_SSH_BIN="$FAKEBIN/ssh" ${envs[@]+"${envs[@]}"} "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
+  _out=$(env -u CLAUDE_CONFIG_DIR -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" FM_SSH_BIN="$FAKEBIN/ssh" ${envs[@]+"${envs[@]}"} "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
   _code=$?
   printf -v "$__exit" '%s' "$_code"
   printf -v "$__out" '%s' "$_out"
@@ -111,6 +112,7 @@ assert_equals '' "$err" "a good local snapshot is silent on stderr"
 assert_equals 15m "$(cat "$TMP_ROOT/local.max-age")" "snapshot reads opt into vendor cache reuse"
 run code out err QUOTA_AXI_MAX_AGE=2m --
 assert_equals 2m "$(cat "$TMP_ROOT/local.max-age")" "an explicit vendor reuse age is preserved"
+assert_equals '3 0 Claude quota reading is not explicitly fresh' "$(jq -r '.firstmateClaudeAdmission | "\(.cap) \(.count) \(.session.unknown)"' <<<"$out")" "the snapshot carries this home's Claude crew guard evidence"
 pass "local snapshot prints validated output and requests configurable credential-aware cache reuse"
 
 run code out err FAKE_QUOTA_MODE=invalid --
@@ -128,19 +130,64 @@ expect_code 1 "$code" "missing quota-axi exits 1"
 assert_contains "$err" 'quota-axi not installed' "missing quota-axi is named"
 pass "local snapshot failures are unknown quota, bounded and named"
 
+# --- quota feed: a session-readable snapshot fills what this read cannot see -----
+FEED_HOME="$TMP_ROOT/feed-home"
+mkdir -p "$FEED_HOME/.cache" "$HOME_DIR/config"
+cat > "$FEED_HOME/.cache/feed.json" <<'JSON'
+{ "generatedAt": "2030-01-01T00:00:00Z", "schemaVersion": 5, "providers": [
+  { "provider": "claude", "state": { "status": "fresh", "stale": false },
+    "windows": [ { "id": "five_hour", "kind": "session", "percentRemaining": 88 } ],
+    "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 88, "runway": { "status": "through_reset" }, "selection": { "status": "known", "spendPriority": 0.9 } } ] } },
+  { "provider": "codex", "state": { "status": "fresh", "stale": false },
+    "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 40, "runway": { "status": "through_reset" }, "selection": { "status": "known", "spendPriority": 0.1 } } ] } } ] }
+JSON
+cp "$TMP_ROOT/local.json" "$TMP_ROOT/local.good.json"
+jq '.providers[0] |= (.state = {status: "error", stale: true} | .quotaSemantics = {status: "unknown", effectiveAvailability: []})' \
+  "$TMP_ROOT/local.good.json" > "$TMP_ROOT/local.json"
+# The feed file format deliberately names the home directory with a literal ~/ prefix.
+# shellcheck disable=SC2088
+printf '~/.cache/feed.json\n' > "$HOME_DIR/config/quota-feed"
+run code out err HOME="$FEED_HOME" --
+expect_code 0 "$code" "a snapshot with a feed exits 0"
+assert_equals '88 number' "$(jq -r '.providers[] | select(.provider == "claude") | "\(.quotaSemantics.effectiveAvailability[0].effectivePercentRemaining) \(.firstmateFeed.ageSeconds | type)"' <<<"$out")" "an unmeasured row is filled from the feed with its age"
+assert_equals 'claude codex' "$(jq -r '[.providers[].provider] | join(" ")' <<<"$out")" "a measured row the read lacks is added from the feed"
+assert_equals 88 "$(jq -r '.firstmateClaudeAdmission.session.pct' <<<"$out")" "the Claude guard reads the session window the feed supplies"
+cp "$TMP_ROOT/local.good.json" "$TMP_ROOT/local.json"
+run code out err HOME="$FEED_HOME" --
+assert_equals '58 null' "$(jq -r '.providers[] | select(.provider == "claude") | "\(.quotaSemantics.effectiveAvailability[0].effectivePercentRemaining) \(.firstmateFeed)"' <<<"$out")" "a row the read measured is never replaced"
+run code out err HOME="$FEED_HOME" FAKE_QUOTA_MODE=fail --
+expect_code 0 "$code" "a fresh feed stands in for a failed read"
+assert_equals 'claude codex' "$(jq -r '[.providers[].provider] | join(" ")' <<<"$out")" "the feed alone is the snapshot"
+fm_touch_epoch "$(( $(date +%s) - 1200 ))" "$FEED_HOME/.cache/feed.json"
+run code out err HOME="$FEED_HOME" FAKE_QUOTA_MODE=fail --
+expect_code 1 "$code" "an old feed is never used"
+assert_contains "$err" 'quota-axi --json exited 3' "the read failure is still named"
+rm -f "$HOME_DIR/config/quota-feed"
+pass "a configured quota feed fills unmeasured rows and stands in only while fresh"
+
 # --- remote snapshot through fm-on ----------------------------------------------
 reset_remote ok
 run code out err -- --secondmate peer
 expect_code 0 "$code" "remote snapshot exits 0"
 assert_equals 95 "$(jq -r '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining' <<<"$out")" "remote snapshot is the remote machine's quota"
 assert_equals peer-host "$(cat "$SSH_CALLS")" "remote snapshot travels through the registered SSH alias"
+assert_equals 1 "$(jq -r '.firstmateClaudeAdmission.count' <<<"$out")" "the remote snapshot carries the remote home's own Claude crew"
+assert_equals null "$(jq -r '.firstmateRemoteCache' <<<"$out")" "a fresh remote read is not marked cached"
 write_quota "$TMP_ROOT/remote.json" 96
 run code out err -- --secondmate peer
 expect_code 0 "$code" "a consecutive remote snapshot exits 0"
-assert_equals 96 "$(jq -r '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining' <<<"$out")" "a consecutive dispatch sees changed remote quota"
-assert_equals 2 "$(ssh_calls)" "every successful snapshot performs a remote read"
-assert_absent "$CACHE/peer.json" "successful snapshots are never cached"
-pass "remote snapshot reads current quota through fm-on every time"
+assert_equals 95 "$(jq -r '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining' <<<"$out")" "a read inside the short window reuses the last good snapshot"
+assert_equals number "$(jq -r '.firstmateRemoteCache.ageSeconds | type' <<<"$out")" "a reused snapshot discloses its age"
+assert_equals 1 "$(ssh_calls)" "a burst of dispatches costs one remote read"
+fm_touch_epoch "$(( $(date +%s) - 600 ))" "$CACHE/peer.json"
+run code out err -- --secondmate peer
+assert_equals 96 "$(jq -r '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining' <<<"$out")" "an expired snapshot is read again"
+assert_equals 2 "$(ssh_calls)" "the expired snapshot costs one more remote read"
+run code out err FM_REMOTE_QUOTA_OK_TTL=0 -- --secondmate peer
+expect_code 2 "$code" "a zero success window is a usage error"
+pass "remote snapshot reads through fm-on and reuses a good read only briefly"
 
 reset_remote unreachable
 run code out err -- --secondmate peer
