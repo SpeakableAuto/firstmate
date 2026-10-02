@@ -1,0 +1,102 @@
+LIVE SCENARIO: stale slot record retirement
+session=fm-lab-stale-slot-backp-84896-21045
+home=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home
+project=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/project
+
+STEP 1: spawn the older task, then reproduce the stale-record state by returning only its Treehouse slot.
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home
+warning: herdr presentation parent is absent or ambiguous; using the ordinary flat layout without projection
+spawned stale-finished harness=sh kind=scout window=fm-lab-stale-slot-backp-84896-21045:w1:p2 worktree=/Users/maxverstappen/.treehouse/project-b62063/1/project
+stale_worktree=/Users/maxverstappen/.treehouse/project-b62063/1/project
+stale_pane=w1:p2
+A new version of treehouse is available: v2.1.1 → v3.1.1
+Run "treehouse update" to update
+
+🌳 Terminated lingering processes: zsh (86588)
+🌳 Worktree returned to pool.
+reproduction: Treehouse returned the slot while the stale Firstmate record remained.
+
+STEP 2: spawn the newer claimant and confirm the same slot was re-leased.
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds 180.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+spawned current-claimant harness=sh kind=scout window=fm-lab-stale-slot-backp-84896-21045:w2:p2 worktree=/Users/maxverstappen/.treehouse/project-b62063/1/project
+reassigned_worktree=/Users/maxverstappen/.treehouse/project-b62063/1/project
+claim_before=task=current-claimant home=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home 
+claimant_meta_sha256_before=8a7c3e33f1a3540d49fe5342bf86ee094b66a25e687433bcc818921b25b436d8
+claimant_pane_before=present (w2:p2)
+
+STEP 3: tear down the stale task with --force. This previously refused on the claimant record.
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+warning: task stale-finished's recorded worktree /Users/maxverstappen/.treehouse/project-b62063/1/project was reassigned to task current-claimant (home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home), which claimed that pool slot after this record was written; that slot is no longer stale-finished's, so its processes, copy, and claim are left untouched and only stale-finished's own cleanup runs.
+teardown stale-finished complete (window fm-lab-stale-slot-backp-84896-21045:w1:p2; pool slot /Users/maxverstappen/.treehouse/project-b62063/1/project left to task current-claimant (home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home), which it was reassigned to)
+Backlog: stale-finished just finished (this home keeps no markdown backlog at /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home/data/backlog.md). Update /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home/data/backlog.md - move stale-finished to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+Programs: reconcile the unfinished commissioned outcomes with bin/fm-programs.sh; child completion is not product acceptance, and independent authorised work continues.
+PASS stale_record_removed=yes
+PASS claimant_record_unchanged=8a7c3e33f1a3540d49fe5342bf86ee094b66a25e687433bcc818921b25b436d8
+PASS claimant_claim_untouched=task=current-claimant home=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home 
+PASS claimant_worktree_present=yes
+PASS claimant_pane_present=yes
+PASS stale_endpoint_closed=yes
+
+STEP 4: tear down the current claimant normally after the stale blocker is gone.
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+teardown: reaping leaked worktree process(es) for current-claimant: 97326
+teardown: force-killing leaked worktree process(es) for current-claimant: 97326
+A new version of treehouse is available: v2.1.1 → v3.1.1
+Run "treehouse update" to update
+
+🌳 Worktree returned to pool.
+teardown current-claimant complete (window fm-lab-stale-slot-backp-84896-21045:w2:p2, worktree /Users/maxverstappen/.treehouse/project-b62063/1/project)
+Backlog: current-claimant just finished (this home keeps no markdown backlog at /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home/data/backlog.md). Update /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home/data/backlog.md - move current-claimant to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+Programs: reconcile the unfinished commissioned outcomes with bin/fm-programs.sh; child completion is not product acceptance, and independent authorised work continues.
+PASS claimant_record_removed=yes
+PASS claimant_claim_released=yes
+PASS claimant_endpoint_closed=yes
+A new version of treehouse is available: v2.1.1 → v3.1.1
+Run "treehouse update" to update
+
+treehouse_after_claimant=[]
+
+STEP 5: adversarial duplicate record without a reassignment claim must still refuse under --force.
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home
+warning: herdr presentation parent is absent or ambiguous; using the ordinary flat layout without projection
+spawned ambiguous-owner harness=sh kind=scout window=fm-lab-stale-slot-backp-84896-21045:w3:p2 worktree=/Users/maxverstappen/.treehouse/project-b62063/1/project
+refusal_exit=1
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REFUSED: task ambiguous-owner's recorded worktree /Users/maxverstappen/.treehouse/project-b62063/1/project is also task duplicate-blocker's recorded worktree.
+Returning that pool slot would kill duplicate-blocker's processes and reset its copy, so nothing was changed - not even with --force.
+Reconcile whichever record is wrong (bin/fm-crew-state.sh ambiguous-owner; bin/fm-crew-state.sh duplicate-blocker), then re-run teardown.
+PASS ambiguous_collision_refused=yes
+PASS ambiguous_record_preserved=yes
+PASS duplicate_record_preserved=yes
+PASS ambiguous_claim_preserved=task=ambiguous-owner home=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home 
+PASS ambiguous_worktree_present=yes
+PASS ambiguous_endpoint_present=yes
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+teardown: reaping leaked worktree process(es) for ambiguous-owner: 60931
+teardown: force-killing leaked worktree process(es) for ambiguous-owner: 60931
+A new version of treehouse is available: v2.1.1 → v3.1.1
+Run "treehouse update" to update
+
+🌳 Worktree returned to pool.
+teardown ambiguous-owner complete (window fm-lab-stale-slot-backp-84896-21045:w3:p2, worktree /Users/maxverstappen/.treehouse/project-b62063/1/project)
+Backlog: ambiguous-owner just finished (this home keeps no markdown backlog at /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home/data/backlog.md). Update /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M3X3J2ZC6W2HH92XJP6DQ4YQ/.nm-live-stale-slot/home/data/backlog.md - move ambiguous-owner to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+Programs: reconcile the unfinished commissioned outcomes with bin/fm-programs.sh; child completion is not product acceptance, and independent authorised work continues.
+
+FINAL: all live scenarios passed; guarded Herdr teardown will verify the default-session tripwire.
