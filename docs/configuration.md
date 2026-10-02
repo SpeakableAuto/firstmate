@@ -1069,7 +1069,7 @@ Neither path allows order to override a gate or treats unknown evidence as healt
 A rule-level `select` overrides the file-level value for the whole intake, including a per-machine rule-floor fallback to `default`; only a neutral no-match uses the file's policy directly.
 Omitting `select` everywhere preserves `quota-balanced`: the highest known `spendPriority` among passing candidates wins, and configured order only breaks a near-tie.
 A near-tie is every rankable passing candidate whose `spendPriority` is at most 0.05 below the highest; the earliest of them in configured order wins, exact ties included, and the result reports them on a `near-tie broken by configured order` line.
-Across the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines), the same profile on two machines is ordered by the higher `spendPriority`, then this machine, and each remote candidate is named with `home=<id>`.
+Across the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines), the same configured position on two machines is ordered by the higher `spendPriority`; an exact scalar tie goes to the machine and account with fewer live workers plus recent charges, then a stable hash of the task key spreads a remaining tie across machines, and the result reports the tied candidates and rule used.
 The band is fixed at 0.05 so that only practically equal quota defers to configured order.
 While any passing candidate has `through_reset` runway, `quota-balanced` passes over every candidate with `projected_exhaustion` runway, and the result names each one that would otherwise have won or tied on a `passed over` line.
 

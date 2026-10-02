@@ -164,7 +164,8 @@ Form one candidate set: each machine's profiles for the matched rule, with the r
 Judge every candidate with the same three gates and declared floors, plus the [Claude crew admission](../../../docs/configuration.md#claude-crew-admission) cap and session floor of that machine's account and live crew; a candidate the guard would refuse at spawn is not eligible.
 Rank the whole set with the configured selection policy as though it were one array: no machine is a default, and no home-machine margin applies.
 For `candidate-order`, configured position orders the set and quota orders the same profile across machines.
-For `quota-balanced`, the `projected_exhaustion` pass-over above spans the whole pool, and a near-tie prefers configured position first, then the higher scalar, then this machine.
+For `quota-balanced`, the `projected_exhaustion` pass-over above spans the whole pool, and a near-tie prefers configured position first, then the higher scalar.
+When candidates on different machines tie exactly on configured position and scalar, both policies prefer fewer live workers plus recent charges on that machine and account, then use a stable hash of the task key to spread a remaining tie; report the tied candidates and the rule that decided them.
 Unknown runway beside a known healthy percentage is disclosed uncertainty that keeps a candidate eligible, never a block.
 An unreachable machine or unknown remote quota is disclosed uncertainty about that machine only; it never blocks, delays, or downgrades the other machines.
 

@@ -1420,6 +1420,31 @@ assert_contains "$out" 'not eligible: Claude session 38% below the 40% floor on 
 assert_contains "$out" 'placement: local' "a remote account under its session floor is passed by"
 pass "the Claude crew cap and session floor apply per account on each machine"
 
+write_pool_quota "$TMP_ROOT/pool-local.json" 1.0 through_reset 0.2 through_reset
+write_pool_quota "$REMOTE_QUOTA" 1.0 through_reset 0.2 through_reset
+live_claude "$HOME_DIR/state" 1
+live_claude "$REMOTE_HOME/state" 0
+pool_case "$BRIEF" --project pager
+assert_contains "$out" 'exact cross-home tie: claude:sonnet=1.0 workers=1, home=peer claude:sonnet=1.0 workers=0 -> home=peer claude:sonnet by fewer live workers' "the exact tie line names both account loads and the deciding rule"
+assert_contains "$out" 'placement: secondmate peer (peer claude:sonnet wins an exact cross-home tie at spendPriority 1.0 by fewer live workers)' "the placement reason names the worker-count tie-break"
+
+live_claude "$HOME_DIR/state" 0
+mkdir -p "$TMP_ROOT/data/hash-a" "$TMP_ROOT/data/hash-b"
+cp "$BRIEF" "$TMP_ROOT/data/hash-a/brief.md"
+cp "$BRIEF" "$TMP_ROOT/data/hash-b/brief.md"
+pool_case "$TMP_ROOT/data/hash-a/brief.md" --project pager
+hash_a_out=$out
+hash_a_placement=$(grep '^  placement:' <<<"$out")
+pool_case "$TMP_ROOT/data/hash-b/brief.md" --project pager
+hash_b_out=$out
+hash_b_placement=$(grep '^  placement:' <<<"$out")
+assert_contains "$hash_a_out" 'by stable task-key hash' "equal worker counts use the task-key hash"
+assert_contains "$hash_b_out" 'by stable task-key hash' "the hash rule is reported for another task key"
+assert_not_equals "$hash_a_placement" "$hash_b_placement" "different task keys can spread exact ties across machines"
+pool_case "$TMP_ROOT/data/hash-a/brief.md" --project pager
+assert_equals "$hash_a_placement" "$(grep '^  placement:' <<<"$out")" "the same task key resolves the tie stably"
+pass "exact cross-home ties use account load, then a stable task-key hash"
+
 write_pool_quota "$TMP_ROOT/pool-local.json" 0.4 projected_exhaustion 1.8 projected_exhaustion
 write_pool_quota "$REMOTE_QUOTA" 0.3 through_reset 1.6 projected_exhaustion
 pool_case "$BRIEF" --project pager
@@ -1468,8 +1493,8 @@ assert_contains "$out" 'peer:codex:gpt-5.6-sol=7' "the other machine's Codex acc
 assert_contains "$out" 'charged=' "later placements show the charge of earlier ones"
 assert_equals 1 "$(ssh_calls)" "a batch reads each remote machine once"
 first_block=$(awk '/^dispatch-resolve:$/ { n++ } n == 1' <<<"$out" | grep -v -e '^  brief: ' -e '^  project: ' -e '^  model: ')
-pool_case "$BRIEF" --project pager
-assert_equals "$first_block" "$(grep -v '^  model: ' <<<"$out")" "one brief resolves exactly like the first brief of a batch"
+pool_case "$TMP_ROOT/brief-1.md" --project pager
+assert_equals "$first_block" "$(grep -v '^  model: ' <<<"$out")" "the same brief resolves identically alone and first in a batch"
 pass "a batch of 20 charges each placement and spreads across accounts and machines"
 
 # Separate calls inside the charge window spread like one batch.

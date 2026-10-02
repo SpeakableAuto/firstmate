@@ -71,6 +71,7 @@
 #     candidate: [home=<id>] <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. [feed=..s old] [charged=<n> recent placement(s)] -> eligible | eligible, runway unknown: disclosed uncertainty | eligible, unranked: <reason> | not eligible: <reason>
 #     passed over: [home=<id>] <harness>:<model>: projected to run out before reset; <later eligible candidate | another eligible candidate in the pool> has runway through_reset
 #     near-tie broken by configured order: [home=<id>] <harness>:<model>=<spendPriority>, ... (within <band>)   (quota-balanced only)
+#     exact cross-home tie: <candidates and worker counts> -> <winner> by <fewer live workers | stable task-key hash>
 #     profile: --harness <h> [--model <m>] [--effort <e>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]     (status clear only)
 #     placement: local | secondmate <id> (<machine> <harness>:<model> <why>)   (pooled only)
 #     home: <id> claude-crew=<n>/<cap> [+<n> recent placement(s)] session=..% [cached=..s old] | home: <id> not eligible: <reason> | home: <id> unknown: <reason>: disclosed uncertainty   (pooled only)
@@ -720,9 +721,10 @@ POOL_JQ='
   # Recent placements on a machine, other than this task'"'"'s own. A Claude
   # placement already counted as that machine'"'"'s live crew takes no second slot.
   def recent($home): [$ledger.entries[] | select(.home == $home and .key != $key)];
+  def recent_account($home; $provider; $account):
+    [recent($home)[] | select(.provider == $provider and .account == $account)];
   def charges($home; $provider; $account; $scope):
-    [recent($home)[] | select(
-      .provider == $provider and .account == $account and
+    [recent_account($home; $provider; $account)[] | select(
       ((.scopes | type) == "array") and (.scopes | index($scope)) != null
     )] | length;
   def slots($home; $counted):
@@ -760,24 +762,53 @@ POOL_JQ='
       if $refusal == null then $c
       else $c + {eligible: false, unranked: false, reason: $refusal} end
     end;
-  def rank_key: [.order, -(.spendPriority), .home_index];
+  def worker_load($c; $h):
+    recent_account($h.id; $c.provider; $c.account) as $recent |
+    if $fmap[$c.profile.harness] == "claude" and $h.admission != null and ($h.admission.unknown | not) then
+      $h.admission.count
+      + ([$recent[] | .key as $k | select(($h.admission.counted // []) | index($k) | not)] | length)
+    else $recent | length
+    end;
+  def rank_key: [.order, -(.spendPriority), .home, .profile.harness, (.profile.model // ""), (.profile.effort // "")];
+  def task_hash: reduce ($key | explode[]) as $cp (5381; ((. * 33 + $cp) % 2147483647));
+  def exact_tie_pick($xs):
+    if ([$xs[].home] | unique | length) < 2 then {best: $xs[0]}
+    else
+      ($xs | min_by(.workers).workers) as $fewest |
+      ([$xs[] | select(.workers == $fewest)] | sort_by(.home, .profile.harness, (.profile.model // ""), (.profile.effort // ""))) as $lightest |
+      if ($lightest | length) == 1 then
+        {best: $lightest[0], exact_tie: {candidates: $xs, winner: $lightest[0], rule: "fewer live workers"}}
+      else
+        task_hash as $hash | ($hash % ($lightest | length)) as $index |
+        {best: $lightest[$index], exact_tie: {candidates: $xs, winner: $lightest[$index], rule: "stable task-key hash", hash: $hash}}
+      end
+    end;
   def pool_pick($elig; $mode):
     if $mode == "candidate-order" then
       ($elig | sort_by(rank_key)) as $o |
       ([$o | to_entries[] | select(.value.runway == "through_reset") | .key] | first) as $safe |
       ([$o | to_entries[] | select(
         .value.runway != "projected_exhaustion" or $safe == null or .key >= $safe
-      )] | first) as $pick |
-      {best: $pick.value, passed_over: $o[:$pick.key], passed_kind: "later"}
+      )]) as $viable |
+      ($viable[0]) as $first |
+      ([$viable[].value | select(
+        .order == $first.value.order and .spendPriority == $first.value.spendPriority and
+        ($safe == null or .runway != "projected_exhaustion")
+      )]) as $exact |
+      exact_tie_pick($exact) as $tie |
+      $tie + {passed_over: $o[:$first.key], passed_kind: "later"}
     else
       (any($elig[]; .runway == "through_reset")) as $safe |
       (if $safe then [$elig[] | select(.runway != "projected_exhaustion")] else $elig end) as $kept |
       ($kept | max_by(.spendPriority).spendPriority) as $top |
       ([$kept[] | select($top - .spendPriority <= near_tie_band + 1e-9)] | sort_by(rank_key)) as $near |
-      {best: $near[0],
-       near_tie: (if ([$near[].order] | unique | length) > 1 then $near else null end),
-       passed_over: (if $safe then [$elig[] | select(.runway == "projected_exhaustion" and .spendPriority >= $top - near_tie_band - 1e-9)] | sort_by(rank_key) else [] end),
-       passed_kind: "pool"}
+      ([$near[] | select(.order == $near[0].order and .spendPriority == $near[0].spendPriority)]) as $exact |
+      exact_tie_pick($exact) as $tie |
+      $tie + {
+        near_tie: (if ([$near[].order] | unique | length) > 1 then $near else null end),
+        passed_over: (if $safe then [$elig[] | select(.runway == "projected_exhaustion" and .spendPriority >= $top - near_tie_band - 1e-9)] | sort_by(rank_key) else [] end),
+        passed_kind: "pool"
+      }
     end;
   ($ans.resolved_rule) as $choice | (rule_at($choice)) as $rule |
   (selection_mode($cfg; $rule)) as $mode |
@@ -795,7 +826,8 @@ POOL_JQ='
        end) as $sel |
       $h + {index: $hi, sel: $sel, slots: slots($h.id; $h.admission.counted),
         candidates: [($sel.use // []) | to_entries[] | . as $e |
-          (evaluate($e.value) + {home: $h.id, home_index: $hi, order: [$sel.rank, $e.key]}) | guard(.; $h)]}
+          (evaluate($e.value) + {home: $h.id, order: [$sel.rank, $e.key]}) | guard(.; $h) |
+          . + {workers: worker_load(.; $h)}]}
     end] as $evald |
   ([$evald[] | select(.sel)]) as $usable |
   ([$evald[].candidates[]]) as $cands |
@@ -826,6 +858,7 @@ POOL_JQ='
        $ev + {status: "clear", candidates: $cands, chosen: $best,
               passed_over: ($pick.passed_over // []), passed_kind: $pick.passed_kind}
        + (if $chosen_sel.note then {note: $chosen_sel.note} else {} end)
+       + (if $pick.exact_tie then {exact_tie: $pick.exact_tie} else {} end)
        + (if $pick.near_tie then {near_tie: $pick.near_tie, near_tie_band: near_tie_band} else {} end)
        + (if ($unranked | length) > 0 then
             {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
@@ -834,7 +867,8 @@ POOL_JQ='
             {placement: {home: $best.home,
               reason: ((if $best.home == "local" then "local" else $best.home end) + " "
                 + "\($best.profile.harness):\($best.profile.model // "-") "
-                + (if $mode == "candidate-order" then "is the first passing candidate in configured order across the pool"
+                + (if $pick.exact_tie then "wins an exact cross-home tie at spendPriority \($best.spendPriority) by \($pick.exact_tie.rule)"
+                   elif $mode == "candidate-order" then "is the first passing candidate in configured order across the pool"
                    elif $pick.near_tie then "wins a near-tie at spendPriority \($best.spendPriority) by configured order"
                    else "has the pool'"'"'s highest spendPriority \($best.spendPriority)" end)
                 + (if ($pick.passed_over | length) > 0 then "; \($pick.passed_over | length) candidate(s) projected to run out before reset passed over" else "" end))}}
@@ -944,6 +978,11 @@ RENDER_JQ='
     (if .near_tie then "  near-tie broken by configured order: "
         + ([.near_tie[] | "\(hm(.))=\(show(.spendPriority))"] | join(", "))
         + " (within \(.near_tie_band | flat))" else empty end),
+    (if .exact_tie then "  exact cross-home tie: "
+        + ([.exact_tie.candidates[] | "\(hm(.))=\(show(.spendPriority)) workers=\(.workers)"] | join(", "))
+        + " -> \(hm(.exact_tie.winner)) by \(.exact_tie.rule | flat)"
+        + (if .exact_tie.hash then " \(.exact_tie.hash)" else "" end)
+      else empty end),
     (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
         + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
         + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end)
