@@ -1,0 +1,10 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 1000   tokens: 410/35
+  rule: rule_1 (A simple bug fix with a stated root cause.)   confidence: 1.0
+  probabilities: default=0.0 rule_1=1.0
+  selection: quota-balanced
+  note: rule matched
+  candidate: claude:sonnet  provider=claude  scope=all_models  remaining=78%  spendPriority=-  runway=projected_exhaustion  cached=34s old  -> not eligible: profile floor all_models below 90%
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=78%  spendPriority=0.0409  runway=projected_exhaustion  cached=34s old  -> eligible
+  profile: --harness 'claude' --model 'opus'

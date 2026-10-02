@@ -1,0 +1,10 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 410/35
+  rule: rule_1 (A simple bug fix with a stated root cause.)   confidence: 0.99
+  probabilities: default=0.0 rule_1=1.0
+  selection: quota-balanced
+  note: rule matched
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=30%  spendPriority=-0.247  runway=projected_exhaustion  -> eligible
+  candidate: claude:sonnet  provider=claude  scope=all_models  remaining=83%  spendPriority=0.1718  runway=projected_exhaustion  cached=35s old  -> eligible
+  profile: --harness 'claude' --model 'sonnet'

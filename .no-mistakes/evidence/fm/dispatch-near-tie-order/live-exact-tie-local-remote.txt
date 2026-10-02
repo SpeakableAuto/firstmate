@@ -1,0 +1,14 @@
+dispatch-resolve:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 413/35
+  rule: rule_1 (A simple bug fix with a stated root cause.)   confidence: 1.0
+  probabilities: rule_1=1.0 default=0.0
+  selection: quota-balanced
+  note: rule matched
+  candidate: claude:sonnet  provider=claude  scope=all_models  remaining=83%  spendPriority=0.1708  runway=projected_exhaustion  cached=7s old  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=83%  spendPriority=0.1708  runway=projected_exhaustion  cached=7s old  -> eligible
+  near-tie broken by configured order: claude:sonnet=0.1708, claude:opus=0.1708 (within 0.05)
+  profile: --harness 'claude' --model 'sonnet'
+  placement: secondmate peter (peter candidate runs through reset; local candidate is projected to run out before reset)
+  home: peter  best=claude:sonnet  scope=all_models  remaining=80%  spendPriority=0.4509  runway=through_reset
+  near-tie broken by configured order: home=peter claude:sonnet=0.4509, claude:opus=0.4509 (within 0.05)
