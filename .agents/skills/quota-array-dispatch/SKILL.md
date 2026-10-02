@@ -114,7 +114,8 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 
 ## Rank by the configured selection policy
 
-Resolve `select` from the chosen rule and file under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson), including the default policy when a rule floor falls through.
+Decide the selection policy once per intake under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson): use the matched rule's `select`, else the file's `select`, else `quota-balanced`.
+A per-machine rule-floor shortfall changes only the profiles that machine contributes and never changes the intake's selection policy.
 For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, and rankability checks under the uncertainty rules below.
 Pass over a candidate with `projected_exhaustion` runway only when a later passing candidate has `through_reset` runway; otherwise retain the configured order.
 Select the first candidate not passed over, and account for each skipped candidate as "passed over: projected to run out before reset".

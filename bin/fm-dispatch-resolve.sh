@@ -818,15 +818,17 @@ POOL_JQ='
    elif ([$usable[] | select(.sel.use) | .sel.use[]] | length) == 0 then
      $ev + {status: "escalate", reason: "no profiles configured for \($lead.source)", note: $lead.note, candidates: []}
    else
-     ($ev + {selection: $lead.mode, note: $lead.note}) as $ev |
+     ($ev + {selection: $mode}) as $ev |
      ([$cands[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
      ([$cands[] | select(.eligible and .unranked)]) as $unranked |
      if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", candidates: $cands}
      else
-       pool_pick($elig; $lead.mode) as $pick |
+       pool_pick($elig; $mode) as $pick |
        ($pick.best) as $best |
+       ([$usable[] | select(.id == $best.home) | .sel] | first) as $chosen_sel |
        $ev + {status: "clear", candidates: $cands, chosen: $best,
               passed_over: ($pick.passed_over // []), passed_kind: $pick.passed_kind}
+       + (if $chosen_sel.note then {note: $chosen_sel.note} else {} end)
        + (if $pick.near_tie then {near_tie: $pick.near_tie, near_tie_band: near_tie_band} else {} end)
        + (if ($unranked | length) > 0 then
             {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
@@ -835,7 +837,7 @@ POOL_JQ='
             {placement: {home: $best.home,
               reason: ((if $best.home == "local" then "local" else $best.home end) + " "
                 + "\($best.profile.harness):\($best.profile.model // "-") "
-                + (if $lead.mode == "candidate-order" then "is the first passing candidate in configured order across the pool"
+                + (if $mode == "candidate-order" then "is the first passing candidate in configured order across the pool"
                    elif $pick.near_tie then "wins a near-tie at spendPriority \($best.spendPriority) by configured order"
                    else "has the pool'"'"'s highest spendPriority \($best.spendPriority)" end)
                 + (if ($pick.passed_over | length) > 0 then "; \($pick.passed_over | length) candidate(s) projected to run out before reset passed over" else "" end))}}

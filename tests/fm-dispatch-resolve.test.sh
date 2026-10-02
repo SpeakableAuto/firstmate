@@ -1287,6 +1287,8 @@ assert_contains "$out" 'candidate: home=peer claude:fable' "the remote machine e
 assert_contains "$out" "profile: --harness 'claude' --model 'fable' --effort 'xhigh'" "the remote rule profile wins the pool"
 assert_contains "$out" 'placement: secondmate peer' "the task is placed where the rule applies"
 assert_contains "$out" 'selection: quota-balanced' "the matched rule selects one policy for every machine"
+assert_contains "$out" '  note: rule matched' "the top-level note describes the chosen remote rule profile"
+assert_contains "$out" 'home: local  claude-crew=0/3  session=79%  note=rule rule_1 floor model:fable below 20%: fall through to default' "the local floor fallback stays on the local home line"
 cp "$BASE_RULES" "$RULES"
 pass "each machine resolves its floor without changing the intake policy"
 
