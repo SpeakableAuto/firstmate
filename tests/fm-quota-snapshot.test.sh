@@ -146,6 +146,8 @@ JSON
 cp "$TMP_ROOT/local.json" "$TMP_ROOT/local.good.json"
 jq '.providers[0] |= (.state = {status: "error", stale: true} | .quotaSemantics = {status: "unknown", effectiveAvailability: []})' \
   "$TMP_ROOT/local.good.json" > "$TMP_ROOT/local.json"
+# The feed file format deliberately names the home directory with a literal ~/ prefix.
+# shellcheck disable=SC2088
 printf '~/.cache/feed.json\n' > "$HOME_DIR/config/quota-feed"
 run code out err HOME="$FEED_HOME" --
 expect_code 0 "$code" "a snapshot with a feed exits 0"
