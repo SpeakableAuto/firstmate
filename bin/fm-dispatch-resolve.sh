@@ -780,16 +780,13 @@ POOL_JQ='
        passed_kind: "pool"}
     end;
   ($ans.resolved_rule) as $choice | (rule_at($choice)) as $rule |
-  (if $rule == null then profiles($cfg.default // null) else profiles($rule.use) end) as $answer_use |
   (selection_mode($cfg; $rule)) as $mode |
-  ($ans.kind == "resolve") as $resolving |
   ($homes | length > 1) as $pooled |
   [$homes | to_entries[] | .key as $hi | .value as $h |
     if ($h.eligible | not) or $h.snapshot == null then $h + {index: $hi, candidates: [], unavailable: ($h.snapshot == null), slots: slots($h.id; $h.admission.counted)}
     else charged($h.snapshot; $h.id) as $q |
 '"$CANDIDATE_JQ"'
-      (if ($resolving | not) then {use: $answer_use, mode: $mode, rank: 0}
-       elif $rule == null then {source: "default", use: profiles($cfg.default // null), note: "no rule matched", mode: $mode, rank: 1}
+      (if $rule == null then {source: "default", use: profiles($cfg.default // null), note: "no rule matched", mode: $mode, rank: 1}
        else floor_state($rule.floor; $rule.floor.provider; "") as $state |
          if $state == "unknown" then {unverifiable: "rule \($choice) floor \($rule.floor.provider)/\($rule.floor.scope) is unverifiable"}
          elif $state == "below" then {source: "default", use: profiles($cfg.default // null), note: "rule \($choice) floor \($rule.floor.scope) below \($rule.floor.min_percent)%: fall through to default", mode: $mode, rank: 1}

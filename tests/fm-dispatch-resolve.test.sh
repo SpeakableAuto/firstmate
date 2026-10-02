@@ -1289,8 +1289,30 @@ assert_contains "$out" 'placement: secondmate peer' "the task is placed where th
 assert_contains "$out" 'selection: quota-balanced' "the matched rule selects one policy for every machine"
 assert_contains "$out" '  note: rule matched' "the top-level note describes the chosen remote rule profile"
 assert_contains "$out" 'home: local  claude-crew=0/3  session=79%  note=rule rule_1 floor model:fable below 20%: fall through to default' "the local floor fallback stays on the local home line"
+
+jq '.rules[0].approval = "captain"' "$RULES" > "$TMP_ROOT/rules-edit.json"
+mv "$TMP_ROOT/rules-edit.json" "$RULES"
+PLACEMENT_RULE=rule_1 placement_case ok --project pager
+assert_contains "$out" 'status: escalate' "the approval gate keeps its status"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-high' "the approval-gated local home contributes defaults below its rule floor"
+assert_not_contains "$out" 'candidate: claude:fable' "the approval-gated local home does not contribute the floored rule profile"
+assert_contains "$out" 'candidate: home=peer claude:fable' "the approval-gated remote home contributes the passing rule profile"
+assert_contains "$out" 'home: local  claude-crew=0/3  session=79%  note=rule rule_1 floor model:fable below 20%: fall through to default' "the approval-gated local floor fallback is disclosed"
+
+jq 'del(.rules[0].approval)' "$RULES" > "$TMP_ROOT/rules-edit.json"
+mv "$TMP_ROOT/rules-edit.json" "$RULES"
+rm -rf "$HOME_DIR/state/quota-remote" "$SSH_CALLS"
+printf 'ok\n' > "$SSH_MODE"
+reset_log
+write_response "$RESPONSE" rule_1 0.41
+TYPESAFE_API_KEY="$KEY" run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: ambiguous' "the confidence gate keeps its status"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-high' "the ambiguous local home contributes defaults below its rule floor"
+assert_not_contains "$out" 'candidate: claude:fable' "the ambiguous local home does not contribute the floored rule profile"
+assert_contains "$out" 'candidate: home=peer claude:fable' "the ambiguous remote home contributes the passing rule profile"
+assert_contains "$out" 'home: local  claude-crew=0/3  session=79%  note=rule rule_1 floor model:fable below 20%: fall through to default' "the ambiguous local floor fallback is disclosed"
 cp "$BASE_RULES" "$RULES"
-pass "each machine resolves its floor without changing the intake policy"
+pass "each machine resolves its floor for clear, approval-gated, and ambiguous outcomes"
 
 placement_case unreachable --project pager
 expect_code 0 "$code" "an unreachable machine still exits 0"

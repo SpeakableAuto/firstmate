@@ -1080,6 +1080,7 @@ The charge is one Claude crew slot on that machine for a Claude candidate, plus 
 `spendPriority` falls by a draw divided by the window's remaining-time percentage, which the snapshot does not publish, so the fixed charge assumes half the window remains.
 A placement stays charged for 900 seconds, the longest a reused quota reading can be, recorded in `state/dispatch-charges.jsonl` with its selected model and applicable quota scopes.
 A task is keyed by its `data/<id>/` directory when its brief is `data/<id>/brief.md`, else by the brief path, so resolving the same task again replaces its own charge instead of adding to it.
+A clear recommendation that Firstmate overrides keeps its charge until the 900-second window expires or the same task is resolved again.
 A charged Claude slot whose task already appears in that machine's live crew is not counted twice.
 The draw is an estimate to spread a burst, not a measurement; deleting the file clears every charge, for example after a decision-only test run.
 A rule can explicitly set `"select": "quota-balanced"` to retain that behavior inside an ordered file.
