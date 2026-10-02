@@ -819,7 +819,8 @@ order_case
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "unknown earlier floor stays unrankable"
 assert_contains "$out" 'eligible, unranked:' "unknown evidence is disclosed"
 
-# The default inherits the file policy, including when a rule floor falls through.
+# A neutral default uses the file policy; a matched rule keeps its policy even
+# when one machine's rule floor falls through to default profiles.
 write_response "$RESPONSE" default 0.9
 order_case
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "default inherits candidate order"
@@ -828,7 +829,7 @@ mv "$TMP_ROOT/order-edit.json" "$ORDER_RULES"
 write_response "$RESPONSE" rule_1 0.9
 order_case
 assert_contains "$out" 'fall through to default' "rule floor falls through"
-assert_contains "$out" 'selection: candidate-order' "default uses file policy, not failed rule override"
+assert_contains "$out" 'selection: quota-balanced' "the matched rule policy survives its floor fallback"
 
 # Ordered selection also resolves equal quota evidence by explicit preference.
 jq '(.providers[] | .quotaSemantics.effectiveAvailability[]) |=
@@ -1239,6 +1240,32 @@ placement_case ok --project pager
 assert_contains "$out" 'placement: local (local cursor:cursor-grok-4.6-medium has the pool'"'"'s highest spendPriority 0.7597)' "a higher local candidate keeps the task local"
 pass "the pool ranks every machine's candidates by spendPriority with no home-machine margin"
 
+PLACEMENT_RULE=rule_3 placement_case ok --project pager
+assert_contains "$out" 'status: escalate' "an approval-gated answer keeps its status"
+assert_contains "$out" 'candidate: home=peer claude:fable' "an approval-gated answer includes remote candidates"
+assert_equals 1 "$(ssh_calls)" "an approval-gated answer reads the remote machine"
+unset PLACEMENT_RULE
+rm -rf "$HOME_DIR/state/quota-remote" "$SSH_CALLS"
+printf 'ok\n' > "$SSH_MODE"
+reset_log
+write_response "$RESPONSE" rule_4 0.41
+TYPESAFE_API_KEY="$KEY" run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: ambiguous' "an ambiguous answer keeps its status"
+assert_contains "$out" 'candidate: home=peer cursor:cursor-grok-4.6-medium' "an ambiguous answer includes remote candidates"
+assert_equals 1 "$(ssh_calls)" "an ambiguous answer reads the remote machine"
+pass "every candidate-bearing answer evaluates the whole machine pool"
+
+printf 'not-json\n' > "$TMP_ROOT/invalid-local-quota.json"
+rm -rf "$HOME_DIR/state/quota-remote" "$SSH_CALLS"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY="$KEY" QUOTA_AXI_FIXTURE="$TMP_ROOT/invalid-local-quota.json" run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: clear' "a healthy remote machine resolves despite local quota failure"
+assert_contains "$out" 'home: local  unknown: quota-axi --json returned an invalid snapshot: disclosed uncertainty' "the local failure is disclosed on its home line"
+assert_contains "$out" 'placement: secondmate peer' "the healthy remote machine receives the task"
+assert_equals 1 "$(ssh_calls)" "local quota failure does not skip the remote snapshot"
+pass "local quota failure leaves this home unavailable without blocking peers"
+
 write_quota "$REMOTE_QUOTA" 0.3
 set_runway "$REMOTE_QUOTA" claude through_reset
 jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[] | select(.scope == "all_models") | .selection.spendPriority) = 0.75' \
@@ -1248,6 +1275,7 @@ assert_contains "$out" 'placement: secondmate peer (peer claude:sonnet wins a ne
 assert_contains "$out" 'near-tie broken by configured order: home=peer claude:sonnet=0.75, cursor:cursor-grok-4.6-medium=0.7597 (within 0.05)' "near-tie evidence names each machine"
 pass "configured order breaks near-ties across the pool"
 
+jq '.select = "candidate-order" | .rules[0].select = "quota-balanced"' "$BASE_RULES" > "$RULES"
 jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability) |= map(
   if .scope == "all_models" then .runway.status = "through_reset" | .selection.spendPriority = 2.5
   elif .scope == "model:fable" then .effectivePercentRemaining = 95 | .runway.status = "through_reset" | .selection.spendPriority = 2.25
@@ -1258,7 +1286,9 @@ assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-high' "the local rule 
 assert_contains "$out" 'candidate: home=peer claude:fable' "the remote machine evaluates the matched rule against its own floor"
 assert_contains "$out" "profile: --harness 'claude' --model 'fable' --effort 'xhigh'" "the remote rule profile wins the pool"
 assert_contains "$out" 'placement: secondmate peer' "the task is placed where the rule applies"
-pass "each machine resolves the matched rule floor from its own quota"
+assert_contains "$out" 'selection: quota-balanced' "the matched rule selects one policy for every machine"
+cp "$BASE_RULES" "$RULES"
+pass "each machine resolves its floor without changing the intake policy"
 
 placement_case unreachable --project pager
 expect_code 0 "$code" "an unreachable machine still exits 0"
@@ -1439,6 +1469,30 @@ KEEP_LEDGER=1 pool_case "$TMP_ROOT/data/task-b/brief.md" --project pager
 assert_contains "$out" 'placement: local' "placements older than the charge window stop counting"
 live_claude "$HOME_DIR/state" 0
 pass "placements are charged across separate calls inside the charge window"
+
+SCOPED_QUOTA="$TMP_ROOT/scoped-quota.json"
+cat > "$SCOPED_QUOTA" <<'JSON'
+{
+  "generatedAt": "2030-01-01T00:00:00Z",
+  "schemaVersion": 5,
+  "providers": [
+    { "provider": "codex", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 90, "runway": { "status": "through_reset" }, "selection": { "spendPriority": 1.0 } },
+      { "scope": "model:gpt-5.6-sol", "status": "known", "effectivePercentRemaining": 70, "runway": { "status": "through_reset" }, "selection": { "spendPriority": 0.8 } },
+      { "scope": "model:gpt-6-astra", "status": "known", "effectivePercentRemaining": 80, "runway": { "status": "through_reset" }, "selection": { "spendPriority": 1.0 } }
+    ] } }
+  ]
+}
+JSON
+jq '.rules[0].use = [{harness:"codex", model:"gpt-5.6-sol"}] | .default = .rules[0].use' "$POOL_RULES" > "$RULES"
+write_pool_response "$RESPONSE"
+rm -f "$HOME_DIR/state/dispatch-charges.jsonl"
+TYPESAFE_API_KEY="$KEY" QUOTA_AXI_FIXTURE="$SCOPED_QUOTA" run code out err "$TMP_ROOT/data/task-a/brief.md"
+assert_equals 'gpt-5.6-sol all_models,model:gpt-5.6-sol' "$(jq -r '[.model, (.scopes | sort | join(","))] | join(" ")' "$HOME_DIR/state/dispatch-charges.jsonl")" "the ledger records the selected model and applicable scopes"
+jq '.rules[0].use = [{harness:"codex", model:"gpt-6-astra"}] | .default = .rules[0].use' "$POOL_RULES" > "$RULES"
+KEEP_LEDGER=1 TYPESAFE_API_KEY="$KEY" QUOTA_AXI_FIXTURE="$SCOPED_QUOTA" run code out err "$TMP_ROOT/data/task-b/brief.md"
+assert_contains "$out" 'remaining=85%  spendPriority=0.9  runway=through_reset  bounds=all_models:85%/through_reset,model:gpt-6-astra:80%/through_reset' "the shared account row is charged while the unrelated model row is unchanged"
+pass "placement charges apply only to the selected profile's quota scopes"
 
 cp "$BASE_RULES" "$RULES"
 rm -f "$HOME_DIR/state"/crew*.meta "$REMOTE_HOME/state"/crew*.meta

@@ -12,7 +12,8 @@
 # one batch: each is answered in order, and every placement is charged against
 # its account before the next brief is placed. Placements stay charged for
 # later calls through state/dispatch-charges.jsonl for the charge window
-# docs/configuration.md "Charging placements" owns. One brief is a batch of one.
+# docs/configuration.md "Charging placements" owns; each record names the
+# selected model and applicable quota scopes. One brief is a batch of one.
 #
 # Opt-in gate: TYPESAFE_API_KEY non-empty in this process environment, else a
 #   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get, the same
@@ -87,8 +88,9 @@
 #   project local-only. This machine leaves the pool when the project is not
 #   in its own registry but a remote route lists it. Each remote machine's
 #   quota and Claude crew evidence come from one bin/fm-quota-snapshot.sh
-#   --secondmate read per call; an unreachable machine is a disclosed unknown
-#   home line and never blocks the others. With more than one machine in the
+#   --secondmate read per call; an unavailable local or remote machine is a
+#   disclosed unknown home line and never blocks the others. Only an intake
+#   with no usable machine snapshot retains the local quota error. With more than one machine in the
 #   pool the result is pooled: candidates carry home=<id> for remote machines,
 #   and placement and home lines follow the profile line. The
 #   quota-array-dispatch skill owns the pool rule.
@@ -526,9 +528,8 @@ if pending; then
     quota_failure=
   fi
   if [ -n "$quota_failure" ]; then
-    for i in "${!BRIEFS[@]}"; do
-      [ -e "$WORK/result.$i.json" ] || brief_error "$i" "$quota_failure"
-    done
+    printf 'null\n' > "$QUOTA"
+    printf '%s\n' '{"unknown":"local quota unavailable"}' > "$WORK/local-admission.json"
   else
     fm_claude_admission_state "$CONFIG" "$STATE" "$QUOTA" > "$WORK/local-admission.json" 2>/dev/null \
       || printf '%s\n' '{"unknown":"Claude crew guard evidence failed"}' > "$WORK/local-admission.json"
@@ -594,17 +595,20 @@ homes_for() { # <index> -> homes.<index>.json
   local i=$1 project=${PROJECTS[$1]} ids id local_eligible=true local_reason=''
   local -a files=()
   ids=
-  if jq -e '.kind == "resolve"' "$WORK/answer.$i.json" >/dev/null 2>&1; then
-    ids=$(remote_ids "$project")
-  fi
+  ids=$(remote_ids "$project")
   if [ -n "$ids" ] && ! registered_here "$project"; then
     local_eligible=false
     local_reason="project $project is not registered on this machine"
   fi
-  jq -nc --argjson eligible "$local_eligible" --arg reason "$local_reason" \
-    --slurpfile snapshot "$QUOTA" --slurpfile admission "$WORK/local-admission.json" '
-    {id: "local", eligible: $eligible, snapshot: $snapshot[0], admission: $admission[0]}
-    + (if $reason == "" then {} else {reason: $reason} end)' > "$WORK/home.$i.local.json"
+  if [ -n "$quota_failure" ]; then
+    jq -nc --arg reason "$quota_failure" \
+      '{id: "local", eligible: true, snapshot: null, reason: $reason}' > "$WORK/home.$i.local.json"
+  else
+    jq -nc --argjson eligible "$local_eligible" --arg reason "$local_reason" \
+      --slurpfile snapshot "$QUOTA" --slurpfile admission "$WORK/local-admission.json" '
+      {id: "local", eligible: $eligible, snapshot: $snapshot[0], admission: $admission[0]}
+      + (if $reason == "" then {} else {reason: $reason} end)' > "$WORK/home.$i.local.json"
+  fi
   files+=("$WORK/home.$i.local.json")
   while IFS= read -r id; do
     [ -n "$id" ] || continue
@@ -686,7 +690,7 @@ CANDIDATE_JQ='
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
-      | . + {account: (prov($p; $lane).accountKey // ""), charged: (prov($p; $lane).firstmateCharged // 0),
+      | . + {account: (prov($p; $lane).accountKey // ""), charged: ([$rows[].firstmateCharged // 0] | max // 0),
              feed: (prov($p; $lane).firstmateFeed // null)}
     end | . + {cache: (if $p == null then null else (prov($p; $lane).firstmateCache // null) end)};
 '
@@ -716,20 +720,25 @@ POOL_JQ='
   # Recent placements on a machine, other than this task'"'"'s own. A Claude
   # placement already counted as that machine'"'"'s live crew takes no second slot.
   def recent($home): [$ledger.entries[] | select(.home == $home and .key != $key)];
-  def charges($home; $provider; $account):
-    [recent($home)[] | select(.provider == $provider and .account == $account)] | length;
+  def charges($home; $provider; $account; $scope):
+    [recent($home)[] | select(
+      .provider == $provider and .account == $account and
+      ((.scopes | type) == "array") and (.scopes | index($scope)) != null
+    )] | length;
   def slots($home; $counted):
     [recent($home)[] | select(.claude) | .key as $k | select(($counted // []) | index($k) | not)] | length;
   def charged($snap; $home):
     $snap | .providers |= map(. as $row |
-      charges($home; $row.provider; ($row.accountKey // "")) as $n |
-      if $n == 0 or ((.quotaSemantics.effectiveAvailability | type) != "array") then .
-      else .firstmateCharged = $n |
-        .quotaSemantics.effectiveAvailability |= map(
+      if ((.quotaSemantics.effectiveAvailability | type) != "array") then .
+      else .quotaSemantics.effectiveAvailability |= map(
+        charges($home; $row.provider; ($row.accountKey // ""); .scope) as $n |
+        .firstmateCharged = $n |
+        if $n == 0 then . else
           (if (.effectivePercentRemaining | type) == "number"
            then .effectivePercentRemaining = ((.effectivePercentRemaining - draw_percent * $n) | round4) else . end)
           | (if (.selection.spendPriority | type) == "number"
-             then .selection.spendPriority = ((.selection.spendPriority - draw_priority * $n) | round4) else . end))
+             then .selection.spendPriority = ((.selection.spendPriority - draw_priority * $n) | round4) else . end)
+        end)
       end);
   def where($id): if $id == "local" then "this machine" else $id end;
   # The Claude crew guard for one machine: the same cap and session floor
@@ -772,18 +781,19 @@ POOL_JQ='
     end;
   ($ans.resolved_rule) as $choice | (rule_at($choice)) as $rule |
   (if $rule == null then profiles($cfg.default // null) else profiles($rule.use) end) as $answer_use |
+  (selection_mode($cfg; $rule)) as $mode |
   ($ans.kind == "resolve") as $resolving |
   ($homes | length > 1) as $pooled |
   [$homes | to_entries[] | .key as $hi | .value as $h |
     if ($h.eligible | not) or $h.snapshot == null then $h + {index: $hi, candidates: [], unavailable: ($h.snapshot == null), slots: slots($h.id; $h.admission.counted)}
     else charged($h.snapshot; $h.id) as $q |
 '"$CANDIDATE_JQ"'
-      (if ($resolving | not) then {use: $answer_use, mode: selection_mode($cfg; $rule), rank: 0}
-       elif $rule == null then {source: "default", use: profiles($cfg.default // null), note: "no rule matched", mode: selection_mode($cfg; null), rank: 1}
+      (if ($resolving | not) then {use: $answer_use, mode: $mode, rank: 0}
+       elif $rule == null then {source: "default", use: profiles($cfg.default // null), note: "no rule matched", mode: $mode, rank: 1}
        else floor_state($rule.floor; $rule.floor.provider; "") as $state |
          if $state == "unknown" then {unverifiable: "rule \($choice) floor \($rule.floor.provider)/\($rule.floor.scope) is unverifiable"}
-         elif $state == "below" then {source: "default", use: profiles($cfg.default // null), note: "rule \($choice) floor \($rule.floor.scope) below \($rule.floor.min_percent)%: fall through to default", mode: selection_mode($cfg; null), rank: 1}
-         else {source: $choice, use: profiles($rule.use), note: "rule matched", mode: selection_mode($cfg; $rule), rank: 0}
+         elif $state == "below" then {source: "default", use: profiles($cfg.default // null), note: "rule \($choice) floor \($rule.floor.scope) below \($rule.floor.min_percent)%: fall through to default", mode: $mode, rank: 1}
+         else {source: $choice, use: profiles($rule.use), note: "rule matched", mode: $mode, rank: 0}
          end
        end) as $sel |
       $h + {index: $hi, sel: $sel, slots: slots($h.id; $h.admission.counted),
@@ -837,6 +847,7 @@ POOL_JQ='
      ($result.chosen) as $c |
      $ledger | .entries = ([.entries[] | select(.key != $key)]
        + [{at: $now, key: $key, home: $c.home, provider: $c.provider, account: $c.account,
+           model: ($c.profile.model // ""), scopes: ([$c.bounds[]?.scope] | unique),
            claude: ($fmap[$c.profile.harness] == "claude")}])
    else $ledger end)}
 '
@@ -871,6 +882,10 @@ brief_key() { # <index>
 for i in "${!BRIEFS[@]}"; do
   [ ! -e "$WORK/result.$i.json" ] || continue
   homes_for "$i"
+  if [ -n "$quota_failure" ] && ! jq -e 'any(.[]; .snapshot != null)' "$WORK/homes.$i.json" >/dev/null 2>&1; then
+    brief_error "$i" "$quota_failure"
+    continue
+  fi
   if jq -n --argjson pmap "$PMAP" --argjson fmap "$FMAP" --arg key "$(brief_key "$i")" --argjson now "$NOW" \
       --slurpfile answer "$WORK/answer.$i.json" --slurpfile rules "$RULES" \
       --slurpfile homes "$WORK/homes.$i.json" --slurpfile ledger "$WORK/ledger.json" \

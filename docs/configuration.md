@@ -1066,7 +1066,7 @@ Set `"select": "candidate-order"` at the top level to prefer earlier profiles in
 At manual intake, this policy follows the [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy), including its runway-aware preference and intake gates.
 Typed resolution applies the same runway-aware ordering after its documented rankability checks and reports candidates passed over; its `clear` result remains subject to Firstmate's full intake gates as described below under **Firstmate retains the dispatch decision**.
 Neither path allows order to override a gate or treats unknown evidence as healthy.
-A rule-level `select` overrides the file-level value only for that rule's `use`; no match or a rule-floor fallback uses the file's policy for `default`.
+A rule-level `select` overrides the file-level value for the whole intake, including a per-machine rule-floor fallback to `default`; only a neutral no-match uses the file's policy directly.
 Omitting `select` everywhere preserves `quota-balanced`: the highest known `spendPriority` among passing candidates wins, and configured order only breaks a near-tie.
 A near-tie is every rankable passing candidate whose `spendPriority` is at most 0.05 below the highest; the earliest of them in configured order wins, exact ties included, and the result reports them on a `near-tie broken by configured order` line.
 Across the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines), the same profile on two machines is ordered by the higher `spendPriority`, then this machine, and each remote candidate is named with `home=<id>`.
@@ -1078,7 +1078,7 @@ While any passing candidate has `through_reset` runway, `quota-balanced` passes 
 Every placement is charged against its account before the next is placed, whether the next comes in the same batch or a separate call.
 The charge is one Claude crew slot on that machine for a Claude candidate, plus a fixed estimated draw of 5 percentage points from every applicable quota row of that account and 0.1 from its `spendPriority`.
 `spendPriority` falls by a draw divided by the window's remaining-time percentage, which the snapshot does not publish, so the fixed charge assumes half the window remains.
-A placement stays charged for 900 seconds, the longest a reused quota reading can be, recorded in `state/dispatch-charges.jsonl`.
+A placement stays charged for 900 seconds, the longest a reused quota reading can be, recorded in `state/dispatch-charges.jsonl` with its selected model and applicable quota scopes.
 A task is keyed by its `data/<id>/` directory when its brief is `data/<id>/brief.md`, else by the brief path, so resolving the same task again replaces its own charge instead of adding to it.
 A charged Claude slot whose task already appears in that machine's live crew is not counted twice.
 The draw is an estimate to spread a burst, not a measurement; deleting the file clears every charge, for example after a decision-only test run.
@@ -1172,6 +1172,7 @@ Backends without a recovery classifier retain their recorded slots conservativel
 A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
 Typed dispatch resolution applies the same cap and five-hour floor to each machine's Claude candidates before recommending one: `bin/fm-quota-snapshot.sh` attaches that home's limits, live crew count, and session reading to every snapshot it prints, so a parent judges a remote machine from that machine's own crew and account.
+A pinned Claude account is guarded from its own reading but is still ranked from the ambient snapshot; aligning ranking with the pin is a known follow-up.
 A snapshot without that evidence, or with an unprovable account, makes that machine's Claude candidates ineligible rather than assumed healthy.
 
 Admission obtains one bounded, read-only Claude quota result through the shared snapshot reader and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
@@ -1275,7 +1276,7 @@ After the answer, code applies all remaining checks and ranking:
 - Each candidate's `provider` and `floor`.
 - Every applicable account-wide and model/product row returned by the [shared bounded quota snapshot read](#quota-snapshot-reuse).
 - The [configured candidate selection policy](#crew-dispatch-profiles-configcrew-dispatchjson), using each candidate's limiting quota row and retaining the existing rankability gates.
-- With `--project`, the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines): every machine that has the project contributes its candidates, judged against its own snapshot from `bin/fm-quota-snapshot.sh --secondmate` and its own Claude crew evidence, and the whole set is ranked together with no home-machine margin; a pooled result gains one `placement:` line naming the chosen machine and why, plus one `home:` line per machine.
+- With `--project`, the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines): every machine that has the project contributes its candidates on clear, ambiguous, and approval-gated answers, judged against its own snapshot from `bin/fm-quota-snapshot.sh --secondmate` and its own Claude crew evidence, and the whole set is ranked together with no home-machine margin; an unavailable machine is disclosed without blocking the rest, while no usable machine snapshot retains the local quota error; a pooled result gains one `placement:` line naming the chosen machine and why, plus one `home:` line per machine.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
 
@@ -1307,7 +1308,7 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 | `clear` | A `profile:` line ready for `fm-spawn.sh`. |
 | `ambiguous` | Confidence below the floor with no runner-up taken. |
 | `escalate` | An approval-gated rule, unverifiable rule floor, or nothing rankable. |
-| `error` | API, network, malformed response metadata, rendering, or quota-axi failure. |
+| `error` | API, network, malformed response metadata, rendering, or a local quota-axi failure when no machine snapshot remains usable. |
 
 Every result above exits 0.
 
