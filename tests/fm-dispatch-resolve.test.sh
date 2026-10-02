@@ -78,7 +78,7 @@ write_quota() {  # <path> <cursor spendPriority> [<claude all_models spendPriori
   "generatedAt": "2030-01-01T00:00:00Z",
   "schemaVersion": 5,
   "providers": [
-    { "provider": "claude", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
+    { "provider": "claude", "state": { "status": "fresh", "stale": false }, "windows": [ { "id": "five_hour", "kind": "session", "percentRemaining": 79 } ], "quotaSemantics": { "status": "known", "effectiveAvailability": [
       { "scope": "all_models", "status": "known", "effectivePercentRemaining": 79, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": $claude } },
       { "scope": "model:fable", "status": "known", "effectivePercentRemaining": 15, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -0.79 } } ] } },
     { "provider": "codex", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
@@ -95,6 +95,11 @@ write_quota() {  # <path> <cursor spendPriority> [<claude all_models spendPriori
 JSON
 }
 write_quota "$QUOTA" 0.7597
+
+set_runway() {  # <path> <provider> <runway status>
+  jq --arg p "$2" --arg r "$3" '(.providers[] | select(.provider == $p) | .quotaSemantics.effectiveAvailability[].runway.status) = $r' "$1" > "$1.tmp" \
+    && mv "$1.tmp" "$1"
+}
 
 write_response() {  # <path> <choice> <confidence>
   cat > "$1" <<JSON
@@ -167,7 +172,10 @@ reset_log() {
 run() {
   local __exit=$1 __out=$2 __err=$3 _out _code
   shift 3
-  _out=$(PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
+  # Each call starts with no recent placements unless a case keeps them.
+  [ "${KEEP_LEDGER:-0}" = 1 ] || rm -f "$HOME_DIR/state/dispatch-charges.jsonl"
+  _out=$(env -u CLAUDE_CONFIG_DIR -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN \
+    PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
   _code=$?
   printf -v "$__exit" '%s' "$_code"
   printf -v "$__out" '%s' "$_out"
@@ -644,6 +652,9 @@ jq '(.rules[3].use[0].floor) = {scope:"all_models",min_percent:50}' "$BASE_RULES
 cp "$SELECTED_CLAUDE_FLOOR_RULES" "$RULES"
 SELECTED_CLAUDE_QUOTA="$TMP_ROOT/selected-claude-quota.json"
 write_quota "$SELECTED_CLAUDE_QUOTA" -0.9 0.8
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' \
+  "$SELECTED_CLAUDE_QUOTA" > "$TMP_ROOT/selected-claude-edit.json"
+mv "$TMP_ROOT/selected-claude-edit.json" "$SELECTED_CLAUDE_QUOTA"
 write_response "$RESPONSE" rule_4 0.99
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SELECTED_CLAUDE_QUOTA" run code out err "$BRIEF"
 assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high' --profile-floor-scope 'all_models' --profile-floor-min-percent '50'" "the selected Claude candidate carries only its own floor into spawn"
@@ -857,6 +868,7 @@ assert_not_contains "$out" 'near-tie' "a clear winner reports no near-tie"
 
 reset_log
 write_quota "$TIE" 0.54 0.5
+set_runway "$TIE" claude through_reset
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
 assert_contains "$out" '  status: clear' "a near-tie resolves instead of escalating"
 assert_contains "$out" "  profile: --harness 'claude' --model 'opus'" "a near-tie resolves to the first configured candidate"
@@ -864,6 +876,7 @@ assert_contains "$out" '  near-tie broken by configured order: claude:opus=0.5, 
 
 reset_log
 write_quota "$TIE" 0.5 0.5
+set_runway "$TIE" claude through_reset
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
 assert_contains "$out" '  status: clear' "an exact tie resolves instead of escalating"
 assert_contains "$out" "  profile: --harness 'claude' --model 'opus'" "an exact tie resolves to the first configured candidate"
@@ -873,11 +886,23 @@ reset_log
 jq '.default[0].floor = {scope: "all_models", min_percent: 80}' "$BASE_RULES" > "$RULES"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
 assert_contains "$out" '  status: clear' "a near-tie beside a below-floor candidate resolves"
-assert_contains "$out" 'candidate: claude:opus  provider=claude  scope=all_models  remaining=79%  spendPriority=-  runway=projected_exhaustion  -> not eligible: profile floor all_models below 80%' "the below-floor candidate stays excluded"
+assert_contains "$out" 'candidate: claude:opus  provider=claude  scope=all_models  remaining=79%  spendPriority=-  runway=through_reset  -> not eligible: profile floor all_models below 80%' "the below-floor candidate stays excluded"
 assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "configured order never revives a below-floor candidate"
 assert_not_contains "$out" 'near-tie' "an excluded candidate never joins a near-tie"
 cp "$BASE_RULES" "$RULES"
 pass "near-tie: configured order breaks quota-balanced ties within the band; clear winners and floors are unchanged"
+
+# --- projected exhaustion is vetoed when a through-reset candidate exists -------
+reset_log
+write_quota "$TIE" 0.3 1.5
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "a through-reset candidate wins over a higher projected-exhaustion one"
+assert_contains "$out" '  passed over: claude:opus: projected to run out before reset; another eligible candidate in the pool has runway through_reset' "the veto names the passed-over candidate"
+set_runway "$TIE" cursor projected_exhaustion
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'claude' --model 'opus'" "with no through-reset alternative the highest spendPriority still wins"
+assert_not_contains "$out" 'passed over' "nothing is vetoed without a through-reset alternative"
+pass "quota-balanced selection vetoes projected exhaustion only when a through-reset candidate remains"
 
 # --- nothing rankable escalates -------------------------------------------------
 reset_log
@@ -1152,12 +1177,15 @@ expect_code 0 "$code" "--help exits 0"
 assert_contains "$out" 'Usage:' "--help prints usage"
 pass "configuration errors exit 2 before any network call"
 
-# --- cross-home placement through a remote second mate's quota ---------------
+# --- one pool across machines: every machine that has the project ---------------
 # The real fm-quota-snapshot.sh and fm-on.sh run; only ssh is a fake that runs
-# the decoded remote command from this checkout against REMOTE_QUOTA.
+# the decoded remote command from this checkout as the remote home, against
+# REMOTE_QUOTA, so the remote Claude crew evidence comes from REMOTE_HOME.
 REMOTE_QUOTA="$TMP_ROOT/remote-quota.json"
+REMOTE_HOME="$TMP_ROOT/remote-home"
 SSH_CALLS="$TMP_ROOT/ssh.calls"
 SSH_MODE="$TMP_ROOT/ssh.mode"
+mkdir -p "$REMOTE_HOME/state"
 cat > "$FAKEBIN/ssh" <<SH
 #!/usr/bin/env bash
 set -u
@@ -1170,7 +1198,7 @@ if [ "\$(cat "$SSH_MODE" 2>/dev/null)" = unreachable ]; then
 fi
 args=()
 while IFS= read -r -d '' arg; do args+=("\$arg"); done < <(printf '%s' "\$6" | base64 --decode 2>/dev/null || printf '%s' "\$6" | base64 -D)
-exec env -u FM_HOME QUOTA_AXI_FIXTURE="$REMOTE_QUOTA" "$ROOT/bin/\${args[0]}" "\${args[@]:1}"
+exec env FM_HOME="$REMOTE_HOME" QUOTA_AXI_FIXTURE="$REMOTE_QUOTA" "$ROOT/bin/\${args[0]}" "\${args[@]:1}"
 SH
 chmod +x "$FAKEBIN/ssh"
 export FM_SSH_BIN="$FAKEBIN/ssh"
@@ -1183,7 +1211,7 @@ MD
 cat > "$HOME_DIR/data/secondmates.md" <<'MD'
 # Secondmates
 
-- peer - Overflow machine for test work. (host: peer-host; root: /srv/firstmate-code; home: /srv/firstmate-home; scope: overflow work; projects: solo-pager, pager; added 2030-01-01)
+- peer - Second machine for test work. (host: peer-host; root: /srv/firstmate-code; home: /srv/firstmate-home; scope: any work; projects: solo-pager, pager, remote-pager; added 2030-01-01)
 MD
 cp "$BASE_RULES" "$RULES"
 placement_case() { # <ssh-mode> [args...]
@@ -1196,35 +1224,29 @@ placement_case() { # <ssh-mode> [args...]
 }
 ssh_calls() { if [ -f "$SSH_CALLS" ]; then wc -l < "$SSH_CALLS" | tr -d ' '; else printf 0; fi; }
 
-write_quota "$REMOTE_QUOTA" 2.25
+write_quota "$REMOTE_QUOTA" 0.8
 placement_case ok --project pager
-expect_code 0 "$code" "placement exits 0"
-assert_contains "$out" 'status: clear' "the local result stays clear"
-assert_contains "$out" "profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the local profile is still published"
-assert_contains "$out" 'placement: secondmate peer (peer spendPriority 2.25 beats local 0.7597 by more than 0.5)' "materially better remote headroom places the task on the second mate"
-assert_contains "$out" 'home: peer  best=cursor:cursor-grok-4.6-medium  scope=all_models  remaining=91%  spendPriority=2.25  runway=through_reset' "the remote evidence is shown"
+expect_code 0 "$code" "pooled resolution exits 0"
+assert_contains "$out" 'status: clear' "the pooled result is clear"
+assert_contains "$out" "profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the pooled profile is published"
+assert_contains "$out" 'placement: secondmate peer (peer cursor:cursor-grok-4.6-medium has the pool'"'"'s highest spendPriority 0.8)' "a remote candidate wins on spendPriority with no home-machine margin"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=0.7597' "the local candidates are listed"
+assert_contains "$out" 'candidate: home=peer cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=0.8  runway=through_reset  -> eligible' "the remote candidates are listed beside them"
+assert_contains "$out" 'home: peer  claude-crew=0/3  session=79%' "the remote machine's Claude guard evidence is shown"
 assert_equals peer-host "$(cat "$SSH_CALLS")" "the remote quota is read through the registered route"
-pass "placement prefers a second mate whose headroom is materially better"
+write_quota "$REMOTE_QUOTA" 0.7
+placement_case ok --project pager
+assert_contains "$out" 'placement: local (local cursor:cursor-grok-4.6-medium has the pool'"'"'s highest spendPriority 0.7597)' "a higher local candidate keeps the task local"
+pass "the pool ranks every machine's candidates by spendPriority with no home-machine margin"
 
-write_quota "$REMOTE_QUOTA" 0.54 0.5
-jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-near-tie.json"
-mv "$TMP_ROOT/remote-near-tie.json" "$REMOTE_QUOTA"
+write_quota "$REMOTE_QUOTA" 0.3
+set_runway "$REMOTE_QUOTA" claude through_reset
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[] | select(.scope == "all_models") | .selection.spendPriority) = 0.75' \
+  "$REMOTE_QUOTA" > "$REMOTE_QUOTA.tmp" && mv "$REMOTE_QUOTA.tmp" "$REMOTE_QUOTA"
 placement_case ok --project pager
-assert_contains "$out" 'home: peer  best=claude:sonnet' "remote configured order selects the first near-tied candidate"
-assert_contains "$out" 'near-tie broken by configured order: home=peer claude:sonnet=0.5, cursor:cursor-grok-4.6-medium=0.54 (within 0.05)' "remote near-tie evidence names the home, candidates, and band"
-pass "cross-home placement reports remote quota-balanced near-ties"
-
-write_quota "$REMOTE_QUOTA" 1.1
-placement_case ok --project pager
-assert_contains "$out" 'placement: local (no second mate beats local spendPriority 0.7597 by more than 0.5)' "similar remote headroom keeps the task local"
-assert_contains "$out" 'home: peer  best=cursor:cursor-grok-4.6-medium' "the similar remote is still shown"
-write_quota "$REMOTE_QUOTA" 1.2597
-placement_case ok --project pager
-assert_contains "$out" 'placement: local (no second mate beats local spendPriority 0.7597 by more than 0.5)' "an exact 0.5 advantage stays local"
-write_quota "$REMOTE_QUOTA" 1.2598
-placement_case ok --project pager
-assert_contains "$out" 'placement: secondmate peer (peer spendPriority 1.2598 beats local 0.7597 by more than 0.5)' "a strictly greater advantage places remotely"
-pass "placement uses the fixed strict 0.5 margin"
+assert_contains "$out" 'placement: secondmate peer (peer claude:sonnet wins a near-tie at spendPriority 0.75 by configured order)' "a cross-machine near-tie resolves by configured order"
+assert_contains "$out" 'near-tie broken by configured order: home=peer claude:sonnet=0.75, cursor:cursor-grok-4.6-medium=0.7597 (within 0.05)' "near-tie evidence names each machine"
+pass "configured order breaks near-ties across the pool"
 
 jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability) |= map(
   if .scope == "all_models" then .runway.status = "through_reset" | .selection.spendPriority = 2.5
@@ -1232,85 +1254,206 @@ jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAva
   else . end
 )' "$QUOTA" > "$REMOTE_QUOTA"
 PLACEMENT_RULE=rule_1 placement_case ok --project pager
-assert_contains "$out" "profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "the local rule floor falls through to local defaults"
-assert_contains "$out" 'placement: secondmate peer (peer spendPriority 2.25 beats local 0.7597 by more than 0.5)' "the remote home evaluates the matched rule against its own floor"
-assert_contains "$out" 'home: peer  best=claude:fable' "the remote home uses the matched rule instead of the local default profiles"
-pass "each home resolves the matched rule floor from its own quota"
-
-write_quota "$REMOTE_QUOTA" 2.25
-jq '(.providers[] | select(.provider == "cursor") | .quotaSemantics.effectiveAvailability[].runway.status) = "projected_exhaustion"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-projected.json"
-mv "$TMP_ROOT/remote-projected.json" "$REMOTE_QUOTA"
-placement_case ok --project pager
-assert_contains "$out" 'placement: local' "projected remote runway keeps the task local"
-assert_contains "$out" 'placement-blocked=limiting runway projected_exhaustion is not through_reset' "the remote runway veto is visible"
-pass "automatic remote placement requires through-reset runway"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-high' "the local rule floor falls through to local defaults"
+assert_contains "$out" 'candidate: home=peer claude:fable' "the remote machine evaluates the matched rule against its own floor"
+assert_contains "$out" "profile: --harness 'claude' --model 'fable' --effort 'xhigh'" "the remote rule profile wins the pool"
+assert_contains "$out" 'placement: secondmate peer' "the task is placed where the rule applies"
+pass "each machine resolves the matched rule floor from its own quota"
 
 placement_case unreachable --project pager
-expect_code 0 "$code" "an unreachable second mate still exits 0"
-assert_contains "$out" 'status: clear' "an unreachable second mate never blocks local dispatch"
-assert_contains "$out" "profile: --harness 'cursor'" "the local profile survives an unreachable second mate"
-assert_contains "$out" 'placement: local' "an unreachable second mate keeps the task local"
-assert_contains "$out" "home: peer  unknown: peer's machine unreachable" "the unreachable second mate is disclosed"
+expect_code 0 "$code" "an unreachable machine still exits 0"
+assert_contains "$out" 'status: clear' "an unreachable machine never blocks local dispatch"
+assert_contains "$out" "profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the local profile survives an unreachable machine"
+assert_contains "$out" 'placement: local' "an unreachable machine leaves the task local"
+assert_contains "$out" "home: peer  unknown: peer's machine unreachable" "the unreachable machine is disclosed"
 assert_contains "$out" 'disclosed uncertainty' "the unknown remote quota is named as uncertainty"
-pass "unknown remote quota is disclosed and never blocks local dispatch"
+pass "an unreachable remote machine is disclosed and falls back to local"
 
 placement_case ok --project solo-pager
 assert_not_contains "$out" 'placement:' "a local-only project is never placed remotely"
 assert_equals 0 "$(ssh_calls)" "a local-only project reads no remote quota"
 placement_case ok --project other
-assert_not_contains "$out" 'placement:' "a project outside the route's project list is never placed remotely"
-assert_equals 0 "$(ssh_calls)" "an unlisted project reads no remote quota"
+assert_not_contains "$out" 'placement:' "a project only registered on this machine stays local"
+assert_equals 0 "$(ssh_calls)" "a project no remote machine has reads no remote quota"
 placement_case ok
-assert_not_contains "$out" 'placement:' "no project means no placement"
+assert_not_contains "$out" 'placement:' "no project means no pool"
 assert_equals 0 "$(ssh_calls)" "no project reads no remote quota"
-pass "placement only considers routes whose projects and modes allow it"
+write_quota "$REMOTE_QUOTA" 0.1
+placement_case ok --project remote-pager
+assert_contains "$out" 'home: local  not eligible: project remote-pager is not registered on this machine' "a project registered only remotely excludes this machine"
+assert_not_contains "$out" 'candidate: cursor:' "this machine contributes no candidates for a project it does not have"
+assert_contains "$out" 'placement: secondmate peer' "the project goes to the machine that has it even at lower quota"
+pass "a project is eligible exactly on the machines that have it"
 
 write_quota "$REMOTE_QUOTA" 0.3
 jq '(.providers[] | select(.provider == "claude" or .provider == "cursor") | .quotaSemantics.effectiveAvailability[].runway.status) = "exhausted_now"' "$QUOTA" > "$TMP_ROOT/exhausted.json"
 QUOTA_AXI_FIXTURE="$TMP_ROOT/exhausted.json" placement_case ok --project pager
-assert_contains "$out" 'status: escalate' "nothing rankable locally still escalates"
-assert_contains "$out" 'placement: secondmate peer (no local candidate is rankable; peer has spendPriority 0.3)' "a rankable second mate is offered when nothing local is rankable"
-pass "an exhausted local machine can place work on a second mate with headroom"
+assert_contains "$out" 'status: clear' "remote headroom resolves the pool when nothing local is rankable"
+assert_contains "$out" 'placement: secondmate peer' "an exhausted machine yields to one with headroom"
+pass "an exhausted local machine places work on a machine with headroom"
 
-# Cross-home ranking uses the candidates selected by policy on both machines.
-jq '.select = "candidate-order" | .rules[3].use = [
-  {harness:"codex", model:"gpt-6-astra"},
-  {harness:"claude", model:"opus", floor:{scope:"all_models", min_percent:40}}]' "$BASE_RULES" > "$RULES"
-write_quota "$REMOTE_QUOTA" 0.3 17.6
-jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[]) |=
-  (.selection.spendPriority = 0.6 | .runway.status = "through_reset")' "$REMOTE_QUOTA" > "$TMP_ROOT/local-ordered.json"
-jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[]) |=
-  (.selection.spendPriority = 1.2 | .runway.status = "through_reset")' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-edit.json"
-mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
-QUOTA_AXI_FIXTURE="$TMP_ROOT/local-ordered.json" placement_case ok --project pager
-assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "local ordering survives placement"
-assert_contains "$out" 'home: peer  best=codex:gpt-6-astra' "remote home also respects configured order"
-assert_contains "$out" 'placement: secondmate peer (peer spendPriority 1.2 beats local 0.6 by more than 0.5)' "placement compares selected scores, not the higher ignored Claude score"
-jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].selection.spendPriority) = 0.8' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-edit.json"
-mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
-QUOTA_AXI_FIXTURE="$TMP_ROOT/local-ordered.json" placement_case ok --project pager
-assert_contains "$out" 'placement: local' "unselected remote Claude quota cannot trigger placement"
-jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[].runway.status) = "projected_exhaustion" |
-  (.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-edit.json"
-mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
-QUOTA_AXI_FIXTURE="$TMP_ROOT/local-ordered.json" placement_case ok --project pager
-assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "healthy local Codex retains configured preference"
-assert_contains "$out" 'home: peer  best=claude:opus' "remote projected Codex yields to through-reset Claude"
-assert_contains "$out" 'passed over: home=peer codex:gpt-6-astra: projected to run out before reset' "remote runway preference is explained"
-assert_contains "$out" 'placement: secondmate peer' "remote placement uses the runway-selected candidate"
-pass "cross-home placement respects runway-aware candidate order on both machines"
+# --- per-account guards on each machine ------------------------------------------
+# A rule of Claude and Codex profiles, as each machine's two accounts.
+POOL_RULES="$TMP_ROOT/pool-rules.json"
+cat > "$POOL_RULES" <<'JSON'
+{
+  "rules": [
+    { "when": "A simple bug fix with a stated root cause.",
+      "use": [ { "harness": "claude", "model": "sonnet" }, { "harness": "codex", "model": "gpt-5.6-sol" } ] }
+  ],
+  "default": [ { "harness": "codex", "model": "gpt-5.6-sol" } ]
+}
+JSON
+write_pool_quota() {  # <path> <claude spendPriority> <claude runway> <codex spendPriority> <codex runway> [<session %>] [<codex %>]
+  cat > "$1" <<JSON
+{
+  "generatedAt": "2030-01-01T00:00:00Z",
+  "schemaVersion": 5,
+  "providers": [
+    { "provider": "claude", "state": { "status": "fresh", "stale": false }, "windows": [ { "id": "five_hour", "kind": "session", "percentRemaining": ${6:-90} } ],
+      "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": ${6:-90}, "runway": { "status": "$3" }, "selection": { "spendPriority": $2 } } ] } },
+    { "provider": "codex", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": ${7:-90}, "runway": { "status": "$5" }, "selection": { "spendPriority": $4 } } ] } }
+  ]
+}
+JSON
+}
+write_pool_response() {  # <path>
+  cat > "$1" <<'JSON'
+{ "model": "jev-1.13.0",
+  "answers": { "rule": { "type": "choice", "choice": "rule_1", "confidence": 0.95,
+    "probabilities": { "rule_1": 0.95, "default": 0.05 } } },
+  "usage": { "input_tokens": 400, "output_tokens": 30 } }
+JSON
+}
+live_claude() {  # <state-dir> <count>
+  local n=1
+  rm -f "$1"/crew*.meta
+  while [ "$n" -le "$2" ]; do
+    printf 'harness=claude\nkind=ship\nbackend=unknown\nwindow=recorded-%s\naccount=ordinary\n' "$n" > "$1/crew$n.meta"
+    n=$((n + 1))
+  done
+}
+pool_case() {  # [args...]
+  rm -rf "$HOME_DIR/state/quota-remote" "$SSH_CALLS"
+  printf 'ok\n' > "$SSH_MODE"
+  reset_log
+  write_pool_response "$RESPONSE"
+  TYPESAFE_API_KEY="$KEY" QUOTA_AXI_FIXTURE="$TMP_ROOT/pool-local.json" run code out err "$@"
+}
+cp "$POOL_RULES" "$RULES"
+mkdir -p "$HOME_DIR/state"
 
-# A safe remote candidate overrides the placement margin when local runway is projected to exhaust.
-write_quota "$REMOTE_QUOTA" 0.3 0.3
-jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' "$REMOTE_QUOTA" > "$TMP_ROOT/remote-edit.json"
-mv "$TMP_ROOT/remote-edit.json" "$REMOTE_QUOTA"
-jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].effectivePercentRemaining) = 39' "$REMOTE_QUOTA" > "$TMP_ROOT/local-projected.json"
-QUOTA_AXI_FIXTURE="$TMP_ROOT/local-projected.json" placement_case ok --project pager
-assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" "local Codex remains the best local candidate when Claude is below its floor"
-assert_contains "$out" 'candidate: claude:opus  provider=claude  scope=all_models  remaining=39%  spendPriority=-  runway=through_reset  -> not eligible: profile floor all_models below 40%' "the local Claude floor failure is visible"
-assert_contains "$out" 'home: peer  best=claude:opus  scope=all_models  remaining=79%  spendPriority=0.3  runway=through_reset' "the remote safe candidate is visible"
-assert_contains "$out" 'placement: secondmate peer (peer candidate runs through reset; local candidate is projected to run out before reset)' "runway safety overrides the 0.5 placement margin with an explicit reason"
-pass "through-reset remote runway overrides the placement margin"
+write_pool_quota "$TMP_ROOT/pool-local.json" 1.0 through_reset 0.2 through_reset
+write_pool_quota "$REMOTE_QUOTA" 0.6 through_reset 0.2 through_reset
+live_claude "$HOME_DIR/state" 3
+pool_case "$BRIEF" --project pager
+assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=90%  spendPriority=1.0  runway=through_reset  -> not eligible: Claude crew at its limit on this machine: 3 of 3 (live: crew1, crew2, crew3)' "the local Claude guard counts this machine's live crew"
+assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" "Claude is still chosen"
+assert_contains "$out" 'placement: secondmate peer (peer claude:sonnet has the pool'"'"'s highest spendPriority 0.6)' "local Claude at its limit places on the other machine's Claude"
+assert_contains "$out" 'home: local  claude-crew=3/3  session=90%' "the local guard evidence is shown"
+live_claude "$HOME_DIR/state" 0
+live_claude "$REMOTE_HOME/state" 3
+write_pool_quota "$REMOTE_QUOTA" 1.4 through_reset 0.2 through_reset
+pool_case "$BRIEF" --project pager
+assert_contains "$out" 'candidate: home=peer claude:sonnet  provider=claude  scope=all_models  remaining=90%  spendPriority=1.4  runway=through_reset  -> not eligible: Claude crew at its limit on peer: 3 of 3 (live: crew1, crew2, crew3)' "the remote guard comes from the remote home's own crew"
+assert_contains "$out" 'placement: local' "a remote machine at its Claude limit leaves Claude work here"
+live_claude "$REMOTE_HOME/state" 0
+write_pool_quota "$REMOTE_QUOTA" 1.4 through_reset 0.2 through_reset 38
+pool_case "$BRIEF" --project pager
+assert_contains "$out" 'not eligible: Claude session 38% below the 40% floor on peer' "the 40% session floor applies per machine"
+assert_contains "$out" 'placement: local' "a remote account under its session floor is passed by"
+pass "the Claude crew cap and session floor apply per account on each machine"
+
+write_pool_quota "$TMP_ROOT/pool-local.json" 0.4 projected_exhaustion 1.8 projected_exhaustion
+write_pool_quota "$REMOTE_QUOTA" 0.3 through_reset 1.6 projected_exhaustion
+pool_case "$BRIEF" --project pager
+assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" "Claude that runs through reset beats higher Codex projected to run out"
+assert_contains "$out" 'placement: secondmate peer (peer claude:sonnet has the pool'"'"'s highest spendPriority 0.3; 3 candidate(s) projected to run out before reset passed over)' "the veto is named in the placement reason"
+assert_contains "$out" 'passed over: codex:gpt-5.6-sol: projected to run out before reset; another eligible candidate in the pool has runway through_reset' "the vetoed Codex candidate is shown"
+write_pool_quota "$TMP_ROOT/pool-local.json" 0.3 projected_exhaustion 0.2 projected_exhaustion
+write_pool_quota "$REMOTE_QUOTA" 0.1 projected_exhaustion 0.56 unknown 90 63
+pool_case "$BRIEF" --project pager
+assert_contains "$out" 'candidate: home=peer codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=63%  spendPriority=0.56  runway=unknown  -> eligible, runway unknown: disclosed uncertainty' "unknown runway with a known percentage stays eligible and disclosed"
+assert_contains "$out" 'placement: secondmate peer (peer codex:gpt-5.6-sol has the pool'"'"'s highest spendPriority 0.56)' "unknown runway never blocks placement"
+pass "Codex projected to run out is vetoed while Claude anywhere runs through reset"
+
+jq '.select = "candidate-order" | .rules[0].use |= reverse' "$POOL_RULES" > "$RULES"
+write_pool_quota "$TMP_ROOT/pool-local.json" 1.5 through_reset 0.6 through_reset
+write_pool_quota "$REMOTE_QUOTA" 1.5 through_reset 1.2 through_reset
+pool_case "$BRIEF" --project pager
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-5.6-sol'" "configured order keeps Codex first across the pool"
+assert_contains "$out" 'placement: secondmate peer (peer codex:gpt-5.6-sol is the first passing candidate in configured order across the pool)' "quota picks the machine for the preferred profile"
+write_pool_quota "$REMOTE_QUOTA" 1.5 through_reset 1.2 projected_exhaustion
+pool_case "$BRIEF" --project pager
+assert_contains "$out" 'passed over: home=peer codex:gpt-5.6-sol: projected to run out before reset; later eligible candidate has runway through_reset' "ordered selection passes over a projected remote candidate"
+assert_contains "$out" 'placement: local (local codex:gpt-5.6-sol is the first passing candidate in configured order across the pool' "the same profile on a safe machine is next in order"
+cp "$POOL_RULES" "$RULES"
+pass "candidate-order ranks the pool by configured position, then quota, with the runway pass-over"
+
+# --- a burst spreads: each placement is charged before the next -------------------
+write_pool_quota "$TMP_ROOT/pool-local.json" 1.0 through_reset 0.9 through_reset 90 90
+write_pool_quota "$REMOTE_QUOTA" 1.0 through_reset 0.95 through_reset 90 90
+BATCH=()
+for n in $(seq 1 20); do
+  cp "$BRIEF" "$TMP_ROOT/brief-$n.md"
+  BATCH+=("$TMP_ROOT/brief-$n.md" --project pager)
+done
+pool_case "${BATCH[@]}"
+expect_code 0 "$code" "a batch exits 0"
+assert_equals 20 "$(grep -c '^dispatch-resolve:$' <<<"$out")" "a batch prints one block per brief"
+assert_contains "$out" "  brief: $TMP_ROOT/brief-20.md" "each block names its brief"
+assert_contains "$out" '  briefs: 20   clear: 20   other: 0' "every brief is placed"
+assert_contains "$out" '  machine: local=10 peer=10' "the burst spreads across both machines"
+assert_contains "$out" '  provider: claude=6 codex=14' "Claude stops at three per account per machine and Codex takes the rest"
+assert_contains "$out" 'local:claude:sonnet=3' "this machine's Claude account takes three"
+assert_contains "$out" 'peer:claude:sonnet=3' "the other machine's Claude account takes three"
+assert_contains "$out" 'local:codex:gpt-5.6-sol=7' "this machine's Codex account shares the rest"
+assert_contains "$out" 'peer:codex:gpt-5.6-sol=7' "the other machine's Codex account shares the rest"
+assert_contains "$out" 'charged=' "later placements show the charge of earlier ones"
+assert_equals 1 "$(ssh_calls)" "a batch reads each remote machine once"
+first_block=$(awk '/^dispatch-resolve:$/ { n++ } n == 1' <<<"$out" | grep -v -e '^  brief: ' -e '^  project: ' -e '^  model: ')
+pool_case "$BRIEF" --project pager
+assert_equals "$first_block" "$(grep -v '^  model: ' <<<"$out")" "one brief resolves exactly like the first brief of a batch"
+pass "a batch of 20 charges each placement and spreads across accounts and machines"
+
+# Separate calls inside the charge window spread like one batch.
+mkdir -p "$TMP_ROOT/data/task-a" "$TMP_ROOT/data/task-b"
+cp "$BRIEF" "$TMP_ROOT/data/task-a/brief.md"
+cp "$BRIEF" "$TMP_ROOT/data/task-b/brief.md"
+write_pool_quota "$TMP_ROOT/pool-local.json" 1.0 through_reset 0.2 through_reset
+write_pool_quota "$REMOTE_QUOTA" 0.95 through_reset 0.2 through_reset
+pool_case "$TMP_ROOT/data/task-a/brief.md" --project pager
+assert_contains "$out" 'placement: local' "the first call takes the best candidate"
+assert_equals 'task-a local claude true' "$(jq -r '"\(.key) \(.home) \(.provider) \(.claude)"' "$HOME_DIR/state/dispatch-charges.jsonl")" "the placement is recorded for later calls"
+KEEP_LEDGER=1 pool_case "$TMP_ROOT/data/task-a/brief.md" --project pager
+assert_contains "$out" 'placement: local' "resolving the same task again is not charged against itself"
+KEEP_LEDGER=1 pool_case "$TMP_ROOT/data/task-b/brief.md" --project pager
+assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=85%  spendPriority=0.9  runway=through_reset  charged=1 recent placement(s)  -> eligible' "a later call is charged with the earlier placement"
+assert_contains "$out" 'home: local  claude-crew=0/3 +1 recent placement(s)' "the recent Claude placement holds a slot"
+assert_contains "$out" 'placement: secondmate peer' "a later separate call spreads to the next account"
+jq -c '.at -= 1000' "$HOME_DIR/state/dispatch-charges.jsonl" > "$TMP_ROOT/aged.jsonl"
+cp "$TMP_ROOT/aged.jsonl" "$HOME_DIR/state/dispatch-charges.jsonl"
+KEEP_LEDGER=1 pool_case "$TMP_ROOT/data/task-b/brief.md" --project pager
+assert_contains "$out" 'placement: local' "placements older than the charge window stop counting"
+live_claude "$HOME_DIR/state" 0
+pass "placements are charged across separate calls inside the charge window"
+
+cp "$BASE_RULES" "$RULES"
+rm -f "$HOME_DIR/state"/crew*.meta "$REMOTE_HOME/state"/crew*.meta
+
+printf 'withheld-ledger\n' > "$HOME_DIR/config/dispatch-never-send"
+printf '# Task\nReconcile the withheld-ledger totals.\n' > "$TMP_ROOT/brief-secret.md"
+placement_case ok --project pager "$TMP_ROOT/brief-secret.md" --project other
+expect_code 0 "$code" "a batch with a withheld brief exits 0"
+assert_contains "$out" '  status: off' "the withheld brief reports off in its own block"
+assert_contains "$out" "  reason: brief text matches $HOME_DIR/config/dispatch-never-send line 1" "the withheld brief names only the list line"
+assert_not_contains "$out" 'withheld-ledger' "the withheld value never prints"
+assert_contains "$out" '  briefs: 2   clear: 1   other: 1' "the other brief still resolves"
+assert_not_contains "$(cat "$LOG/body")" 'withheld-ledger' "the withheld brief never reached the network"
+rm -f "$HOME_DIR/config/dispatch-never-send"
+pass "a never-send match withholds only its own brief in a batch"
 
 # Rate-limit recovery reuses vendor semantics; old and other failures stay unknown.
 export TYPESAFE_API_KEY="$KEY"

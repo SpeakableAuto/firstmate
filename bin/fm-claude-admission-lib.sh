@@ -8,6 +8,10 @@
 # The caller supplies the selected Claude config root, or ordinary, as identity.
 # Existing records without identity are conservatively charged to every account.
 # Backend recovery-grade liveness is reused, never inferred from status events.
+# fm_claude_admission_state <config> <state> <snapshot-file> reports the same
+# limits, live count, and session reading as one JSON object for dispatch,
+# without refusing anything; bin/fm-quota-snapshot.sh attaches it to every
+# snapshot so a parent can apply this machine's guard from a remote read.
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-quota-axi-lib.sh"
@@ -40,14 +44,26 @@ fm_claude_admission_agent_state() {  # <backend> <target>
   printf '%s' "$verdict"
 }
 
-fm_claude_admission_check() {
-  local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
-  local settings='{}' limits cap floor floors meta account backend target verdict absence count=0 counted='' task
-  local snapshot row result gen started now recorded_harness recorded_family var
-  local -a quota_env=(env)
-  if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
-    settings=$(cat "$config/crew-dispatch.json") || return 1
-  fi
+# Session-floor evidence from one Claude quota row: {pct} from the session
+# windows when the row is explicitly fresh, otherwise {unknown}. Shared by the
+# admission verdict and the dispatch state so both read the floor identically.
+# shellcheck disable=SC2016,SC2034  # jq program text; read by the sourcing consumers
+FM_CLAUDE_SESSION_JQ='
+  def claude_session($p):
+    def known: type == "number" and . >= 0 and . <= 100;
+    if $p == null then {unknown: "no Claude quota row"}
+    elif $p.state.stale != false then {unknown: "Claude quota reading is not explicitly fresh"}
+    else ([$p.windows[]? | select(.id == "five_hour" or .kind == "five_hour" or .kind == "session")]) as $rows |
+      if ($rows | length) == 0 or any($rows[]; (.percentRemaining | known) | not)
+      then {unknown: "Claude session window percentage is unknown"}
+      else {pct: ($rows | map(.percentRemaining) | min)} end
+    end;
+'
+
+# fm_claude_admission_limits <settings-json> <floor-scope> <floor-min-percent>
+# Prints {cap, floor, floors} or prints one refusal and returns 1.
+fm_claude_admission_limits() {
+  local settings=$1 floor_scope=$2 floor_min_percent=$3
   if [ -n "$floor_scope$floor_min_percent" ]; then
     if [ -z "$floor_scope" ] || [ -z "$floor_min_percent" ] \
        || ! fm_claude_profile_floor_valid "$floor_scope" "$floor_min_percent"; then
@@ -55,7 +71,7 @@ fm_claude_admission_check() {
       return 1
     fi
   fi
-  limits=$(printf '%s\n' "$settings" | jq -ce --arg floor_scope "$floor_scope" --arg floor_min_percent "$floor_min_percent" '
+  printf '%s\n' "$settings" | jq -ce --arg floor_scope "$floor_scope" --arg floor_min_percent "$floor_min_percent" '
     if type != "object" then error("invalid dispatch object") else . end |
     (if has("claude_admission") then .claude_admission else {} end) as $c |
     ($c | if has("max_concurrent") then .max_concurrent else 3 end) as $cap |
@@ -66,13 +82,20 @@ fm_claude_admission_check() {
       then error("invalid claude_admission") else . end |
     (if $floor_scope == "" then [] else [{scope:$floor_scope,min_percent:$profile_min}] end) as $floors |
     {cap:$cap, floor:$floor, floors:$floors}
-  ' 2>/dev/null) || {
+  ' 2>/dev/null || {
     echo 'error: invalid Claude admission settings or selected profile floor; max_concurrent must be 1..3 and min_session_percent must be 40..100' >&2
     return 1
   }
-  cap=$(printf '%s\n' "$limits" | jq -r .cap)
-  floor=$(printf '%s\n' "$limits" | jq -r .floor)
-  floors=$(printf '%s\n' "$limits" | jq -c .floors)
+}
+
+# fm_claude_admission_count <state> <exclude-id> <identity>
+# Sets FM_CLAUDE_ADMISSION_COUNT and FM_CLAUDE_ADMISSION_COUNTED (a ", " list)
+# for this home's live or unverified direct Claude crew charged to identity,
+# excluding the named task. It runs in the caller's shell so backends it
+# loads stay loaded there.
+fm_claude_admission_count() {
+  local state=$1 id=$2 identity=$3
+  local meta account backend target verdict absence count=0 counted='' task gen started now recorded_harness recorded_family
   now=$(date +%s)
   for meta in "$state"/*.meta; do
     [ -f "$meta" ] || continue
@@ -113,14 +136,16 @@ fm_claude_admission_check() {
     task=${meta##*/}; task=${task%.meta}
     counted="${counted:+$counted, }$task"
   done
-  if [ "$count" -ge "$cap" ]; then
-    echo "error: Claude crew admission refused for account $identity: $count live or unverified crew, limit $cap; counted tasks: $counted; choose Codex or route to a second mate on another account" >&2
-    return 1
-  fi
-  if [ "$identity" = unknown ]; then
-    echo 'error: Claude crew admission refused because quota is unverifiable for a raw command whose credential selection cannot be proved; choose Codex or route to a second mate on another account' >&2
-    return 1
-  fi
+  FM_CLAUDE_ADMISSION_COUNT=$count
+  FM_CLAUDE_ADMISSION_COUNTED=$counted
+}
+
+# fm_claude_admission_quota_row <identity>
+# Prints the identity's bound Claude quota row from one bounded read, or
+# returns 1 when quota is unavailable or invalid.
+fm_claude_admission_quota_row() {
+  local identity=$1 snapshot var
+  local -a quota_env=(env)
   for var in $FM_WORKER_ACCOUNT_CLAUDE_SHED; do
     quota_env+=(-u "$var")
   done
@@ -132,21 +157,44 @@ fm_claude_admission_check() {
     quota_env+=(quota-axi --provider claude --no-credential-refresh --json)
   fi
   snapshot=$(fm_quota_read_json 15 "${quota_env[@]}" 2>/dev/null) || snapshot=
-  if ! printf '%s\n' "$snapshot" | fm_quota_json_valid; then
+  printf '%s\n' "$snapshot" | fm_quota_json_valid || return 1
+  printf '%s\n' "$snapshot" | jq -c "$FM_QUOTA_ROW_JQ"'quota_row(.; "claude"; "")'
+}
+
+fm_claude_admission_check() {
+  local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
+  local settings='{}' limits cap floor floors count counted row result
+  if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
+    settings=$(cat "$config/crew-dispatch.json") || return 1
+  fi
+  limits=$(fm_claude_admission_limits "$settings" "$floor_scope" "$floor_min_percent") || return 1
+  cap=$(printf '%s\n' "$limits" | jq -r .cap)
+  floor=$(printf '%s\n' "$limits" | jq -r .floor)
+  floors=$(printf '%s\n' "$limits" | jq -c .floors)
+  fm_claude_admission_count "$state" "$id" "$identity"
+  count=$FM_CLAUDE_ADMISSION_COUNT
+  counted=$FM_CLAUDE_ADMISSION_COUNTED
+  if [ "$count" -ge "$cap" ]; then
+    echo "error: Claude crew admission refused for account $identity: $count live or unverified crew, limit $cap; counted tasks: $counted; choose Codex or route to a second mate on another account" >&2
+    return 1
+  fi
+  if [ "$identity" = unknown ]; then
+    echo 'error: Claude crew admission refused because quota is unverifiable for a raw command whose credential selection cannot be proved; choose Codex or route to a second mate on another account' >&2
+    return 1
+  fi
+  if ! row=$(fm_claude_admission_quota_row "$identity"); then
     echo 'error: Claude crew admission refused because quota is unavailable or invalid; choose Codex or route to a second mate on another account' >&2
     return 1
   fi
-  row=$(printf '%s\n' "$snapshot" | jq -c "$FM_QUOTA_ROW_JQ"'quota_row(.; "claude"; "")') || return 1
   printf '%s\n' "$row" | jq -r 'select(.firstmateCache != null) |
     "Claude quota: cached reading \(.firstmateCache.ageSeconds)s old"' >&2
-  result=$(printf '%s\n' "$row" | jq -r --argjson floor "$floor" --argjson floors "$floors" '
+  result=$(printf '%s\n' "$row" | jq -r --argjson floor "$floor" --argjson floors "$floors" "$FM_CLAUDE_SESSION_JQ"'
     . as $p |
     def known: type == "number" and . >= 0 and . <= 100;
+    (claude_session($p)) as $session |
     (if $p.state.stale == false then [
-      ([.windows[]? | select(.id == "five_hour" or .kind == "five_hour" or .kind == "session")]) as $session_rows |
-      (if ($session_rows | length) == 0 or any($session_rows[]; (.percentRemaining | known) | not)
-        then {scope:"five_hour",unknown:true}
-        else {scope:"five_hour",pct:($session_rows | map(.percentRemaining) | min),min:$floor} end),
+      (if $session.unknown then {scope:"five_hour",unknown:true}
+        else {scope:"five_hour",pct:$session.pct,min:$floor} end),
       ($floors[] | . as $f |
         ([$p.quotaSemantics.effectiveAvailability[]? | select(.scope == $f.scope)]) as $rows |
         if ($rows | length) == 0
@@ -167,4 +215,50 @@ fm_claude_admission_check() {
       echo 'error: Claude crew admission refused because the quota floor is unverifiable; choose Codex or route to a second mate on another account' >&2
       return 1 ;;
   esac
+}
+
+# fm_claude_admission_state <config> <state> <snapshot-file>
+# Prints this home's Claude crew guard evidence as one JSON object:
+# {cap, floor, count, counted, account, session: {pct}|{unknown}}, or
+# {unknown: <reason>} when the limits or account cannot be established. The
+# snapshot file is the caller's own quota read; it supplies the session window
+# only when both the launch account and the ambient account are ordinary,
+# otherwise the account's own bounded read does. Never refuses or exits.
+fm_claude_admission_state() {
+  local config=$1 state=$2 snapshot_file=$3
+  local settings='{}' limits pin identity ambient row session
+  if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
+    settings=$(cat "$config/crew-dispatch.json" 2>/dev/null) || settings=
+  fi
+  if ! limits=$(fm_claude_admission_limits "$settings" '' '' 2>/dev/null); then
+    jq -nc '{unknown: "invalid Claude admission settings"}'
+    return 0
+  fi
+  ambient=$(fm_worker_account_claude_ambient_identity 2>/dev/null) || ambient=unknown
+  if ! pin=$(fm_worker_account_resolve claude "$config" 2>/dev/null); then
+    jq -nc '{unknown: "invalid Claude account pin"}'
+    return 0
+  fi
+  if [ -n "$pin" ]; then
+    identity=${pin%%$'\t'*}
+  else
+    identity=$ambient
+  fi
+  if [ "$identity" = unknown ]; then
+    jq -nc '{unknown: "the Claude account a launch would use cannot be proved"}'
+    return 0
+  fi
+  fm_claude_admission_count "$state" '' "$identity"
+  if [ "$identity" = ordinary ] && [ "$ambient" = ordinary ]; then
+    row=$(jq -c "$FM_QUOTA_ROW_JQ"'quota_row(.; "claude"; "")' "$snapshot_file" 2>/dev/null) || row=null
+  else
+    row=$(fm_claude_admission_quota_row "$identity") || row=null
+  fi
+  session=$(printf '%s\n' "${row:-null}" | jq -c "$FM_CLAUDE_SESSION_JQ"'claude_session(.)' 2>/dev/null) \
+    || session='{"unknown":"Claude quota row is unreadable"}'
+  jq -nc --argjson limits "$limits" --arg count "$FM_CLAUDE_ADMISSION_COUNT" --arg counted "$FM_CLAUDE_ADMISSION_COUNTED" \
+    --arg account "$([ "$identity" = ordinary ] && printf ordinary || printf pinned)" --argjson session "$session" '
+    {cap: $limits.cap, floor: $limits.floor, count: ($count | tonumber),
+     counted: (if $counted == "" then [] else ($counted | split(", ")) end),
+     account: $account, session: $session}'
 }

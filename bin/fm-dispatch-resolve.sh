@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # fm-dispatch-resolve.sh - resolve one concrete crewmate or scout dispatch
-# profile from a task brief with typesafe.ai's System One model (Jev), opt-in.
+# profile, and the machine that runs it, from a task brief with typesafe.ai's
+# System One model (Jev), opt-in.
 #
 # Usage:
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>]
+#   fm-dispatch-resolve.sh <brief-file> [--project <name>] <brief-file> [--project <name>] ...
+#
+# Each --project names the project of the brief just before it; one given
+# before the first brief names that first brief's project. Several briefs are
+# one batch: each is answered in order, and every placement is charged against
+# its account before the next brief is placed. Placements stay charged for
+# later calls through state/dispatch-charges.jsonl for the charge window
+# docs/configuration.md "Charging placements" owns. One brief is a batch of one.
 #
 # Opt-in gate: TYPESAFE_API_KEY non-empty in this process environment, else a
 #   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get, the same
@@ -28,8 +37,10 @@
 #   candidate binds to one row through quota_row in
 #   bin/fm-quota-axi-lib.sh, so a Pi lane such as openai-codex-work/...
 #   reads its own account's row and an expanded provider with no row for the
-#   candidate is unmeasured, never blocked), and the configured selection among
-#   eligible candidates (quota ranking by default, candidate order by opt-in).
+#   candidate is unmeasured, never blocked), the Claude crew guard each
+#   machine's spawn admission enforces, and the configured selection among
+#   eligible candidates of every machine in the pool (quota ranking by
+#   default, candidate order by opt-in).
 #   The model never sees quota, catalogs, approvals, selection policy, confidence
 #   floors, `why`, or `use`. With no rules, it returns a non-clear
 #   result so firstmate keeps using the existing intake.
@@ -45,31 +56,42 @@
 #   "dispatch-resolve: off (...; nothing sent)" line on stderr naming at most
 #   the list line number, never its value, prints nothing on stdout, and exits
 #   0 with no network or quota call, exactly like the absent-key off path.
+#   In a batch that brief instead prints a block with status off and the same
+#   reason, and the other briefs proceed.
 #
-# Output (stdout, TOON-style block):
+# Output (stdout, one TOON-style block per brief):
 #   dispatch-resolve:
-#     status: clear | ambiguous | escalate | error
+#     brief: <path>  project: <name>   (batch only)
+#     status: clear | ambiguous | escalate | error | off (batch only)
 #     model/latency_ms/tokens, rule (when excerpt) and confidence, probabilities
 #     fallback: <runner-up rule taken when the picked rule missed its own floor>
 #     reason: <why the status is not clear>
 #     selection: quota-balanced | candidate-order
-#     candidate: <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked: <reason> | not eligible: <reason>
-#     passed over: [home=<id>] <harness>:<model>: projected to run out before reset; later eligible candidate has runway through_reset
+#     candidate: [home=<id>] <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. [feed=..s old] [charged=<n> recent placement(s)] -> eligible | eligible, runway unknown: disclosed uncertainty | eligible, unranked: <reason> | not eligible: <reason>
+#     passed over: [home=<id>] <harness>:<model>: projected to run out before reset; <later eligible candidate | another eligible candidate in the pool> has runway through_reset
 #     near-tie broken by configured order: [home=<id>] <harness>:<model>=<spendPriority>, ... (within <band>)   (quota-balanced only)
 #     profile: --harness <h> [--model <m>] [--effort <e>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]     (status clear only)
-#     placement: local | secondmate <id> (<why>)   (cross-home placement only)
-#     home: <id> best=<harness>:<model> scope=.. remaining=..% spendPriority=.. runway=.. [placement-blocked=..] | home: <id> unknown: <reason>: disclosed uncertainty
+#     placement: local | secondmate <id> (<machine> <harness>:<model> <why>)   (pooled only)
+#     home: <id> claude-crew=<n>/<cap> [+<n> recent placement(s)] session=..% [cached=..s old] | home: <id> not eligible: <reason> | home: <id> unknown: <reason>: disclosed uncertainty   (pooled only)
+#   then, for a batch, one closing block:
+#   dispatch-batch:
+#     briefs: <n>   clear: <n>   other: <n>
+#     machine: local=<n> <id>=<n> ...   provider: <provider>=<n> ...
+#     profile: <machine>:<harness>:<model>=<n> ...
 #   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
 #   ambiguous -> confidence below the floor; decide as today from the probabilities
 #   escalate  -> the rule requires captain approval or no candidate is rankable
 #   error     -> API, network, response, or quota-axi failure; decide as today
-#   placement and home lines appear only with --project, for a clear or
-#   nothing-rankable result, when a remote route in data/secondmates.md lists
-#   that project and this home has not registered it local-only. Each such
-#   machine's quota comes from bin/fm-quota-snapshot.sh --secondmate and is
-#   judged by the same candidate gates; the quota-array-dispatch skill owns the
-#   placement rule, including when runway safety overrides its otherwise strict
-#   0.5 margin. Status and the profile line never change.
+#   The pool is this machine plus every remote route in data/secondmates.md
+#   whose projects name the brief's --project, unless this home registered the
+#   project local-only. This machine leaves the pool when the project is not
+#   in its own registry but a remote route lists it. Each remote machine's
+#   quota and Claude crew evidence come from one bin/fm-quota-snapshot.sh
+#   --secondmate read per call; an unreachable machine is a disclosed unknown
+#   home line and never blocks the others. With more than one machine in the
+#   pool the result is pooled: candidates carry home=<id> for remote machines,
+#   and placement and home lines follow the profile line. The
+#   quota-array-dispatch skill owns the pool rule.
 #   Every outcome exits 0 so an intake is never blocked by this tool.
 #   Exit 2 only for a usage or configuration error (unreadable brief, an
 #   existing unreadable rules file, malformed rules, or missing jq), which is
@@ -92,6 +114,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
@@ -105,6 +128,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-brief-heading-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-claude-admission-lib.sh
+. "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 
 CONFIDENCE_FLOOR=0.6
 TS_MODEL=jev-latest
@@ -113,8 +140,20 @@ TS_TIMEOUT=5
 DEFAULT_WHEN="No listed rule applies to this task."
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
+# A batch prints which brief and project each block answers; one brief prints
+# exactly the single-brief block.
+block_header() { # <index>
+  [ "$BRIEF_COUNT" -gt 1 ] || return 0
+  printf '  brief: %s\n' "$(printf '%s' "${BRIEFS[$1]}" | tr '\t\r\n' '   ')"
+  [ -z "${PROJECTS[$1]}" ] || printf '  project: %s\n' "$(printf '%s' "${PROJECTS[$1]}" | tr '\t\r\n' '   ')"
+}
 no_rules() {
-  printf 'dispatch-resolve:\n  status: escalate\n  reason: no rules to match\n'
+  local i
+  for i in "${!BRIEFS[@]}"; do
+    printf 'dispatch-resolve:\n'
+    block_header "$i"
+    printf '  status: escalate\n  reason: no rules to match\n'
+  done
   exit 0
 }
 usage() {
@@ -125,16 +164,30 @@ usage() {
   ' "$0"
 }
 
-BRIEF='' PROJECT='' RULES_PATH="$CONFIG/crew-dispatch.json" RULES=''
+BRIEFS=() PROJECTS=() LEAD_PROJECT='' RULES_PATH="$CONFIG/crew-dispatch.json" RULES=''
 NEVER_SEND_PATH="$CONFIG/dispatch-never-send"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --project) [ $# -ge 2 ] || die "--project needs a value"; PROJECT=$2; shift 2 ;;
+    --project)
+      [ $# -ge 2 ] || die "--project needs a value"
+      if [ "${#BRIEFS[@]}" -eq 0 ]; then
+        [ -z "$LEAD_PROJECT" ] || die "--project given twice before the first brief"
+        LEAD_PROJECT=$2
+      else
+        [ -z "${PROJECTS[${#BRIEFS[@]} - 1]}" ] || die "--project given twice for brief ${BRIEFS[${#BRIEFS[@]} - 1]}"
+        PROJECTS[${#BRIEFS[@]} - 1]=$2
+      fi
+      shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown flag $1" ;;
-    *) [ -z "$BRIEF" ] || die "one brief file only"; BRIEF=$1; shift ;;
+    *) BRIEFS+=("$1"); PROJECTS+=(''); shift ;;
   esac
 done
+BRIEF_COUNT=${#BRIEFS[@]}
+if [ -n "$LEAD_PROJECT" ] && [ "$BRIEF_COUNT" -gt 0 ]; then
+  [ -z "${PROJECTS[0]}" ] || die "--project given twice for brief ${BRIEFS[0]}"
+  PROJECTS[0]=$LEAD_PROJECT
+fi
 
 # ---- opt-in gate ---------------------------------------------------------------
 if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
@@ -146,8 +199,10 @@ if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
 fi
 
 # ---- inputs --------------------------------------------------------------------
-[ -n "$BRIEF" ] || die "brief file required (see --help)"
-[ -r "$BRIEF" ] || die "brief file not readable: $BRIEF"
+[ "$BRIEF_COUNT" -gt 0 ] || die "brief file required (see --help)"
+for brief in "${BRIEFS[@]}"; do
+  [ -r "$brief" ] || die "brief file not readable: $brief"
+done
 [ -e "$RULES_PATH" ] || [ -L "$RULES_PATH" ] || no_rules
 [ -r "$RULES_PATH" ] || die "rules file not readable: $RULES_PATH"
 command -v jq >/dev/null 2>&1 || die "jq required"
@@ -232,11 +287,15 @@ if [ -n "$missing_provider" ]; then
 fi
 
 # ---- harness -> provider map, from the single owner in fm-quota-axi-lib.sh -----
-PMAP='{}'
+# The family map, from fm_control_harness_family, marks which candidates the
+# Claude crew guard applies to.
+PMAP='{}' FMAP='{}'
 while IFS= read -r h; do
   [ -n "$h" ] || continue
   p=$(fm_quota_single_provider_for_harness "$h" 2>/dev/null) || p=''
   PMAP=$(jq -c --arg h "$h" --arg p "$p" '. + {($h): (if $p == "" then null else $p end)}' <<<"$PMAP")
+  f=$(fm_control_harness_family "$h" 2>/dev/null) || f=''
+  FMAP=$(jq -c --arg h "$h" --arg f "$f" '. + {($h): $f}' <<<"$FMAP")
 done < <(jq -r '
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   ([((.rules // [])[]) | profiles(.use)[]] + profiles(.default // null))
@@ -244,41 +303,46 @@ done < <(jq -r '
 
 RULE_COUNT=$(jq -r '(.rules // []) | length' "$RULES")
 
-emit_error() {
-  local reason=$1
-  echo "dispatch-resolve: error ($reason)" >&2
-  printf 'dispatch-resolve:\n  status: error\n  reason: %s\n' "$reason"
-  exit 0
+# Per-brief work files live in one directory that the EXIT trap removes.
+WORK=$(mktemp -d) || die "mktemp failed"
+QUOTA="$WORK/quota.json"
+SEND_TEXT="$WORK/send-text"
+trap 'rm -rf "$RULES" "$WORK"' EXIT
+
+[ "$RULE_COUNT" -gt 0 ] || no_rules
+
+# Each brief ends in one result file: an error or off outcome written here, or
+# the resolution written after the pool is evaluated.
+brief_error() { # <index> <reason>
+  echo "dispatch-resolve: error ($2)" >&2
+  jq -nc --arg reason "$2" '{status: "error", reason: $reason}' > "$WORK/result.$1.json"
 }
-
-if [ "$RULE_COUNT" -eq 0 ]; then
-  no_rules
-fi
-
-RESP_FILE=$(mktemp) || die "mktemp failed"
-QUOTA=$(mktemp) || { rm -f "$RESP_FILE"; die "mktemp failed"; }
-TASK_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA"; die "mktemp failed"; }
-SEND_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA" "$TASK_TEXT"; die "mktemp failed"; }
-trap 'rm -f "$RULES" "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT"' EXIT
-
-never_send_off() {
-  echo "dispatch-resolve: off ($1; nothing sent)" >&2
-  exit 0
+brief_off() { # <index> <reason>
+  echo "dispatch-resolve: off ($2; nothing sent)" >&2
+  jq -nc --arg reason "$2" '{status: "off", reason: $reason}' > "$WORK/result.$1.json"
 }
 
 # Checks every string the request carries, so no text reaches the network
 # unchecked. grep's own stderr is discarded because it can echo the pattern.
-never_send_check() {
+# Sets NEVER_SEND_REASON and returns 1 when the request must not be sent.
+never_send_check() { # <request-json>
   local list value n=0 rc
+  NEVER_SEND_REASON=
   [ -e "$NEVER_SEND_PATH" ] || [ -L "$NEVER_SEND_PATH" ] || return 0
-  { [ -f "$NEVER_SEND_PATH" ] && [ -r "$NEVER_SEND_PATH" ]; } \
-    || never_send_off "$NEVER_SEND_PATH is not a readable regular file"
+  if ! { [ -f "$NEVER_SEND_PATH" ] && [ -r "$NEVER_SEND_PATH" ]; }; then
+    NEVER_SEND_REASON="$NEVER_SEND_PATH is not a readable regular file"
+    return 1
+  fi
   # Collapse whitespace runs on both sides so a value the brief wraps across
   # lines or spaces differently still matches
-  jq -r '.. | strings | gsub("\\s+"; " ")' <<<"$REQUEST" > "$SEND_TEXT" 2>/dev/null \
-    || never_send_off "could not extract the request text to check"
-  list=$(jq -Rr 'gsub("\\s+"; " ")' "$NEVER_SEND_PATH" 2>/dev/null) \
-    || never_send_off "could not read $NEVER_SEND_PATH"
+  if ! jq -r '.. | strings | gsub("\\s+"; " ")' <<<"$1" > "$SEND_TEXT" 2>/dev/null; then
+    NEVER_SEND_REASON="could not extract the request text to check"
+    return 1
+  fi
+  if ! list=$(jq -Rr 'gsub("\\s+"; " ")' "$NEVER_SEND_PATH" 2>/dev/null); then
+    NEVER_SEND_REASON="could not read $NEVER_SEND_PATH"
+    return 1
+  fi
   while IFS= read -r value; do
     n=$((n + 1))
     value=${value# }
@@ -288,9 +352,9 @@ never_send_check() {
     esac
     grep -qiF -e "$value" "$SEND_TEXT" 2>/dev/null; rc=$?
     case "$rc" in
-      0) never_send_off "brief text matches $NEVER_SEND_PATH line $n" ;;
+      0) NEVER_SEND_REASON="brief text matches $NEVER_SEND_PATH line $n"; return 1 ;;
       1) ;;
-      *) never_send_off "could not check the request text against $NEVER_SEND_PATH line $n" ;;
+      *) NEVER_SEND_REASON="could not check the request text against $NEVER_SEND_PATH line $n"; return 1 ;;
     esac
   done <<<"$list"
 }
@@ -300,27 +364,31 @@ never_send_check() {
 # standard boilerplate whose safety language reads as high stakes on every task.
 # A brief with neither section goes whole. Ship delivery mode is deliberately
 # not sent: live runs showed it pushing routine ship briefs to the top tier.
-brief_kind() {
-  if grep -qxF 'This is a SCOUT task: the deliverable is a written report, not a PR.' "$BRIEF"; then
+brief_kind() { # <brief>
+  if grep -qxF 'This is a SCOUT task: the deliverable is a written report, not a PR.' "$1"; then
     printf 'Brief kind: scout (report only)\n\n'
   fi
 }
-task_sections() {
+task_sections() { # <brief>
   local heading
   for heading in "## Captain's intent" "## Firstmate spec"; do
-    fm_brief_task_heading_present "$BRIEF" "$heading" || continue
-    printf '%s\n%s\n\n' "$heading" "$(fm_brief_task_heading_body "$BRIEF" "$heading")"
+    fm_brief_task_heading_present "$1" "$heading" || continue
+    printf '%s\n%s\n\n' "$heading" "$(fm_brief_task_heading_body "$1" "$heading")"
   done
 }
-SECTIONS=$(task_sections)
-if [ -n "$SECTIONS" ]; then
-  { brief_kind; printf '%s\n' "$SECTIONS"; } > "$TASK_TEXT" || die "could not read brief: $BRIEF"
-else
-  cp "$BRIEF" "$TASK_TEXT" || die "could not read brief: $BRIEF"
-fi
-LAT_MS=null
-command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
-  REQUEST=$(jq -n --rawfile brief "$TASK_TEXT" --arg project "$PROJECT" --arg model "$TS_MODEL" \
+
+# One rule Choice per brief. Writes resp.<i>.json and lat.<i>, or the brief's
+# error or off result.
+ask_jev() { # <index>
+  local i=$1 brief=${BRIEFS[$1]} sections request http t0 t1 lat
+  local task_text="$WORK/task.$i" resp="$WORK/resp.$i.json"
+  sections=$(task_sections "$brief")
+  if [ -n "$sections" ]; then
+    { brief_kind "$brief"; printf '%s\n' "$sections"; } > "$task_text" || die "could not read brief: $brief"
+  else
+    cp "$brief" "$task_text" || die "could not read brief: $brief"
+  fi
+  request=$(jq -n --rawfile brief "$task_text" --arg project "${PROJECTS[$i]}" --arg model "$TS_MODEL" \
     --arg none_criterion "$DEFAULT_WHEN" --slurpfile rules "$RULES" '
     ($rules[0]) as $cfg |
     ($cfg.rules | to_entries | map({key: ("rule_" + ((.key + 1) | tostring)), value: .value.when}) | from_entries) as $criteria |
@@ -335,59 +403,222 @@ command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
         }
       }
     }')
-  never_send_check
-  T0=$(fm_timing_now_ms)
-  HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
+  if ! never_send_check "$request"; then
+    brief_off "$i" "$NEVER_SEND_REASON"
+    return 0
+  fi
+  t0=$(fm_timing_now_ms)
+  http=$(printf '%s' "$request" | curl -sS --max-time "$TS_TIMEOUT" -o "$resp" -w '%{http_code}' \
     -X POST "$TS_BASE/v1/systemone" -H 'Content-Type: application/json' \
     -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$TYPESAFE_API_KEY_PRIVATE") \
-    --data-binary @- 2>/dev/null) || HTTP=000
-  T1=$(fm_timing_now_ms)
-  LAT_MS=$(( T1 - T0 ))
-  [ "$HTTP" = 200 ] || emit_error "http $HTTP after ${LAT_MS} ms: $(head -c 200 "$RESP_FILE" 2>/dev/null | tr '\n' ' ')"
-jq -e --slurpfile rules "$RULES" '
-    (($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) + ["default"] | sort) as $choices |
-    (.answers.rule.choice | type) == "string" and
-    (.answers.rule.confidence | type) == "number" and
-    .answers.rule.confidence >= 0 and .answers.rule.confidence <= 1 and
-    (.answers.rule.probabilities | type) == "object" and
-    ((.answers.rule.probabilities | keys | sort) == $choices) and
-    all(.answers.rule.probabilities[]; type == "number" and . >= 0 and . <= 1) and
-    ((.answers.rule.probabilities | [.[]] | add) as $total | $total >= 0.99 and $total <= 1.01) and
-    ((has("usage") | not) or
-      ((.usage | type) == "object" and
-       (.usage.input_tokens | type) == "number" and
-       (.usage.output_tokens | type) == "number"))' \
-  "$RESP_FILE" >/dev/null 2>&1 || emit_error "response is not a rule Choice answer"
+    --data-binary @- 2>/dev/null) || http=000
+  t1=$(fm_timing_now_ms)
+  lat=$(( t1 - t0 ))
+  if [ "$http" != 200 ]; then
+    brief_error "$i" "http $http after ${lat} ms: $(head -c 200 "$resp" 2>/dev/null | tr '\n' ' ')"
+    return 0
+  fi
+  if ! jq -e --slurpfile rules "$RULES" '
+      (($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) + ["default"] | sort) as $choices |
+      (.answers.rule.choice | type) == "string" and
+      (.answers.rule.confidence | type) == "number" and
+      .answers.rule.confidence >= 0 and .answers.rule.confidence <= 1 and
+      (.answers.rule.probabilities | type) == "object" and
+      ((.answers.rule.probabilities | keys | sort) == $choices) and
+      all(.answers.rule.probabilities[]; type == "number" and . >= 0 and . <= 1) and
+      ((.answers.rule.probabilities | [.[]] | add) as $total | $total >= 0.99 and $total <= 1.01) and
+      ((has("usage") | not) or
+        ((.usage | type) == "object" and
+         (.usage.input_tokens | type) == "number" and
+         (.usage.output_tokens | type) == "number"))' \
+    "$resp" >/dev/null 2>&1; then
+    brief_error "$i" "response is not a rule Choice answer"
+    return 0
+  fi
+  printf '%s\n' "$lat" > "$WORK/lat.$i"
+}
 
-# ---- quota evidence: shared bounded snapshot read -----------------------------
-command -v quota-axi >/dev/null 2>&1 || emit_error "quota-axi not installed"
-fm_quota_read_json "${FM_QUOTA_SNAPSHOT_TIMEOUT:-10}" quota-axi --json > "$QUOTA" 2>/dev/null || emit_error "quota-axi --json failed"
-fm_quota_json_valid < "$QUOTA" || emit_error "quota-axi --json returned an invalid snapshot"
+# ---- rule answers: one model call per brief -----------------------------------
+if command -v curl >/dev/null 2>&1; then
+  for i in "${!BRIEFS[@]}"; do
+    ask_jev "$i"
+  done
+else
+  for i in "${!BRIEFS[@]}"; do
+    brief_error "$i" "curl not installed"
+  done
+fi
+
+# The rule answer: confidence floors, fallback, and the resolved choice. Every
+# quota-dependent step comes later, once per pool.
+for i in "${!BRIEFS[@]}"; do
+  [ ! -e "$WORK/result.$i.json" ] || continue
+  jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$(cat "$WORK/lat.$i")" --arg none_criterion "$DEFAULT_WHEN" \
+    --slurpfile resp "$WORK/resp.$i.json" --slurpfile rules "$RULES" '
+    ($resp[0]) as $r | ($rules[0]) as $cfg | ($r.answers.rule) as $a |
+    def rule_at($c):
+      if ($c | test("^rule_[1-9][0-9]*$")) then
+        ($c | ltrimstr("rule_") | tonumber) as $n |
+        if $n <= (($cfg.rules // []) | length) then $cfg.rules[$n - 1] else null end
+      else null end;
+    def declared_confidence($c): rule_at($c) as $x | $x != null and ($x | has("min_confidence"));
+    def confidence_floor($c): if declared_confidence($c) then rule_at($c).min_confidence else ($floor | tonumber) end;
+    ($a.choice) as $picked |
+    (confidence_floor($picked)) as $picked_floor |
+    # A declared floor is checked against the probability of that option whether
+    # it is the pick or a runner-up, so a runner-up never needs weaker support
+    # than it would as the pick. Only a rule that declares its own floor falls
+    # through to a runner-up, so a file with no declared floors keeps the single
+    # global floor on the answer confidence exactly.
+    (if declared_confidence($picked) | not then
+       (if $a.confidence >= $picked_floor then {below: false} else {below: true, global: true} end)
+     elif $a.probabilities[$picked] >= $picked_floor then {below: false}
+     else
+       ([$a.probabilities | to_entries[] | select(.key != $picked and .value >= confidence_floor(.key))]
+         | sort_by(-.value)) as $ok |
+       if ($ok | length) == 0 then {below: true, why: "no other option clears its own floor"}
+       elif ($ok | length) > 1 and $ok[1].value == $ok[0].value then {below: true, why: "runner-up tie"}
+       else {below: true, to: $ok[0].key, p: $ok[0].value, to_floor: confidence_floor($ok[0].key)} end
+     end) as $fb |
+    (if $fb.to then $fb.to else $picked end) as $choice |
+    (rule_at($choice)) as $rule |
+    def when_of($c): (if rule_at($c) == null then $none_criterion else rule_at($c).when end | .[0:60]);
+    {
+      model: $r.model, latency_ms: $lat, tokens: ($r.usage // null),
+      rule: $picked, resolved_rule: $choice,
+      rule_when: when_of($picked),
+      confidence: $a.confidence, probabilities: $a.probabilities
+    }
+    + (if $fb.to then {fallback: "\($choice) (\(when_of($choice))) probability \($fb.p) clears its floor \($fb.to_floor); \($picked) probability \($a.probabilities[$picked]) is below its floor \($picked_floor)"} else {} end)
+    + (if $choice != "default" and $rule == null then {kind: "error", reason: "rule \($choice) is not in the rules file"}
+       elif $fb.below and $fb.global then {kind: "ambiguous", reason: "confidence \($a.confidence) below floor \($floor)"}
+       elif $fb.below and ($fb.to | not) then {kind: "ambiguous", reason: "\($picked) probability \($a.probabilities[$picked]) below its floor \($picked_floor); \($fb.why)"}
+       elif $rule != null and ($rule.approval // "") == "captain" then {kind: "approval", reason: "rule requires the captain'"'"'s explicit approval before dispatch"}
+       else {kind: "resolve"} end)
+  ' > "$WORK/answer.$i.json" 2>/dev/null || brief_error "$i" "resolution failed"
+  if jq -e '.kind == "error"' "$WORK/answer.$i.json" >/dev/null 2>&1; then
+    jq -c '. + {status: "error"} | del(.kind)' "$WORK/answer.$i.json" > "$WORK/result.$i.json"
+  fi
+done
+
+pending() {
+  local i
+  for i in "${!BRIEFS[@]}"; do
+    [ -e "$WORK/result.$i.json" ] || return 0
+  done
+  return 1
+}
+
+# ---- quota evidence: one bounded local snapshot read --------------------------
+if pending; then
+  quota_failure=
+  if ! command -v quota-axi >/dev/null 2>&1; then
+    quota_failure="quota-axi not installed"
+  elif ! fm_quota_read_json "${FM_QUOTA_SNAPSHOT_TIMEOUT:-10}" quota-axi --json > "$WORK/live.json" 2>/dev/null; then
+    quota_failure="quota-axi --json failed"
+  elif ! fm_quota_json_valid < "$WORK/live.json"; then
+    quota_failure="quota-axi --json returned an invalid snapshot"
+  fi
+  [ -z "$quota_failure" ] || : > "$WORK/live.json"
+  # The home's optional quota feed fills unmeasured rows or stands in for a
+  # failed read (docs/configuration.md "Quota snapshot reuse").
+  if fm_quota_feed_merge "$CONFIG" "$WORK/live.json" > "$QUOTA"; then
+    quota_failure=
+  fi
+  if [ -n "$quota_failure" ]; then
+    for i in "${!BRIEFS[@]}"; do
+      [ -e "$WORK/result.$i.json" ] || brief_error "$i" "$quota_failure"
+    done
+  else
+    fm_claude_admission_state "$CONFIG" "$STATE" "$QUOTA" > "$WORK/local-admission.json" 2>/dev/null \
+      || printf '%s\n' '{"unknown":"Claude crew guard evidence failed"}' > "$WORK/local-admission.json"
+  fi
+fi
+
+# ---- the pool: every machine that has the project ------------------------------
+# This machine always joins the pool unless the project is registered only on
+# remote second mates. A remote route joins when its registered projects name
+# the project and this home has not registered the project local-only. Each
+# remote machine's quota and Claude crew evidence come from one
+# fm-quota-snapshot.sh --secondmate read per call (bounded, briefly cached);
+# an unreachable machine is disclosed and never blocks the others.
+remote_ids() { # <project>
+  local project=$1 line entry mode
+  local -a entries
+  [ -n "$project" ] || return 0
+  [ -f "$DATA/secondmates.md" ] && [ ! -L "$DATA/secondmates.md" ] || return 0
+  mode=$("$SCRIPT_DIR/fm-project-mode.sh" "$project" 2>/dev/null) || return 0
+  [ "${mode%% *}" != local-only ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '- '*) ;; *) continue ;; esac
+    secondmate_registry_parse_line "$line" || continue
+    [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] && [ -n "$SECONDMATE_REGISTRY_PROJECTS" ] || continue
+    IFS=',' read -ra entries <<< "$SECONDMATE_REGISTRY_PROJECTS"
+    for entry in "${entries[@]}"; do
+      entry=${entry#"${entry%%[![:space:]]*}"}
+      entry=${entry%"${entry##*[![:space:]]}"}
+      if [ "$entry" = "$project" ]; then
+        printf '%s\n' "$SECONDMATE_REGISTRY_ID"
+        break
+      fi
+    done
+  done < "$DATA/secondmates.md"
+}
+
+# Only a registry that exists and omits the project excludes this machine.
+registered_here() { # <project>
+  local warning
+  warning=$("$SCRIPT_DIR/fm-project-mode.sh" "$1" 2>&1 >/dev/null) || return 0
+  case "$warning" in
+    *"not in registry"*) return 1 ;;
+  esac
+  return 0
+}
+
+remote_home() { # <id> -> remote.<id>.json, read once per call
+  local id=$1 out="$WORK/remote.$1.json" snap="$WORK/remote.$1.snapshot" snap_err
+  [ ! -e "$out" ] || return 0
+  if snap_err=$("$SCRIPT_DIR/fm-quota-snapshot.sh" --secondmate "$id" 2>&1 >"$snap"); then
+    jq -c --arg id "$id" '{id: $id, eligible: true, snapshot: .,
+      admission: (.firstmateClaudeAdmission // null),
+      cache_age: (.firstmateRemoteCache.ageSeconds // null)}' "$snap" > "$out"
+  else
+    snap_err=${snap_err#quota-snapshot: unavailable (}
+    snap_err=${snap_err%)}
+    jq -nc --arg id "$id" --arg reason "${snap_err:-quota unavailable}" \
+      '{id: $id, eligible: true, snapshot: null, reason: $reason}' > "$out"
+  fi
+}
+
+homes_for() { # <index> -> homes.<index>.json
+  local i=$1 project=${PROJECTS[$1]} ids id local_eligible=true local_reason=''
+  local -a files=()
+  ids=
+  if jq -e '.kind == "resolve"' "$WORK/answer.$i.json" >/dev/null 2>&1; then
+    ids=$(remote_ids "$project")
+  fi
+  if [ -n "$ids" ] && ! registered_here "$project"; then
+    local_eligible=false
+    local_reason="project $project is not registered on this machine"
+  fi
+  jq -nc --argjson eligible "$local_eligible" --arg reason "$local_reason" \
+    --slurpfile snapshot "$QUOTA" --slurpfile admission "$WORK/local-admission.json" '
+    {id: "local", eligible: $eligible, snapshot: $snapshot[0], admission: $admission[0]}
+    + (if $reason == "" then {} else {reason: $reason} end)' > "$WORK/home.$i.local.json"
+  files+=("$WORK/home.$i.local.json")
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    remote_home "$id"
+    files+=("$WORK/remote.$id.json")
+  done <<<"$ids"
+  jq -s . "${files[@]}" > "$WORK/homes.$i.json"
+}
 
 # Candidate evaluation against one snapshot bound to $q, with $pmap in scope.
-# The local resolution and the cross-home placement below both splice it in,
-# so a second mate's machine is judged by exactly the same gates.
+# Every machine in the pool splices it in, so each is judged by exactly the
+# same gates.
 # shellcheck disable=SC2016  # jq program text, not shell expansion
 CANDIDATE_JQ='
-  def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
-  def selection_mode($cfg; $rule): ($rule.select // $cfg.select // "quota-balanced");
-  # quota-balanced near-tie band in spendPriority units; docs/configuration.md
-  # "Candidate selection policy" owns the value and its rationale.
-  def near_tie_band: 0.05;
-  def ranked_choice($eligible; $mode):
-    if $mode == "candidate-order" then
-      ([$eligible | to_entries[] | select(.value.runway == "through_reset") | .key] | first) as $safe |
-      ([$eligible | to_entries[] | select(
-        .value.runway != "projected_exhaustion" or $safe == null or .key >= $safe
-      )] | first) as $pick |
-      {best: $pick.value, passed_over: $eligible[:$pick.key]}
-    else ($eligible | max_by(.spendPriority).spendPriority) as $top |
-      [$eligible[] | select($top - .spendPriority <= near_tie_band + 1e-9)] as $near |
-      {best: $near[0], near_tie: (if ($near | length) > 1 then $near else null end)}
-    end;
-  def choice_evidence($pick):
-    {passed_over: ($pick.passed_over // [])}
-    + (if $pick.near_tie then {near_tie: $pick.near_tie, near_tie_band: near_tie_band} else {} end);
   def prov($p; $lane): quota_row($q; $p; $lane);
   def rows($p; $lane): (prov($p; $lane) | .quotaSemantics.effectiveAvailability // []);
   def bare($m): ($m | split("/") | last);
@@ -455,229 +686,309 @@ CANDIDATE_JQ='
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
-    end | . + {cache: (prov($p; $lane).firstmateCache // null)};
+      | . + {account: (prov($p; $lane).accountKey // ""), charged: (prov($p; $lane).firstmateCharged // 0),
+             feed: (prov($p; $lane).firstmateFeed // null)}
+    end | . + {cache: (if $p == null then null else (prov($p; $lane).firstmateCache // null) end)};
 '
 
-# ---- resolution: declared gates + quota evidence + selection, all in jq ------------
-RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" \
-  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ"'
-  ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
-'"$CANDIDATE_JQ"'
+# One brief's resolution across the pool, charged with every earlier
+# placement still inside the charge window, whether from this call or an
+# earlier one, except an earlier placement of this same task. Prints
+# {result, ledger}.
+# shellcheck disable=SC2016  # jq program text, not shell expansion
+POOL_JQ='
+  ($answer[0]) as $ans | ($rules[0]) as $cfg | ($homes[0]) as $homes | ($ledger[0]) as $ledger |
+  def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
+  def selection_mode($cfg; $rule): ($rule.select // $cfg.select // "quota-balanced");
+  # quota-balanced near-tie band in spendPriority units; docs/configuration.md
+  # "Candidate selection policy" owns the value and its rationale.
+  def near_tie_band: 0.05;
+  # The estimated draw one placed task takes from its account; the same
+  # section owns these values and their rationale.
+  def draw_percent: 5;
+  def draw_priority: 0.1;
+  def round4: (. * 10000 | round) / 10000;
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
       if $n <= (($cfg.rules // []) | length) then $cfg.rules[$n - 1] else null end
     else null end;
-  def declared_confidence($c): rule_at($c) as $x | $x != null and ($x | has("min_confidence"));
-  def confidence_floor($c): if declared_confidence($c) then rule_at($c).min_confidence else ($floor | tonumber) end;
-  ($a.choice) as $picked |
-  (confidence_floor($picked)) as $picked_floor |
-  # A declared floor is checked against the probability of that option whether
-  # it is the pick or a runner-up, so a runner-up never needs weaker support
-  # than it would as the pick. Only a rule that declares its own floor falls
-  # through to a runner-up, so a file with no declared floors keeps the single
-  # global floor on the answer confidence exactly.
-  (if declared_confidence($picked) | not then
-     (if $a.confidence >= $picked_floor then {below: false} else {below: true, global: true} end)
-   elif $a.probabilities[$picked] >= $picked_floor then {below: false}
-   else
-     ([$a.probabilities | to_entries[] | select(.key != $picked and .value >= confidence_floor(.key))]
-       | sort_by(-.value)) as $ok |
-     if ($ok | length) == 0 then {below: true, why: "no other option clears its own floor"}
-     elif ($ok | length) > 1 and $ok[1].value == $ok[0].value then {below: true, why: "runner-up tie"}
-     else {below: true, to: $ok[0].key, p: $ok[0].value, to_floor: confidence_floor($ok[0].key)} end
-   end) as $fb |
-  (if $fb.to then $fb.to else $picked end) as $choice |
-  (rule_at($choice)) as $rule |
-  (if $rule == null then "none" else floor_state($rule.floor; $rule.floor.provider; "") end) as $rule_floor_state |
-  (if $choice != "default" and $rule == null then []
-   elif $rule == null then profiles($cfg.default // null)
-   else profiles($rule.use)
-   end) as $answer_use |
-  (if $choice != "default" and $rule == null then {invalid: "rule \($choice) is not in the rules file"}
-   elif $rule == null then {source: "default", use: profiles($cfg.default // null), note: "no rule matched"}
-   elif ($rule.approval // "") == "captain" then {source: $choice, escalate: "rule requires the captain'"'"'s explicit approval before dispatch"}
-   elif $rule_floor_state == "unknown" then {source: $choice, escalate: "rule \($choice) floor \($rule.floor.provider)/\($rule.floor.scope) is unverifiable"}
-   elif $rule_floor_state == "below"
-     then {source: "default", use: profiles($cfg.default // null), note: "rule \($choice) floor \($rule.floor.scope) below \($rule.floor.min_percent)%: fall through to default"}
-   else {source: $choice, use: profiles($rule.use), note: "rule matched"} end) as $sel |
-  def when_of($c): (if rule_at($c) == null then $none_criterion else rule_at($c).when end | .[0:60]);
-  {
-    model: $r.model, latency_ms: $lat, tokens: ($r.usage // null),
-    rule: $picked, resolved_rule: $choice,
-    rule_when: when_of($picked),
-    confidence: $a.confidence, probabilities: $a.probabilities
-  }
-  + (if $fb.to then {fallback: "\($choice) (\(when_of($choice))) probability \($fb.p) clears its floor \($fb.to_floor); \($picked) probability \($a.probabilities[$picked]) is below its floor \($picked_floor)"} else {} end)
-  as $ev |
-  if $sel.invalid then $ev + {status: "error", reason: $sel.invalid}
-  elif $fb.below and $fb.global then
-    $ev + {status: "ambiguous", reason: "confidence \($a.confidence) below floor \($floor)", candidates: ($answer_use | map(evaluate(.)))}
-  elif $fb.below and ($fb.to | not) then
-    $ev + {status: "ambiguous", reason: "\($picked) probability \($a.probabilities[$picked]) below its floor \($picked_floor); \($fb.why)", candidates: ($answer_use | map(evaluate(.)))}
-  elif $sel.escalate then
-    $ev + {status: "escalate", reason: $sel.escalate, candidates: ($answer_use | map(evaluate(.)))}
-  elif ($sel.use | length) == 0 then $ev + {status: "escalate", reason: "no profiles configured for \($sel.source)", note: $sel.note, candidates: []}
-  else
-    (selection_mode($cfg; if $sel.source == "default" then null else $rule end)) as $mode |
-    ($ev + {selection: $mode}) as $ev |
-    ($sel.use | map(evaluate(.))) as $cands |
-    ([$cands[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
-    ([$cands[] | select(.unranked)]) as $unranked |
-    if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", note: $sel.note, candidates: $cands}
+  # Recent placements on a machine, other than this task'"'"'s own. A Claude
+  # placement already counted as that machine'"'"'s live crew takes no second slot.
+  def recent($home): [$ledger.entries[] | select(.home == $home and .key != $key)];
+  def charges($home; $provider; $account):
+    [recent($home)[] | select(.provider == $provider and .account == $account)] | length;
+  def slots($home; $counted):
+    [recent($home)[] | select(.claude) | .key as $k | select(($counted // []) | index($k) | not)] | length;
+  def charged($snap; $home):
+    $snap | .providers |= map(. as $row |
+      charges($home; $row.provider; ($row.accountKey // "")) as $n |
+      if $n == 0 or ((.quotaSemantics.effectiveAvailability | type) != "array") then .
+      else .firstmateCharged = $n |
+        .quotaSemantics.effectiveAvailability |= map(
+          (if (.effectivePercentRemaining | type) == "number"
+           then .effectivePercentRemaining = ((.effectivePercentRemaining - draw_percent * $n) | round4) else . end)
+          | (if (.selection.spendPriority | type) == "number"
+             then .selection.spendPriority = ((.selection.spendPriority - draw_priority * $n) | round4) else . end))
+      end);
+  def where($id): if $id == "local" then "this machine" else $id end;
+  # The Claude crew guard for one machine: the same cap and session floor
+  # spawn admission enforces there, charged with this call'"'"'s placements.
+  # An unranked candidate keeps its quota uncertainty; it is never selected.
+  def guard($c; $h):
+    if $fmap[$c.profile.harness] != "claude" or ($c.eligible | not) or ($c.unranked // false) then $c
+    else ($h.admission) as $a | slots($h.id; $a.counted) as $s |
+      (if $a == null then "Claude crew guard unverifiable on \(where($h.id)): its quota snapshot carries no crew evidence"
+       elif $a.unknown then "Claude crew guard unverifiable on \(where($h.id)): \($a.unknown)"
+       elif ($a.count + $s) >= $a.cap then
+         "Claude crew at its limit on \(where($h.id)): \($a.count + $s) of \($a.cap)"
+         + (if ($a.counted | length) > 0 then " (live: \($a.counted | join(", ")))" else "" end)
+         + (if $s > 0 then " (+\($s) recent placement(s))" else "" end)
+       elif $a.session.unknown then "Claude session floor unverifiable on \(where($h.id)): \($a.session.unknown)"
+       elif ($a.session.pct - draw_percent * $s) < $a.floor then
+         "Claude session \(($a.session.pct - draw_percent * $s) | round4)% below the \($a.floor)% floor on \(where($h.id))"
+       else null end) as $refusal |
+      if $refusal == null then $c
+      else $c + {eligible: false, unranked: false, reason: $refusal} end
+    end;
+  def rank_key: [.order, -(.spendPriority), .home_index];
+  def pool_pick($elig; $mode):
+    if $mode == "candidate-order" then
+      ($elig | sort_by(rank_key)) as $o |
+      ([$o | to_entries[] | select(.value.runway == "through_reset") | .key] | first) as $safe |
+      ([$o | to_entries[] | select(
+        .value.runway != "projected_exhaustion" or $safe == null or .key >= $safe
+      )] | first) as $pick |
+      {best: $pick.value, passed_over: $o[:$pick.key], passed_kind: "later"}
     else
-      (ranked_choice($elig; $mode)) as $pick |
-      $ev + {status: "clear", note: $sel.note, candidates: $cands, chosen: $pick.best}
-        + choice_evidence($pick)
-        + (if ($unranked | length) > 0 then
-             {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
-           else {} end)
-    end
-  end') || emit_error "resolution failed"
+      (any($elig[]; .runway == "through_reset")) as $safe |
+      (if $safe then [$elig[] | select(.runway != "projected_exhaustion")] else $elig end) as $kept |
+      ($kept | max_by(.spendPriority).spendPriority) as $top |
+      ([$kept[] | select($top - .spendPriority <= near_tie_band + 1e-9)] | sort_by(rank_key)) as $near |
+      {best: $near[0],
+       near_tie: (if ([$near[].order] | unique | length) > 1 then $near else null end),
+       passed_over: (if $safe then [$elig[] | select(.runway == "projected_exhaustion" and .spendPriority >= $top - near_tie_band - 1e-9)] | sort_by(rank_key) else [] end),
+       passed_kind: "pool"}
+    end;
+  ($ans.resolved_rule) as $choice | (rule_at($choice)) as $rule |
+  (if $rule == null then profiles($cfg.default // null) else profiles($rule.use) end) as $answer_use |
+  ($ans.kind == "resolve") as $resolving |
+  ($homes | length > 1) as $pooled |
+  [$homes | to_entries[] | .key as $hi | .value as $h |
+    if ($h.eligible | not) or $h.snapshot == null then $h + {index: $hi, candidates: [], unavailable: ($h.snapshot == null), slots: slots($h.id; $h.admission.counted)}
+    else charged($h.snapshot; $h.id) as $q |
+'"$CANDIDATE_JQ"'
+      (if ($resolving | not) then {use: $answer_use, mode: selection_mode($cfg; $rule), rank: 0}
+       elif $rule == null then {source: "default", use: profiles($cfg.default // null), note: "no rule matched", mode: selection_mode($cfg; null), rank: 1}
+       else floor_state($rule.floor; $rule.floor.provider; "") as $state |
+         if $state == "unknown" then {unverifiable: "rule \($choice) floor \($rule.floor.provider)/\($rule.floor.scope) is unverifiable"}
+         elif $state == "below" then {source: "default", use: profiles($cfg.default // null), note: "rule \($choice) floor \($rule.floor.scope) below \($rule.floor.min_percent)%: fall through to default", mode: selection_mode($cfg; null), rank: 1}
+         else {source: $choice, use: profiles($rule.use), note: "rule matched", mode: selection_mode($cfg; $rule), rank: 0}
+         end
+       end) as $sel |
+      $h + {index: $hi, sel: $sel, slots: slots($h.id; $h.admission.counted),
+        candidates: [($sel.use // []) | to_entries[] | . as $e |
+          (evaluate($e.value) + {home: $h.id, home_index: $hi, order: [$sel.rank, $e.key]}) | guard(.; $h)]}
+    end] as $evald |
+  ([$evald[] | select(.sel)]) as $usable |
+  ([$evald[].candidates[]]) as $cands |
+  ([$usable[] | select(.sel.use)] | first | .sel) as $lead |
+  ({model: $ans.model, latency_ms: $ans.latency_ms, tokens: $ans.tokens, rule: $ans.rule,
+    rule_when: $ans.rule_when, confidence: $ans.confidence, probabilities: $ans.probabilities}
+   + (if $ans.fallback then {fallback: $ans.fallback} else {} end)
+   + {pooled: $pooled, homes: [$evald[] | del(.snapshot, .candidates)]}) as $ev |
+  (if $ans.kind == "ambiguous" then
+     $ev + {status: "ambiguous", reason: $ans.reason, candidates: $cands}
+   elif $ans.kind == "approval" then
+     $ev + {status: "escalate", reason: $ans.reason, candidates: $cands}
+   elif ($usable | length) == 0 then
+     $ev + {status: "escalate", reason: "no machine in the pool can take this project now", candidates: []}
+   elif ([$usable[] | select(.sel.use)] | length) == 0 then
+     $ev + {status: "escalate", reason: $usable[0].sel.unverifiable, candidates: []}
+   elif ([$usable[] | select(.sel.use) | .sel.use[]] | length) == 0 then
+     $ev + {status: "escalate", reason: "no profiles configured for \($lead.source)", note: $lead.note, candidates: []}
+   else
+     ($ev + {selection: $lead.mode, note: $lead.note}) as $ev |
+     ([$cands[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
+     ([$cands[] | select(.eligible and .unranked)]) as $unranked |
+     if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", candidates: $cands}
+     else
+       pool_pick($elig; $lead.mode) as $pick |
+       ($pick.best) as $best |
+       $ev + {status: "clear", candidates: $cands, chosen: $best,
+              passed_over: ($pick.passed_over // []), passed_kind: $pick.passed_kind}
+       + (if $pick.near_tie then {near_tie: $pick.near_tie, near_tie_band: near_tie_band} else {} end)
+       + (if ($unranked | length) > 0 then
+            {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
+          else {} end)
+       + (if $pooled then
+            {placement: {home: $best.home,
+              reason: ((if $best.home == "local" then "local" else $best.home end) + " "
+                + "\($best.profile.harness):\($best.profile.model // "-") "
+                + (if $lead.mode == "candidate-order" then "is the first passing candidate in configured order across the pool"
+                   elif $pick.near_tie then "wins a near-tie at spendPriority \($best.spendPriority) by configured order"
+                   else "has the pool'"'"'s highest spendPriority \($best.spendPriority)" end)
+                + (if ($pick.passed_over | length) > 0 then "; \($pick.passed_over | length) candidate(s) projected to run out before reset passed over" else "" end))}}
+          else {} end)
+     end
+   end) as $result |
+  {result: $result,
+   ledger: (if $result.status == "clear" then
+     ($result.chosen) as $c |
+     $ledger | .entries = ([.entries[] | select(.key != $key)]
+       + [{at: $now, key: $key, home: $c.home, provider: $c.provider, account: $c.account,
+           claude: ($fmap[$c.profile.harness] == "claude")}])
+   else $ledger end)}
+'
+# Placements are charged for CHARGE_WINDOW seconds, the longest a reused quota
+# reading can be, so separate calls in a burst spread like one batch. A task is
+# keyed by its data/<id>/ directory when its brief is data/<id>/brief.md, else
+# by the brief path, so resolving the same task again replaces its charge.
+CHARGE_WINDOW=900
+LEDGER_FILE="$STATE/dispatch-charges.jsonl"
+NOW=$(date +%s)
+if [ -f "$LEDGER_FILE" ] && [ ! -L "$LEDGER_FILE" ]; then
+  jq -cs --argjson now "$NOW" --argjson window "$CHARGE_WINDOW" '
+    {entries: ([.[] | select(type == "object" and (.at | type) == "number" and (.key | type) == "string"
+       and (.home | type) == "string" and $now - .at >= 0 and $now - .at < $window)]
+     | group_by(.key) | map(max_by(.at)))}' "$LEDGER_FILE" > "$WORK/ledger.json" 2>/dev/null \
+    || printf '%s\n' '{"entries":[]}' > "$WORK/ledger.json"
+else
+  printf '%s\n' '{"entries":[]}' > "$WORK/ledger.json"
+fi
+cp "$WORK/ledger.json" "$WORK/ledger.start"
 
-# ---- cross-home placement: the same candidates on each second mate's machine ---
-# Runs only for a named project on a clear result or a nothing-rankable
-# escalation, and only for remote routes whose registered projects include it
-# when this home has not registered the project local-only. Each machine's
-# snapshot comes from fm-quota-snapshot.sh --secondmate (bounded and read-only);
-# an unreachable or unknown machine is disclosed on its own home line and never
-# changes the local result.
-placement_ids() {
-  local line entry mode
-  local -a entries
-  [ -n "$PROJECT" ] || return 0
-  [ -f "$DATA/secondmates.md" ] && [ ! -L "$DATA/secondmates.md" ] || return 0
-  mode=$("$SCRIPT_DIR/fm-project-mode.sh" "$PROJECT" 2>/dev/null) || return 0
-  [ "${mode%% *}" != local-only ] || return 0
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in '- '*) ;; *) continue ;; esac
-    secondmate_registry_parse_line "$line" || continue
-    [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] && [ -n "$SECONDMATE_REGISTRY_PROJECTS" ] || continue
-    IFS=',' read -ra entries <<< "$SECONDMATE_REGISTRY_PROJECTS"
-    for entry in "${entries[@]}"; do
-      entry=${entry#"${entry%%[![:space:]]*}"}
-      entry=${entry%"${entry##*[![:space:]]}"}
-      if [ "$entry" = "$PROJECT" ]; then
-        printf '%s\n' "$SECONDMATE_REGISTRY_ID"
-        break
-      fi
-    done
-  done < "$DATA/secondmates.md"
+brief_key() { # <index>
+  local brief=${BRIEFS[$1]} dir
+  dir=$(cd "$(dirname "$brief")" 2>/dev/null && pwd -P) || dir=$(dirname "$brief")
+  if [ "$(basename "$brief")" = brief.md ]; then
+    basename "$dir"
+  else
+    printf '%s/%s\n' "$dir" "$(basename "$brief")"
+  fi
 }
 
-placement_stage=$(jq -r 'if .status == "clear" or (.status == "escalate" and .reason == "no rankable eligible candidate") then "yes" else "no" end' <<<"$RESULT")
-if [ "$placement_stage" = yes ]; then
-  PLACEMENT_IDS=$(placement_ids)
-else
-  PLACEMENT_IDS=
-fi
-if [ -n "$PLACEMENT_IDS" ]; then
-  HOMES=$(mktemp) || emit_error "mktemp failed"
-  SNAP=$(mktemp) || { rm -f "$HOMES"; emit_error "mktemp failed"; }
-  trap 'rm -f "$RULES" "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT" "$HOMES" "$SNAP"' EXIT
-  while IFS= read -r home_id; do
-    if snap_err=$("$SCRIPT_DIR/fm-quota-snapshot.sh" --secondmate "$home_id" 2>&1 >"$SNAP"); then
-      jq -c --arg id "$home_id" '{id: $id, snapshot: .}' "$SNAP"
-    else
-      snap_err=${snap_err#quota-snapshot: unavailable (}
-      snap_err=${snap_err%)}
-      jq -nc --arg id "$home_id" --arg reason "${snap_err:-quota unavailable}" '{id: $id, snapshot: null, reason: $reason}'
+for i in "${!BRIEFS[@]}"; do
+  [ ! -e "$WORK/result.$i.json" ] || continue
+  homes_for "$i"
+  if jq -n --argjson pmap "$PMAP" --argjson fmap "$FMAP" --arg key "$(brief_key "$i")" --argjson now "$NOW" \
+      --slurpfile answer "$WORK/answer.$i.json" --slurpfile rules "$RULES" \
+      --slurpfile homes "$WORK/homes.$i.json" --slurpfile ledger "$WORK/ledger.json" \
+      "$FM_QUOTA_ROW_JQ$POOL_JQ" > "$WORK/pool.$i.json" 2>/dev/null; then
+    jq -c .result "$WORK/pool.$i.json" > "$WORK/result.$i.json"
+    jq -c .ledger "$WORK/pool.$i.json" > "$WORK/ledger.next" && mv "$WORK/ledger.next" "$WORK/ledger.json"
+  else
+    brief_error "$i" "resolution failed"
+  fi
+done
+
+# Persist the charge window: the recent placements read above plus this
+# call's. A concurrent call can lose one of these estimates, never a task.
+if ! cmp -s "$WORK/ledger.start" "$WORK/ledger.json"; then
+  if mkdir -p "$STATE" 2>/dev/null && tmp=$(mktemp "$STATE/.dispatch-charges.XXXXXX" 2>/dev/null); then
+    if ! { jq -c '.entries[]' "$WORK/ledger.json" > "$tmp" && mv -f "$tmp" "$LEDGER_FILE"; }; then
+      rm -f "$tmp"
     fi
-  done <<<"$PLACEMENT_IDS" > "$HOMES" || emit_error "placement evidence failed"
-  RESULT=$(jq -n --argjson pmap "$PMAP" --argjson result "$RESULT" --slurpfile rules "$RULES" --slurpfile homes "$HOMES" "$FM_QUOTA_ROW_JQ"'
-    ($rules[0]) as $cfg |
-    ($result.resolved_rule) as $choice |
-    ($result.chosen.spendPriority // ([$result.candidates[] | select(.eligible and ((.unranked // false) | not)) | .spendPriority] | max)) as $local |
-    (($result.chosen.runway // null) == "projected_exhaustion") as $local_projected |
-    [$homes[] | . as $h |
-      if $h.snapshot == null then {id: $h.id, reason: $h.reason}
-      else ($h.snapshot) as $q |
-        '"$CANDIDATE_JQ"'
-        (if $choice == "default" then {profiles: profiles($cfg.default // null), mode: selection_mode($cfg; null)}
-         else ($choice | ltrimstr("rule_") | tonumber) as $n |
-           ($cfg.rules[$n - 1]) as $rule |
-           (floor_state($rule.floor; $rule.floor.provider; "")) as $state |
-           if $state == "unknown" then {reason: "rule \($choice) floor \($rule.floor.provider)/\($rule.floor.scope) is unverifiable there"}
-           elif $state == "below" then {profiles: profiles($cfg.default // null), mode: selection_mode($cfg; null), note: "rule \($choice) floor failed there; used default"}
-           else {profiles: profiles($rule.use), mode: selection_mode($cfg; $rule)}
-           end
-         end) as $sel |
-        if $sel.reason then {id: $h.id, reason: $sel.reason}
-        else ([$sel.profiles[] | evaluate(.) | select(.eligible and ((.unranked // false) | not))]) as $elig |
-          if ($elig | length) == 0 then {id: $h.id, reason: "no rankable eligible candidate there", note: $sel.note}
-          else (ranked_choice($elig; $sel.mode)) as $pick |
-            ($pick.best) as $best |
-            if $best.runway != "through_reset"
-            then {id: $h.id, best: $best, placement_blocked: "limiting runway \($best.runway // "unknown") is not through_reset", note: $sel.note} + choice_evidence($pick)
-            else {id: $h.id, best: $best, note: $sel.note} + choice_evidence($pick)
-            end
-          end
-        end
-      end] as $evaluated |
-    ([$evaluated[] | select(.best and ((.placement_blocked // null) == null))]) as $ranked |
-    (if $local == null or $local_projected then $ranked
-     else [$ranked[] | select(.best.spendPriority - $local > 0.5)] end) as $better |
-    (if ($better | length) == 0 then
-       {home: "local",
-        reason: (if $local == null then "no second mate has rankable quota either"
-                 elif $local_projected then "no second mate has a through-reset candidate to avoid local exhaustion before reset"
-                 else "no second mate beats local spendPriority \($local) by more than 0.5" end)}
-     else ($better | max_by(.best.spendPriority)) as $top |
-       if ([$better[] | select(.best.spendPriority == $top.best.spendPriority)] | length) > 1
-       then {home: "local", reason: "second mates tie at spendPriority \($top.best.spendPriority)"}
-       else {home: $top.id,
-             reason: (if $local == null then "no local candidate is rankable; \($top.id) has spendPriority \($top.best.spendPriority)"
-                      elif $local_projected then "\($top.id) candidate runs through reset; local candidate is projected to run out before reset"
-                      else "\($top.id) spendPriority \($top.best.spendPriority) beats local \($local) by more than 0.5" end)}
-       end
-     end) as $decision |
-    $result + {placement: ($decision + {homes: $evaluated})}') || emit_error "placement resolution failed"
+  fi
 fi
 
-TEXT=$(jq -r '
+# ---- output -------------------------------------------------------------------
+# shellcheck disable=SC2016  # jq program text, not shell expansion
+RENDER_JQ='
   def flat: tostring | gsub("[\t\r\n]"; " ");
   def show($value): ($value // "-") | flat;
   def shell_arg: flat | @sh;
+  def at($c): if ($c.home // "local") == "local" then "" else "home=\($c.home | flat) " end;
+  def hm($c): "\(at($c))\($c.profile.harness | flat):\(show($c.profile.model))";
   "dispatch-resolve:",
+  (if $brief != "" then "  brief: \($brief | flat)" else empty end),
+  (if $project != "" then "  project: \($project | flat)" else empty end),
   "  status: \(.status | flat)",
-  "  model: \(show(.model))   latency_ms: \(show(.latency_ms))   tokens: \(show(.tokens.input_tokens))/\(show(.tokens.output_tokens))",
-  "  rule: \(.rule | flat) (\(.rule_when | flat))   confidence: \(.confidence | flat)",
-  "  probabilities: \([.probabilities | to_entries[] | "\(.key | flat)=\(.value | flat)"] | join(" "))",
-  (if .fallback then "  fallback: \(.fallback | flat)" else empty end),
-  (if .reason then "  reason: \(.reason | flat)" else empty end),
-  (if .selection then "  selection: \(.selection | flat)" else empty end),
-  (if .note then "  note: \(.note | flat)" else empty end),
-  (if .unranked_note then "  note: \(.unranked_note | flat)" else empty end),
-  (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
-      + (if .provider then "  provider=\(.provider | flat)" else "" end)
-      + (if .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
-      + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
-      + (if .cache then "  cached=\(.cache.ageSeconds)s old" else "" end)
-      + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
-  (.passed_over[]? | "  passed over: \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset"),
-  (if .near_tie then "  near-tie broken by configured order: "
-      + ([.near_tie[] | "\(.profile.harness | flat):\(show(.profile.model))=\(show(.spendPriority))"] | join(", "))
-      + " (within \(.near_tie_band | flat))" else empty end),
-  (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
-      + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
-      + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end)
-      + (if .chosen.profile.harness == "claude" and .chosen.profile.floor then
-           " --profile-floor-scope \(.chosen.profile.floor.scope | shell_arg) --profile-floor-min-percent \(.chosen.profile.floor.min_percent | shell_arg)"
-         else "" end) else empty end),
-  (if .placement then
-     "  placement: \(if .placement.home == "local" then "local" else "secondmate \(.placement.home | flat)" end) (\(.placement.reason | flat))",
-     (.placement.homes[] | "  home: \(.id | flat)"
-       + (if .best then "  best=\(.best.profile.harness | flat):\(show(.best.profile.model))  scope=\(show(.best.scope))  remaining=\(show(.best.pct))%  spendPriority=\(show(.best.spendPriority))  runway=\(show(.best.runway))"
-          else "  unknown: \(.reason | flat): disclosed uncertainty" end)
-       + (if .best.cache then "  cached=\(.best.cache.ageSeconds)s old" else "" end)
-       + (if .placement_blocked then "  placement-blocked=\(.placement_blocked | flat)" else "" end)
-       + (if .note then "  note=\(.note | flat)" else "" end)),
-     (.placement.homes[] | .id as $home | .passed_over[]? |
-       "  passed over: home=\($home | flat) \(.profile.harness | flat):\(show(.profile.model)): projected to run out before reset; later eligible candidate has runway through_reset"),
-     (.placement.homes[] | .id as $home | select(.near_tie) |
-       "  near-tie broken by configured order: home=\($home | flat) "
-       + ([.near_tie[] | "\(.profile.harness | flat):\(show(.profile.model))=\(show(.spendPriority))"] | join(", "))
-       + " (within \(.near_tie_band | flat))")
-   else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
-printf '%s\n' "$TEXT"
+  (if .status == "error" or .status == "off" then "  reason: \(.reason | flat)"
+   else
+    "  model: \(show(.model))   latency_ms: \(show(.latency_ms))   tokens: \(show(.tokens.input_tokens))/\(show(.tokens.output_tokens))",
+    "  rule: \(.rule | flat) (\(.rule_when | flat))   confidence: \(.confidence | flat)",
+    "  probabilities: \([.probabilities | to_entries[] | "\(.key | flat)=\(.value | flat)"] | join(" "))",
+    (if .fallback then "  fallback: \(.fallback | flat)" else empty end),
+    (if .reason then "  reason: \(.reason | flat)" else empty end),
+    (if .selection then "  selection: \(.selection | flat)" else empty end),
+    (if .note then "  note: \(.note | flat)" else empty end),
+    (if .unranked_note then "  note: \(.unranked_note | flat)" else empty end),
+    (.candidates[]? | "  candidate: \(hm(.))"
+        + (if .provider then "  provider=\(.provider | flat)" else "" end)
+        + (if .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
+        + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
+        + (if .cache then "  cached=\(.cache.ageSeconds)s old" else "" end)
+        + (if .feed then "  feed=\(.feed.ageSeconds)s old" else "" end)
+        + (if (.charged // 0) > 0 then "  charged=\(.charged) recent placement(s)" else "" end)
+        + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty"
+                     elif .eligible and ((.runway // "unknown") == "unknown") then "eligible, runway unknown: disclosed uncertainty"
+                     elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
+    (.passed_kind as $kind | .passed_over[]? | "  passed over: \(hm(.)): projected to run out before reset; "
+        + (if $kind == "pool" then "another eligible candidate in the pool has runway through_reset"
+           else "later eligible candidate has runway through_reset" end)),
+    (if .near_tie then "  near-tie broken by configured order: "
+        + ([.near_tie[] | "\(hm(.))=\(show(.spendPriority))"] | join(", "))
+        + " (within \(.near_tie_band | flat))" else empty end),
+    (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"
+        + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
+        + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end)
+        + (if .chosen.profile.harness == "claude" and .chosen.profile.floor then
+             " --profile-floor-scope \(.chosen.profile.floor.scope | shell_arg) --profile-floor-min-percent \(.chosen.profile.floor.min_percent | shell_arg)"
+           else "" end) else empty end),
+    (if .placement then
+       "  placement: \(if .placement.home == "local" then "local" else "secondmate \(.placement.home | flat)" end) (\(.placement.reason | flat))"
+     else empty end),
+    (if .pooled then
+       (.homes[] | "  home: \(.id | flat)"
+         + (if .eligible == false then "  not eligible: \(.reason | flat)"
+            elif .unavailable then "  unknown: \(.reason | flat): disclosed uncertainty"
+            elif .sel.unverifiable then "  unknown: \(.sel.unverifiable | flat) there: disclosed uncertainty"
+            else
+              (if .admission == null then "  claude-crew=unknown (its snapshot carries no crew evidence)"
+               elif .admission.unknown then "  claude-crew=unknown (\(.admission.unknown | flat))"
+               else "  claude-crew=\(.admission.count)/\(.admission.cap)"
+                 + (if (.slots // 0) > 0 then " +\(.slots) recent placement(s)" else "" end)
+                 + (if .admission.session.pct != null then "  session=\(.admission.session.pct)%" else "  session=unknown" end)
+               end)
+              + (if .cache_age != null then "  cached=\(.cache_age)s old" else "" end)
+              + (if .sel.note and .sel.source == "default" and .sel.note != "no rule matched" then "  note=\(.sel.note | flat)" else "" end)
+            end))
+     else empty end)
+   end)
+'
+
+render() { # <index>
+  local brief='' project=''
+  if [ "$BRIEF_COUNT" -gt 1 ]; then
+    brief=${BRIEFS[$1]}
+    project=${PROJECTS[$1]}
+  fi
+  jq -r --arg brief "$brief" --arg project "$project" "$RENDER_JQ" "$WORK/result.$1.json"
+}
+
+for i in "${!BRIEFS[@]}"; do
+  if jq -e '.status == "off"' "$WORK/result.$i.json" >/dev/null 2>&1 && [ "$BRIEF_COUNT" -eq 1 ]; then
+    continue
+  fi
+  if ! TEXT=$(render "$i"); then
+    echo "dispatch-resolve: error (output rendering failed)" >&2
+    TEXT=$(printf 'dispatch-resolve:\n  status: error\n  reason: output rendering failed')
+  fi
+  printf '%s\n' "$TEXT"
+done
+
+# A batch closes with the split of its placements by machine and provider.
+if [ "$BRIEF_COUNT" -gt 1 ]; then
+  for i in "${!BRIEFS[@]}"; do cat "$WORK/result.$i.json"; done | jq -rs '
+    def tally(f): group_by(f) | map("\(.[0] | f)=\(length)") | join(" ");
+    [.[] | select(.status == "clear") | .chosen] as $placed |
+    "dispatch-batch:",
+    "  briefs: \(length)   clear: \($placed | length)   other: \(length - ($placed | length))",
+    (if ($placed | length) > 0 then
+       "  machine: \($placed | tally(.home))",
+       "  provider: \($placed | tally(.provider))",
+       "  profile: \($placed | tally("\(.home):\(.profile.harness):\(.profile.model // "-")"))"
+     else empty end)'
+fi
 exit 0

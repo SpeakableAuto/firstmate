@@ -1069,8 +1069,19 @@ Neither path allows order to override a gate or treats unknown evidence as healt
 A rule-level `select` overrides the file-level value only for that rule's `use`; no match or a rule-floor fallback uses the file's policy for `default`.
 Omitting `select` everywhere preserves `quota-balanced`: the highest known `spendPriority` among passing candidates wins, and configured order only breaks a near-tie.
 A near-tie is every rankable passing candidate whose `spendPriority` is at most 0.05 below the highest; the earliest of them in configured order wins, exact ties included, and the result reports them on a `near-tie broken by configured order` line.
-Cross-home placement reports the same evidence for each affected second mate with `home=<id>`.
-The band is fixed at 0.05, one tenth of the 0.5 margin that [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) treats as material.
+Across the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines), the same profile on two machines is ordered by the higher `spendPriority`, then this machine, and each remote candidate is named with `home=<id>`.
+The band is fixed at 0.05 so that only practically equal quota defers to configured order.
+While any passing candidate has `through_reset` runway, `quota-balanced` passes over every candidate with `projected_exhaustion` runway, and the result names each one that would otherwise have won or tied on a `passed over` line.
+
+**Charging placements**
+
+Every placement is charged against its account before the next is placed, whether the next comes in the same batch or a separate call.
+The charge is one Claude crew slot on that machine for a Claude candidate, plus a fixed estimated draw of 5 percentage points from every applicable quota row of that account and 0.1 from its `spendPriority`.
+`spendPriority` falls by a draw divided by the window's remaining-time percentage, which the snapshot does not publish, so the fixed charge assumes half the window remains.
+A placement stays charged for 900 seconds, the longest a reused quota reading can be, recorded in `state/dispatch-charges.jsonl`.
+A task is keyed by its `data/<id>/` directory when its brief is `data/<id>/brief.md`, else by the brief path, so resolving the same task again replaces its own charge instead of adding to it.
+A charged Claude slot whose task already appears in that machine's live crew is not counted twice.
+The draw is an estimate to spread a burst, not a measurement; deleting the file clears every charge, for example after a decision-only test run.
 A rule can explicitly set `"select": "quota-balanced"` to retain that behavior inside an ordered file.
 Other values, including null and non-string values, are configuration errors.
 The [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy) owns manual selection and uncertainty handling.
@@ -1160,6 +1171,8 @@ A concurrency refusal lists every counted task.
 Backends without a recovery classifier retain their recorded slots conservatively until teardown removes the record.
 A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
+Typed dispatch resolution applies the same cap and five-hour floor to each machine's Claude candidates before recommending one: `bin/fm-quota-snapshot.sh` attaches that home's limits, live crew count, and session reading to every snapshot it prints, so a parent judges a remote machine from that machine's own crew and account.
+A snapshot without that evidence, or with an unprovable account, makes that machine's Claude candidates ineligible rather than assumed healthy.
 
 Admission obtains one bounded, read-only Claude quota result through the shared snapshot reader and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
 The selected Claude row must have `state.stale` explicitly `false`, including any bounded cached recovery under [Quota snapshot reuse](#quota-snapshot-reuse); an absent or malformed freshness signal is incomplete evidence and refuses admission.
@@ -1179,6 +1192,15 @@ Portable admission and spawn regressions live in `tests/fm-worker-account.test.s
 These reads default `QUOTA_AXI_MAX_AGE` to `15m`, allowing quota-axi to reuse recent successful readings and coalesce concurrent vendor requests while checking that credential selection and credential files still match.
 Set `QUOTA_AXI_MAX_AGE` explicitly to a quota-axi duration (for example `2m`, or `0` to disable ordinary reuse); quota-axi owns duration validation and its cache.
 Each remote host applies its own environment settings.
+A parent briefly reuses a remote machine's last good snapshot and discloses its age; `bin/fm-quota-snapshot.sh` owns that window.
+
+**Quota feed (config/quota-feed)**
+
+A read from a background or remote shell can miss a provider whose credential store only a desktop session can open.
+The optional local, gitignored `config/quota-feed` names, on one line, a `quota-axi --json` snapshot file that another process on the same machine refreshes from such a session; a path beginning with `~/` resolves in that machine's home directory, so the primary's value, inherited by secondmate homes, fits every machine.
+While that file is valid and younger than 900 seconds, every provider row the machine's own read could not measure is replaced by the feed's measured row for the same provider and account, measured feed rows the read lacks are added, and a failed read is replaced by the feed alone; each such row carries `firstmateFeed.ageSeconds`, which the resolver shows as `feed=<n>s old`.
+A row the read measured is never replaced, and an absent, unreadable, invalid, or older feed changes nothing.
+`fm_quota_feed_merge` in `bin/fm-quota-axi-lib.sh` owns the merge, which both the resolver's own read and `bin/fm-quota-snapshot.sh` apply before the Claude crew guard reads its session window.
 
 Only a stale Claude row with the exact endpoint rate-limit error triggers one additional Claude-only read with `--max-age`, within the original command timeout.
 Recovery and all reused Claude evidence are limited to strictly less than `900` seconds.
@@ -1201,7 +1223,11 @@ Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFI
 
 ```sh
 bin/fm-dispatch-resolve.sh data/<id>/brief.md --project <name>        # TOON block on stdout
+bin/fm-dispatch-resolve.sh data/<a>/brief.md --project <name> data/<b>/brief.md --project <name>   # one batch
 ```
+
+Several briefs in one call are one batch: each is answered and placed in order, every placement is charged against its account under **Charging placements** above before the next, and a closing `dispatch-batch:` block reports the split by machine, provider, and profile.
+A single brief resolves exactly as the first brief of a batch.
 
 **When firstmate invokes the resolver**
 
@@ -1234,6 +1260,7 @@ Example Client Ltd
 Before the request is sent, every string in it is checked: the project name, the task text, each rule's `when`, and the fixed question text.
 A match stops the request: the resolver behaves exactly as when it is off, printing one `dispatch-resolve: off (...; nothing sent)` line on stderr and nothing on stdout, making no network or quota call, and exiting 0, so firstmate dispatches through its existing intake.
 A list that is present but not a readable regular file also stops the request the same way rather than sending unchecked text.
+In a batch, only the matching brief is withheld: its block reports status `off` with the same reason, and the other briefs proceed.
 That one diagnostic names the list line number at most and never prints the listed value or the matching text.
 
 **Missing or invalid rules**
@@ -1248,7 +1275,7 @@ After the answer, code applies all remaining checks and ranking:
 - Each candidate's `provider` and `floor`.
 - Every applicable account-wide and model/product row returned by the [shared bounded quota snapshot read](#quota-snapshot-reuse).
 - The [configured candidate selection policy](#crew-dispatch-profiles-configcrew-dispatchjson), using each candidate's limiting quota row and retaining the existing rankability gates.
-- With `--project`, [cross-home placement](../.agents/skills/quota-array-dispatch/SKILL.md#cross-home-placement) for a `clear` or nothing-rankable result: the same candidates are evaluated against each eligible remote second mate's snapshot from `bin/fm-quota-snapshot.sh --secondmate`, and the result gains one `placement:` line plus one `home:` line per second mate.
+- With `--project`, the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines): every machine that has the project contributes its candidates, judged against its own snapshot from `bin/fm-quota-snapshot.sh --secondmate` and its own Claude crew evidence, and the whole set is ranked together with no home-machine margin; a pooled result gains one `placement:` line naming the chosen machine and why, plus one `home:` line per machine.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
 
@@ -1294,7 +1321,7 @@ The tool never replaces firstmate's judgment, `quota-array-dispatch`, the captai
 By accepted design, a `clear` result does not enforce catalog/authentication, reasoning-class, or completion-runway gates.
 
 Firstmate passes its profile line unless it states a reason to override, such as the brief's reasoning class or an eligible-unranked-candidate note; every non-clear result returns to the full existing intake.
-`placement: secondmate <id>` means firstmate routes the task to that second mate once its scope fits the work, instead of spawning the local profile; `placement: local`, an absent line, or an unknown `home:` keeps the local result unchanged.
+`placement: secondmate <id>` means firstmate routes the task to that second mate with the published profile once its scope fits the work, instead of spawning it here; `placement: local` or an absent line spawns the profile here, and an unknown `home:` line is disclosed uncertainty about that machine only.
 
 **Key handling and fixed settings**
 
