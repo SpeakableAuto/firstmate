@@ -17,7 +17,9 @@ printf '%s\n' "$*" >> "$HOME/docker-calls"
 if [ "$1" = context ]; then
   cat "$HOME/endpoint"
 else
-  [ ! -e "$HOME/docker-fail" ]
+  [ ! -e "$HOME/docker-fail" ] || exit 1
+  if [ "$3" = image ] && [ -e "$HOME/image-fail" ]; then exit 1; fi
+  [ "$3" != builder ] || [ ! -e "$HOME/builder-fail" ]
 fi
 SH
 chmod +x "$TMP_ROOT/fakebin/"*
@@ -94,7 +96,7 @@ FM_HOME="$case_home/fm" FM_STATE_OVERRIDE="$case_home/fm/state" \
     . "$1"
     fm_lock_acquire_wait "$2"
     printf "ready\n" > "$3"
-    sleep 3
+    while [ ! -e "$3.release" ]; do sleep 0.1; done
     fm_lock_release "$2"
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$case_home/fm/state/.wake-queue.lock" "$case_home/alert-lock-ready" &
 alert_holder=$!
@@ -108,14 +110,28 @@ if [ ! -s "$case_home/alert-lock-ready" ]; then
   fail 'alert lock holder did not start'
 fi
 if run_guard; then
+  touch "$case_home/alert-lock-ready.release"
   wait "$alert_holder" 2>/dev/null || true
   fail 'missed starting alert reported success'
 fi
+touch "$case_home/alert-lock-ready.release"
 wait "$alert_holder"
 [ ! -e "$case_home/user/.npm/_cacache/cache" ] || fail 'blocked starting alert prevented cleanup'
+[ "$(find "$case_home/fm/state/.disk-guard-alerts" -name '*.alert' | wc -l | tr -d ' ')" = 2 ] \
+  || fail 'timed-out alerts were not persisted'
+echo 20971520 > "$case_home/user/free"
+run_guard --dry-run
+[ ! -e "$case_home/fm/state/.wake-queue" ] || fail 'dry-run retried pending alerts'
+run_guard
+grep -q 'low space:' "$case_home/fm/state/.wake-queue" || fail 'starting alert not retried'
 grep -q 'cleanup complete:.*failures=1' "$case_home/fm/state/.wake-queue" \
-  || fail 'result alert did not durably report the missed starting alert'
-pass 'a blocked starting alert is bounded and cleanup remains reported'
+  || fail 'result alert not retried after disk recovered'
+[ "$(find "$case_home/fm/state/.disk-guard-alerts" -name '*.alert' | wc -l | tr -d ' ')" = 0 ] \
+  || fail 'delivered alerts retained for retry'
+cp "$case_home/fm/state/.wake-queue" "$TMP_ROOT/delivered-alerts"
+run_guard
+cmp "$case_home/fm/state/.wake-queue" "$TMP_ROOT/delivered-alerts" || fail 'delivered alerts repeated'
+pass 'both timed-out alerts survive and retry once on a healthy check; dry-run stays read-only'
 
 new_case dry_run
 seed_caches
@@ -155,6 +171,76 @@ run_guard
 [ -f "$case_home/user/backup.tgz" ] || fail 'followed child symlink'
 pass 'cache child symlinks do not delete their targets'
 
+# Inject replacements at filesystem-operation boundaries in the public cleaner.
+# These are real renames/links; no filesystem result or deletion is stubbed.
+python3 - "$ROOT/bin/fm-disk-cache-clear.py" "$TMP_ROOT" <<'PY'
+import os
+import runpy
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+clean = runpy.run_path(sys.argv[1])["clear_cache"]
+base = Path(sys.argv[2]).resolve()
+for boundary in ("listdir", "open", "unlink"):
+    for target in (".npm", ".npm/_cacache", ".npm/_cacache/child"):
+        for replacement in ("link", "directory"):
+            home = base / (boundary + target.replace("/", "-") + replacement)
+            cache = home / ".npm/_cacache"
+            (cache / "child").mkdir(parents=True)
+            (cache / "child/keep").write_text("cache")
+            victim = home / "preserved"
+            (victim / "_cacache/child").mkdir(parents=True)
+            (victim / "child").mkdir()
+            for name in ("keep", "child/keep", "_cacache/child/keep"):
+                (victim / name).write_text("protected")
+            original = home / target
+            moved = home / "moved"
+            triggered = []
+            real = getattr(os, boundary)
+            listed_inode = os.stat(original if target.endswith("/child") else cache).st_ino
+
+            def swap():
+                if triggered:
+                    return
+                triggered.append(True)
+                original.rename(moved)
+                if replacement == "link":
+                    original.symlink_to(victim, target_is_directory=True)
+                else:
+                    (original / "_cacache/child").mkdir(parents=True)
+                    (original / "child").mkdir()
+                    for name in ("keep", "child/keep", "_cacache/child/keep"):
+                        (original / name).write_text("replacement")
+
+            def operation(*args, **kwargs):
+                # listdir: cache opened and validated, before enumerating it.
+                # open: child stat validated, before its no-follow open.
+                # unlink: all identity checks passed, immediately before removal.
+                if boundary == "listdir" and os.fstat(args[0]).st_ino == listed_inode:
+                    swap()
+                elif boundary == "open" and args[0] == "child":
+                    swap()
+                elif boundary == "unlink":
+                    swap()
+                return real(*args, **kwargs)
+
+            try:
+                with patch.object(os, boundary, operation):
+                    clean(str(home), ".npm/_cacache")
+            except OSError:
+                pass
+            else:
+                raise AssertionError(("replacement was not refused", boundary, target, replacement))
+            assert triggered, (boundary, target, replacement)
+            for name in ("keep", "child/keep", "_cacache/child/keep"):
+                assert (victim / name).read_text() == "protected"
+                if replacement == "directory":
+                    assert (original / name).read_text() == "replacement"
+print("18 real directory replacements preserved data outside pinned cache handles")
+PY
+pass 'ancestor, cache-root and child replacements cannot redirect deletion'
+
 new_case remote_docker
 printf 'cache=docker\n' > "$case_home/fm/config/disk-guard"
 echo tcp://remote:2375 > "$case_home/user/endpoint"
@@ -169,7 +255,18 @@ touch "$case_home/user/docker-fail"
 if run_guard; then fail 'Docker failure reported success'; fi
 [ ! -e "$case_home/user/.npm/_cacache/cache" ] || fail 'Docker failure prevented other cleanup'
 grep -q 'failures=1' "$case_home/fm/state/.wake-queue" || fail 'Docker failure not alerted'
-pass 'Docker failures alert while other caches are processed'
+[ "$(wc -l < "$case_home/user/docker-calls" | tr -d ' ')" = 3 ] || fail 'image failure skipped builder prune'
+pass 'Docker failures alert while both prunes and other caches are processed'
+
+for prune in image builder; do
+  new_case "${prune}_failure"
+  printf 'cache=docker\n' > "$case_home/fm/config/disk-guard"
+  touch "$case_home/user/$prune-fail"
+  if run_guard; then fail "$prune failure reported success"; fi
+  cmp "$TMP_ROOT/expected-docker" "$case_home/user/docker-calls" || fail "$prune failure skipped a prune"
+  grep -q 'failures=1' "$case_home/fm/state/.wake-queue" || fail "$prune failure not alerted"
+done
+pass 'each Docker prune failure is retained without skipping the other prune'
 
 new_case measurement_failure
 seed_caches

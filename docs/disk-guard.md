@@ -21,13 +21,17 @@ cache=docker
 
 Omit any cache the machine should not clean.
 The npm target uses the standard home cache only; custom npm cache locations are not followed.
+Local directory cleanup requires Python 3 with POSIX directory-descriptor support (macOS and Linux).
+It opens each cache ancestor without following symlinks and keeps deletion relative to pinned directory handles, refusing detected replacements.
 For Docker, use a local Unix socket context and ensure Docker is available in the scheduled job's environment.
 An unavailable Docker daemon is reported as a cleanup failure while other configured caches are still processed.
+Both allowed Docker prunes are attempted even when one fails.
 
 Run the installed script with `FM_HOME` set and `--dry-run` first.
 Dry-run measures real space and prints the planned targets only when below threshold; it performs no cleanup or alert writes.
 A successful cleanup check can still leave the disk below threshold; inspect the before/after values in the result alert.
-The next scheduled check retries while space remains low.
+The next scheduled check retries cleanup while space remains low.
+Pending alerts are retried even after space recovers; see the script header for persistence and delivery semantics.
 
 ## Install a local launchd agent
 
