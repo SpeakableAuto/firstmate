@@ -182,8 +182,10 @@ watchdog_tick() {
   if [ "$VERDICT" = clear ]; then
     # Break pending observation continuity without releasing a claim or hold.
     # Healthy panes with no incident need no clean-window bookkeeping.
-    watchdog_update '.since=0'
-    if [ -z "$oldhash" ] && [ "$acted" = false ] && [ -z "$held" ]; then return; fi
+    if [ "$acted" = false ] && [ -z "$held" ]; then
+      watchdog_update '.hash="" | .since=0'
+      return
+    fi
     clean=$(printf '%s' "$RECORD" | jq -r .clean)
     if [ "$clean" -eq 0 ] || [ "$HASH" != "$(printf '%s' "$RECORD" | jq -r .clean_hash)" ]; then
       watchdog_update --argjson now "$NOW" --arg hash "$HASH" '.clean=$now | .clean_hash=$hash'

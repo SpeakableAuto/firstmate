@@ -74,13 +74,14 @@ check "$SENT" 1 'transient clear frame does not release incident claim'
 reset_case
 watchdog_tick
 PANE=$CLEAR; TICK=1005; watchdog_tick
-PANE=$ERROR; TICK=1011; watchdog_tick
-check "$SENT" 0 'returning error cannot reuse time before a clear frame'
-check "$(jq -r .since "$DIR/incident.json")" 1011 'returning error starts a fresh observation window'
+PANE="${ERROR/ENOTFOUND/ECONNRESET}"; TICK=1011; watchdog_tick
+check "$SENT" 0 'different error cannot reuse time before a clear frame'
+check "$(jq -r .since "$DIR/incident.json")" 1011 'different error starts a fresh observation window'
+check "$(held)" '' 'different error after clear is a new incident'
 TICK=1020; watchdog_tick
-check "$SENT" 0 'returning error waits the entire new idle interval'
+check "$SENT" 0 'different error waits the entire new idle interval'
 TICK=1021; watchdog_tick
-check "$SENT" 1 'returning stable error recovers after a full fresh interval'
+check "$SENT" 1 'different stable error recovers after a full fresh interval'
 # Old transcript text must not impersonate the live footer or spinner.
 for historical in '● The footer says esc to interrupt' '✻ Thinking… (12s · old turn)'; do
   reset_case
