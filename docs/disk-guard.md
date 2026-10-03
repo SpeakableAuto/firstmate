@@ -73,5 +73,5 @@ Do not install as root or share a guard between different Firstmate homes on the
 
 ## Verification
 
-Run `bash bin/fm-test-run.sh tests/fm-disk-guard.test.sh tests/fm-brief.test.sh` for the deterministic cache-boundary, alert and generated-brief checks.
+Run `bash bin/fm-test-run.sh tests/fm-disk-guard.test.sh` for the deterministic cache-boundary and alert checks.
 The tests use temporary homes and stub disk/Docker commands; they do not clean the operator's caches or install a launchd job.
