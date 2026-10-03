@@ -6522,9 +6522,9 @@ test_afk_one_shot_never_hands_off_captain_held_under_away_record() {
 }
 
 # --- declared waits are condition-aware: `until <UTC ISO 8601>` --------------
-# A paused: line naming when the wait clears is rechecked at that time when it
-# falls within the flat cadence, but a distant or mistyped time cannot extend
-# the cadence, and a time that has passed is rechecked at once.
+# A paused: line naming when the wait clears is not rechecked before that time,
+# even past the flat cadence or eight days ahead, and a time that has passed is
+# rechecked at once.
 paused_until_fixture() {  # <name> <until-epoch> <status-age-secs>
   local name=$1 until=$2 age=$3 dir state statusf window key back
   dir=$(make_case "$name"); state="$dir/state"
@@ -6567,19 +6567,32 @@ test_paused_until_near_future_is_quiet_before_the_cadence() {
   pass "a declared wait naming a near-future until time stays quiet until that time"
 }
 
-test_paused_until_wrong_year_is_bounded_by_the_cadence() {
+test_paused_until_beyond_the_cadence_is_quiet_until_that_time() {
   local dir state
-  dir=$(paused_until_fixture until-wrong-year "$(( $(date +%s) + 31536000 ))" 300); state="$dir/state"
+  dir=$(paused_until_fixture until-beyond-cadence "$(( $(date +%s) + 900 ))" 300); state="$dir/state"
   until_watch "$dir" 240
-  wait_for_exit "$UNTIL_PID" 100 \
-    || { reap "$UNTIL_PID"; fail "a wrong-year declared time silenced the wait beyond the recheck cadence"; }
-  grep -F 'stale: test:fm-until' "$dir/watch.out" >/dev/null \
-    || fail "the bounded wrong-year recheck did not print a stale wake: $(cat "$dir/watch.out")"
-  grep -F 'declared time is beyond the recheck cadence' "$dir/watch.out" >/dev/null \
-    || fail "the bounded recheck gave the wrong reason: $(cat "$dir/watch.out")"
-  grep -F 'declared clearing time has passed' "$dir/watch.out" >/dev/null \
-    && fail "the bounded recheck falsely claimed the future declared time passed"
-  pass "a wrong-year declared time cannot silence the watcher beyond the recheck cadence"
+  if ! wait_poll_cycle "$state" "$UNTIL_PID" || ! wait_poll_cycle "$state" "$UNTIL_PID"; then
+    reap "$UNTIL_PID"; fail "a declared wait was rechecked past the cadence before its declared time: $(cat "$dir/watch.out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] || fail "a declared wait past the cadence was queued for a recheck before its declared time"
+  grep -F 'declared time not reached' "$state/.watch-triage.log" >/dev/null \
+    || fail "the absorb past the cadence did not cite the declared time in the triage log"
+  reap "$UNTIL_PID"
+  pass "a declared wait whose until time lies beyond the recheck cadence stays quiet until that time"
+}
+
+test_paused_until_eight_days_ahead_stays_quiet() {
+  local dir state
+  dir=$(paused_until_fixture until-eight-days "$(( $(date +%s) + 691200 ))" 300); state="$dir/state"
+  until_watch "$dir" 240
+  if ! wait_poll_cycle "$state" "$UNTIL_PID" || ! wait_poll_cycle "$state" "$UNTIL_PID"; then
+    reap "$UNTIL_PID"; fail "an eight-day-ahead declared time was rechecked before that time: $(cat "$dir/watch.out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] || fail "an eight-day-ahead declared time was queued past the flat cadence"
+  grep -F 'declared time not reached' "$state/.watch-triage.log" >/dev/null \
+    || fail "the eight-day-ahead absorb did not cite the declared time in the triage log"
+  reap "$UNTIL_PID"
+  pass "an eight-day-ahead declared time stays quiet until that time"
 }
 
 test_paused_until_that_passed_is_rechecked_before_the_cadence() {
@@ -6749,5 +6762,6 @@ test_backlog_hold_never_rechecked_while_away_record_exists
 test_afk_one_shot_never_hands_off_captain_held_under_away_record
 test_captain_held_rechecked_under_a_quiet_record
 test_paused_until_near_future_is_quiet_before_the_cadence
-test_paused_until_wrong_year_is_bounded_by_the_cadence
+test_paused_until_beyond_the_cadence_is_quiet_until_that_time
+test_paused_until_eight_days_ahead_stays_quiet
 test_paused_until_that_passed_is_rechecked_before_the_cadence

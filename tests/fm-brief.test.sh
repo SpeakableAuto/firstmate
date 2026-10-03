@@ -944,6 +944,53 @@ test_ship_and_scout_teach_validation_round_pause() {
   pass "fm-brief.sh: ship and scout scaffolds teach validation-round pauses"
 }
 
+# Every pause a scaffold tells a worker to write carries its until-time, and
+# that line, filled in as the worker would, is read back by the classifier as a
+# timed wait rather than a legacy un-timed one.
+test_every_scaffold_pause_carries_an_until_time() {
+  local home kind id brief templates template line count due expected
+  home="$TMP_ROOT/pause-until-home"
+  mkdir -p "$home/data"
+  for kind in no-mistakes direct-PR local-only scout; do
+    id="brief-pause-until-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode "$kind" >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_present "$brief" "$kind: brief was not scaffolded"
+    # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
+    assert_grep 'Every `paused:` line must carry `until <YYYY-MM-DDTHH:MMZ>`' "$brief" \
+      "$kind brief did not require an until-time on every pause"
+    templates=$(grep -o "\`paused \[at=<epoch>\]:[^\`]*\`" "$brief" | tr -d '`' | sort -u)
+    count=0
+    while IFS= read -r template; do
+      [ -n "$template" ] || continue
+      case "$template" in
+        *'until <YYYY-MM-DDTHH:MMZ>'*) ;;
+        *) fail "$kind brief instructs a pause with no until-time: $template" ;;
+      esac
+      due=2030-01-02T03:04Z
+      expected=$(bash -c '. "$1"; fm_utc_iso_to_epoch "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$due")
+      line=${template//<YYYY-MM-DDTHH:MMZ>/$due}
+      line=${line//<epoch>/$(date +%s)}
+      line=$(printf '%s' "$line" | sed -e 's/{[^}]*}/waiting on the build/g')
+      [ "$(bash -c '. "$1"; status_paused_until "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$line")" = "$expected" ] \
+        || fail "$kind brief pause template does not read back as a timed wait: $line"
+      count=$((count + 1))
+    done <<TEMPLATES
+$templates
+TEMPLATES
+    [ "$count" -ge 1 ] || fail "$kind brief instructed no pause template at all"
+  done
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SECONDMATE_CHARTER='sample reviews' \
+    "$ROOT/bin/fm-brief.sh" pause-until-mate --secondmate --no-projects >/dev/null 2>&1
+  assert_grep 'always naming when it clears' "$home/data/pause-until-mate/brief.md" \
+    "secondmate charter did not require an until-time on every pause"
+  pass "fm-brief.sh: every scaffolded pause carries an until-time the classifier reads"
+}
+
 test_scout_and_secondmate_load_decision_hold_policy() {
   local home scout charter
   home="$TMP_ROOT/decision-policy-home"
@@ -1348,6 +1395,7 @@ test_secondmate_marked_request_reporting_contract
 test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
+test_every_scaffold_pause_carries_an_until_time
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor

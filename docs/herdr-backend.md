@@ -749,7 +749,7 @@ The watcher maps the pane back to the task and skips these:
 
 - Secondmate endpoints.
 - Declared `paused:` waits, because the worker's declared wait already accounts for its quiet.
-  It is left to the watcher's own bounded pause cadence.
+  It is left to the watcher's condition-aware due-time or fallback-cadence routing.
 - Verified `captain-held` transfers.
   A captain-held transfer remains silent without rechecks while the away-posture record exists.
 

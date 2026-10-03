@@ -62,8 +62,8 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
   # moment or the command, so the stale wake ended in the recovery playbook's
   # "nothing to recover".
   case "$out_a" in
-    *"A worker whose pull request has landed is finished, not stuck"*"\`check: merge landed:\` wake names exactly that moment"*"\`bin/fm-teardown.sh <task>\` with no flags"*"never forced, worked around, or repaired by hand"*) ;;
-    *) fail "branch prompt lost the landed-work cleanup rule" ;;
+    *"A worker whose pull request has landed is finished, not stuck"*"\`check: merge landed:\` wake names exactly that moment"*"if \`state/<task>.meta\` is gone, or the drained records delivered an \`auto-retire-<task>\` outcome row, skip the second teardown and report the task as already retired, never as a teardown refusal"*"\`bin/fm-teardown.sh <task>\` with no flags"*"never forced, worked around, or repaired by hand"*) ;;
+    *) fail "branch prompt lost the already-retired check or guarded landed-work cleanup rule" ;;
   esac
   case "$out_a" in
     *"A second mate's status log is a relay channel for its child work"*"retiring a second mate is MAIN's alone"*"Report a second mate's signal wake from the status lines that wake newly presents"*"A second mate's stale wake is a liveness event: report it even when it presents no new status lines."*) ;;

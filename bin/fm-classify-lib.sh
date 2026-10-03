@@ -99,8 +99,9 @@ FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|
 # they do not identify a separate classification or liveness source.
 # bin/fm-brief.sh owns worker-facing declaration and resolution instructions.
 # Unlike `blocked:` (stuck, firstmate must help), an idle `paused:` pane is EXPECTED, so
-# the stale path bounds repeats instead of escalating a possible wedge; a live
-# idle worker can still surface a first-sight stale alert. It is
+# the stale path bounds repeats instead of escalating a possible wedge; an
+# untimed legacy pause can still surface a first-sight stale alert, while a
+# valid future `until` suppresses that recheck until it is due. It is
 # deliberately NOT in the captain-relevant set above: a pause is a "stop
 # wedge-nagging this idle pane" signal, not work to keep surfacing. This constant
 # is the ONE definition of the verb; both the watcher and the daemon read it here
@@ -114,11 +115,12 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # invisibly - it re-surfaces once for a recheck every window. Four hours by
 # default: a declared wait is by definition expected to clear on its own, so a
 # recheck is a backstop, not progress, and an hourly one only produced nagging
-# (the 2026-09-07 away-window audit). A worker that knows when its wait clears
-# names it with `until` (status_paused_until below) and is rechecked at that
-# time or this cadence bound, whichever comes first. Both consumers read
-# FM_PAUSE_RESURFACE_SECS with this default so
-# the cadence has one owner. An item held for the captain is not rechecked at all
+# (the 2026-09-07 away-window audit). The status protocol asks every pause to
+# name when it clears with `until` (status_paused_until below); such a pause is
+# not rechecked before that time, however far past this cadence it lies, and
+# is rechecked once as soon as it passes. This cadence remains the recheck for
+# a legacy pause that names no time or whose time is malformed. Both consumers
+# read FM_PAUSE_RESURFACE_SECS with this default so the cadence has one owner. An item held for the captain is not rechecked at all
 # while the away-posture record exists (bin/fm-watch.sh owns that rule).
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=14400
@@ -346,10 +348,11 @@ status_is_captain_held() {  # <status-line>
 # 0 if a status line declares either an external-wait pause or a verified
 # captain-held transfer.
 # Both declarations can intentionally leave a crew's endpoint idle, so both
-# supervisors give them one cadence: the away-mode daemon defers the wedge and
-# ages a pause marker instead, and the watcher applies its bounded pause cadence
-# once pause_state_class has admitted the wait (fm-watch.sh owns which liveness
-# evidence each kind of crew must supply for that).
+# supervisors give them one declared-wait route: the away-mode daemon defers the
+# wedge and ages a pause marker instead, and the watcher applies either the
+# pause's valid due time or the fallback cadence once pause_state_class has
+# admitted the wait (fm-watch.sh owns which liveness evidence each kind of crew
+# must supply for that).
 status_is_paused_or_captain_held() {  # <status-line>
   local line=$1
   status_is_paused "$line" || status_is_captain_held "$line"
@@ -415,13 +418,14 @@ _fm_status_declared_wait_scan() {  # <resolve-verb> <legacy-captain-re>
   return 1
 }
 
-# A condition-aware declared wait: a `paused:` line may say WHEN it expects to
+# A condition-aware declared wait: a `paused:` line says WHEN it expects to
 # clear with `until <YYYY-MM-DDTHH:MM[:SS]Z>` anywhere in its text (UTC only, so
-# no local-zone guess is ever recorded). Prints that time as epoch seconds so a
+# no local-zone guess is ever recorded). bin/fm-brief.sh's status protocol
+# requires one on every pause. Prints that time as epoch seconds so a
 # supervisor rechecks the wait when the worker said it would clear instead of on
-# the flat cadence; returns 1 when the line is not a pause or declares no time,
-# or the time is malformed, so a bad token falls back to the cadence rather than
-# silencing the wait.
+# the flat cadence; returns 1 when the line is not a pause or declares no time
+# (a legacy un-timed pause), or the time is malformed, so a bad token falls back
+# to the cadence rather than silencing the wait.
 status_paused_until() {  # <status-line> -> epoch on stdout
   local line=$1 token
   status_is_paused "$line" || return 1
