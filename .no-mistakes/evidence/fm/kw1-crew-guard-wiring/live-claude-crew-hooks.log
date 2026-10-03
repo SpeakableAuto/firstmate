@@ -1,0 +1,57 @@
+__LAB__=<LAB>
+__SESSION__=<FM-LAB-SESSION>
+
+SCENARIO ship guard
+scaffolded: <LAB>/data/live-hook-ship/brief.md (ship, mode=local-only; replace {TASK} and {FIRSTMATE_SPEC})
+fm-gate-refuse: gate agent lifecycle permitted only against lab home <LAB>
+Claude quota: cached reading 1s old
+notice: live-hook-ship ships mode=local-only while the standing posture for hooks-product is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+spawned live-hook-ship harness=claude kind=ship mode=local-only yolo=off window=<FM-LAB-SESSION>:w1:p2 worktree=<HOME>/.treehouse/hooks-product-1cf470/1/hooks-product
+ship meta: kind=ship harness=claude backend=herdr
+ship emitted hook model: {"UserPromptSubmit":1,"Stop":1,"StopFailure":1,"SessionEnd":1,"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"<HOME-LOCAL-GUARD>"}]}]}
+ship hook input: {"hook_event_name":"PreToolUse","tool_name":"Bash","command":"pwd -P && git rev-parse --show-toplevel"}
+ship side effect blocked: yes
+ship pane denial excerpt: not captured because this Herdr command returned plain terminal text rather than JSON
+
+SCENARIO scout guard and relaunch
+scaffolded: <LAB>/data/live-hook-scout/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+fm-gate-refuse: gate agent lifecycle permitted only against lab home <LAB>
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Claude quota: cached reading 24s old
+spawned live-hook-scout harness=claude kind=scout window=<FM-LAB-SESSION>:w1:p3 worktree=<HOME>/.treehouse/hooks-product-1cf470/2/hooks-product
+scout first launch hook input: {"hook_event_name":"PreToolUse","tool_name":"Bash","command":"ls -la '<LAB>/state/live-hook-scout.inbox'/*.msg 2>/dev/null | head -20 || echo \"No messages in steering inbox\""}
+scout first launch side effect blocked: yes
+scout first emitted hook model: {"UserPromptSubmit":1,"Stop":1,"StopFailure":1,"SessionEnd":1,"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"<HOME-LOCAL-GUARD>"}]}]}
+fm-gate-refuse: gate agent lifecycle permitted only against lab home <LAB>
+Claude quota: cached reading 48s old
+fm-gate-refuse: gate agent lifecycle permitted only against lab home <LAB>
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+Claude quota: cached reading 53s old
+relaunched live-hook-scout harness=claude from=claude model=haiku effort=default backend=herdr endpoint=<FM-LAB-SESSION>:w1:p3 worktree=<HOME>/.treehouse/hooks-product-1cf470/2/hooks-product
+scout relaunch hook input: {"hook_event_name":"PreToolUse","tool_name":"Bash","command":"ls -la '<LAB>/state/live-hook-scout.inbox/'"}
+scout relaunch side effect blocked: yes
+scout relaunch emitted hook model: {"UserPromptSubmit":1,"Stop":1,"StopFailure":1,"SessionEnd":1,"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"<HOME-LOCAL-GUARD>"}]}]}
+
+SCENARIO malformed Claude policy fails closed
+scaffolded: <LAB>/data/live-hook-bad/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+malformed spawn rc: 1
+malformed refusal: error: config/claude-crew-hooks.json must be a readable JSON object mapping Claude hook event names to arrays of matcher-group objects whose hooks carry string type and command fields, and jq must be installed to apply it
+malformed created endpoint/worktree/task/busy artifacts: no
+
+SCENARIO malformed Claude policy ignored by Codex
+scaffolded: <LAB>/data/live-hook-codex/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+fm-gate-refuse: gate agent lifecycle permitted only against lab home <LAB>
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+spawned live-hook-codex harness=codex kind=scout window=<FM-LAB-SESSION>:w1:p4 worktree=<HOME>/.treehouse/hooks-product-1cf470/3/hooks-product
+codex meta: kind=scout harness=codex backend=herdr
+
+GLOBAL ISOLATION
+operator Claude settings unchanged: yes (43cb9f4277cbe15dc7377903ac1998c0c8478dbeb55eaffcb6594b81adc26d80)
+all live assertions passed
+cleanup: lab home removed; named Herdr session teardown requested

@@ -1,0 +1,12 @@
+__LAB__=<LAB>
+__SESSION__=<FM-LAB-SESSION>
+scaffolded: <LAB>/data/live-exact-deny/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+fm-gate-refuse: gate agent lifecycle permitted only against lab home <LAB>
+Claude quota: cached reading 9s old
+spawned live-exact-deny harness=claude kind=scout window=<FM-LAB-SESSION>:w1:p2 worktree=<HOME>/.treehouse/exact-denial-23117a/1/exact-denial
+exact guarded tool input: {"hook_event_name":"PreToolUse","tool_name":"Bash","command":"touch <LAB>/config/forbidden-side-effect"}
+forbidden side-effect file exists: no
+emitted ordering: Firstmate UserPromptSubmit=1 Stop=1; home PreToolUse=1
+worker-visible denial excerpt:
+exact denial assertions passed
+cleanup: disposable home and named Herdr lab removed
