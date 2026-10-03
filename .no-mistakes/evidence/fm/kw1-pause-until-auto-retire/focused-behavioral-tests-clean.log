@@ -1,0 +1,38 @@
+$ focused daemon pause-until behavior
+ok - away supervisor forwards due-program checks through existing escalation transport
+ok - housekeeping honors near and eight-day future times and rechecks a passed one at once
+$ focused automatic-retirement integration behaviors
+ok - a missing teardown startup source refuses before cleanup
+ok - an unreadable teardown startup source refuses before cleanup
+ok - a missing adapter sibling refuses before cleanup
+ok - a forced descendant with a missing adapter sibling refuses before cleanup
+ok - a forced secondmate with a missing own adapter sibling refuses before child cleanup
+ok - present required sources still reach the ordinary teardown refusal
+ok - local-only worktree with HEAD on a fork remote is torn down and the home summary is refreshed
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no live watcher process holds this home lock (last beat: 1s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ok - teardown closes its own backlog item before reporting success
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no live watcher process holds this home lock (last beat: 0s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ok - teardown honors config/backlog-backend=manual and still finishes cleanly
+ok - local-only worktree with truly unpushed work is refused (safety preserved)
+ok - local-only worktree with work merged into local main is torn down (no regression)
+ok - no-mistakes worktree with HEAD on origin is torn down (no regression)
+ok - no-mistakes worktree with genuinely unlanded work is refused (safety preserved)
+ok - local-only worktree with unpushed work is torn down under --force (escape hatch)
+ok - fm-pr-check publishes the PR-ready line on a secondmate's parent channel once
+ok - a secondmate home's teardown delivers the child's final line or refuses until it can
+ok - teardown completes when an exact busy-state sidecar is already absent
+ok - herdr teardown removes pane-owned escalation dedupe state
+ok - herdr flat teardown refuses before returning the isolated copy under lock contention and the retry completes cleanly
+ok - herdr flat teardown never erases records when pane presence is unparseable

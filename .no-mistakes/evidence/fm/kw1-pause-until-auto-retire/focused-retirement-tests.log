@@ -1,0 +1,7 @@
+$ focused automatic-retirement integration behaviors
+ok - auto-retire cleans up a task whose work has landed and reports it durably
+ok - auto-retire refuses unlanded work, leaves it untouched, and reports the refusal once
+ok - auto-retire calls plain teardown only for a live non-secondmate task and reports each outcome once
+ok - auto-retire ignores and preserves unsafe refusal markers
+$ focused captain-close retirement behavior
+ok - a closing captain answer retires the task's worker; a release does not

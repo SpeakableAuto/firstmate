@@ -1,0 +1,23 @@
+$ FM_TEST_ONLY=test_paused_until_eight_days_ahead_stays_quiet tests/fm-watch-triage.test.sh
+ok - an eight-day-ahead declared time stays quiet until that time
+$ focused daemon pause-until behavior
+bash: test_housekeeping_declared_time_controls_pause_recheck: command not found
+$ focused automatic-retirement integration behaviors
+sed: 1: "/^test_afk_start_refuse ...": expected context address
+bash: test_auto_retire_cleans_up_landed_work: command not found
+sed: 1: "/^test_dirty_worktree_r ...": expected context address
+bash: test_auto_retire_never_touches_unlanded_work: command not found
+bash: test_auto_retire_contract_without_teardown_side_effects: command not found
+bash: test_auto_retire_refuses_unsafe_refusal_markers: command not found
+$ focused captain-close retirement behavior
+bash: test_closing_answer_retires_the_task_worker: command not found
+sed: 1: "/^test_uninventoried_re ...": expected context address
+$ focused daemon pause-until behavior
+bash: test_housekeeping_declared_time_controls_pause_recheck: command not found
+$ focused automatic-retirement integration behaviors
+bash: test_auto_retire_cleans_up_landed_work: command not found
+bash: test_auto_retire_never_touches_unlanded_work: command not found
+bash: test_auto_retire_contract_without_teardown_side_effects: command not found
+bash: test_auto_retire_refuses_unsafe_refusal_markers: command not found
+$ focused captain-close retirement behavior
+bash: test_closing_answer_retires_the_task_worker: command not found

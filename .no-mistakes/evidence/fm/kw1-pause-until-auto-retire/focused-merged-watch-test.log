@@ -1,0 +1,5 @@
+ok - raw-byte parser accepts canonical URLs and rejects the complete adversarial matrix
+ok - GitLab merge requests are followed on any instance and never wake falsely
+ok - the Gerrit watch wakes only on an explicit merged status and never on submittability
+ok - Gerrit arming records no patch set revision and the merge path refuses to submit
+ok - Gerrit arming accepts a published HEAD only by the change's current patch set tree

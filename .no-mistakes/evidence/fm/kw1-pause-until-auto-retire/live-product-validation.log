@@ -1,0 +1,19 @@
+A new version of treehouse is available: v2.1.1 → v3.1.2
+Run "treehouse update" to update
+
+🌳 Setting up worktree...
+🌳 Leased worktree at ~/.no-mistakes/worktrees/02f7ed18429b/01M41HZBJJ985JTD7H5P2PXBRZ/.nm-treehouse-probe/.treehouse/.nm-treehouse-probe-b43be8/1/.nm-treehouse-probe. Run 'treehouse return ~/.no-mistakes/worktrees/02f7ed18429b/01M41HZBJJ985JTD7H5P2PXBRZ/.nm-treehouse-probe/.treehouse/.nm-treehouse-probe-b43be8/1/.nm-treehouse-probe' to release it.
+PASS live watcher: eight-day timed pause stayed quiet beyond its 2s cadence
+PASS live watcher: untimed legacy pause resurfaced on its 2s cadence
+PASS live away daemon: old marker stayed quiet before eight-day until-time
+PASS live auto-retire guard: unlanded work, task metadata, and pane stayed untouched
+PASS live auto-retire marker guard: symlink was refused and its target stayed unchanged
+PASS live auto-retire: landed task removed through guarded teardown
+A new version of treehouse is available: v2.1.1 → v3.1.2
+Run "treehouse update" to update
+
+🌳 Setting up worktree...
+🌳 Leased worktree at ~/.no-mistakes/worktrees/02f7ed18429b/01M41HZBJJ985JTD7H5P2PXBRZ/.nm-treehouse-probe/.treehouse/.nm-treehouse-probe-b43be8/1/.nm-treehouse-probe. Run 'treehouse return ~/.no-mistakes/worktrees/02f7ed18429b/01M41HZBJJ985JTD7H5P2PXBRZ/.nm-treehouse-probe/.treehouse/.nm-treehouse-probe-b43be8/1/.nm-treehouse-probe' to release it.
+PASS live captain close: answer was recorded and its worker retired automatically
+SESSION=fm-lab-pause-retire-85153-10854
+TARGET=fm-lab-pause-retire-85153-10854:w2:p1
