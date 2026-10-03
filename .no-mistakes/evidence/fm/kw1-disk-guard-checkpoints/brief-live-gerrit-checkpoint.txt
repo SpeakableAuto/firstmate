@@ -1,0 +1,7 @@
+# Progress checkpoints
+At each meaningful step (implementation milestone, validation result, or handoff), append a short progress note to the status file: done / next / how to resume.
+Include the branch, exact commit, relevant validation command and result, remaining work, and any blocker, so another crew on any machine can continue without this chat or a local-only path.
+Before validation takes custody, commit each meaningful implementation checkpoint with that same concise resume note in the commit body; never commit secrets or private operational context.
+While no-mistakes owns the branch, report its run identifier, current gate and supported reattach command instead of editing or committing its work.
+Publish checkpoints only through the Gerrit publication path in Definition of done; until that path permits publication, explicitly mark the checkpoint as local and not yet transferable.
+Keep a "Status and next step" section in the change description with the latest done / next / how to resume note, preserving existing review metadata.

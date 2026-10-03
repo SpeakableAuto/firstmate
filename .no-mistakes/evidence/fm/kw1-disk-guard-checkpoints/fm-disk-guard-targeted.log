@@ -1,0 +1,14 @@
+ok - at the threshold: no cleanup or alert
+ok - low-space cleanup is repeatable, alerts, and preserves non-cache data
+ok - only selected caches are cleaned
+ok - missing configuration alerts without implicit cleanup
+could not queue the starting alert; continuing configured cleanup
+ok - a blocked starting alert is bounded and cleanup remains reported
+ok - dry-run is read-only and configurable threshold is respected
+ok - invalid allowlist and threshold fail before any cleanup
+ok - linked cache ancestors are refused and reported
+ok - cache child symlinks do not delete their targets
+ok - remote Docker is refused
+ok - Docker failures alert while other caches are processed
+ok - measurement failure does not clean and raises an alert
+ok - existing lock prevents concurrent cleanup

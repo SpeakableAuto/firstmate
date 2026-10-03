@@ -1,0 +1,2 @@
+healthy check exit: 0
+verified: configured npm cleanup did not run and no alert state was created above the 1 GiB threshold

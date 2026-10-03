@@ -1,0 +1,6 @@
+# Progress checkpoints
+At each meaningful step (implementation milestone, validation result, or handoff), append a short progress note to the status file: done / next / how to resume.
+Include the branch, exact commit, relevant validation command and result, remaining work, and any blocker, so another crew on any machine can continue without this chat or a local-only path.
+Before validation takes custody, commit each meaningful implementation checkpoint with that same concise resume note in the commit body; never commit secrets or private operational context.
+While no-mistakes owns the branch, report its run identifier, current gate and supported reattach command instead of editing or committing its work.
+Keep checkpoints on the local task branch; the local-only contract forbids remote publication, so report that cross-machine resume requires firstmate to arrange transfer.

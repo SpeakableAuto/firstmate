@@ -1,0 +1,5 @@
+exit: 1
+refusing non-local Docker endpoint
+wake queue:
+1791052643	1	check	disk-guard	check: disk-guard: low space: 13604240 KiB available, threshold 1048576 GiB; starting configured cleanup
+1791052643	2	check	disk-guard	check: disk-guard: cleanup complete: before=13604240 KiB after=13604176 KiB threshold=1048576 GiB failures=1
