@@ -348,7 +348,7 @@ Harness identity is read from the executable path and `argv[0]` as well as the c
 The same suite drives the ancestry and session-id signals apart in that table, asserting the divergence itself so no case is vacuous, and runs a real orphaned front-end, daemon, pty-host, and bg-spare tree whose daemon is ended mid-run: the same id keeps arming through the real `bin/fm-lock.sh`, `bin/fm-claude-stop-autoarm.sh`, and `bin/fm-turnend-guard.sh --claude` with lock line 1 and the sidecar untouched, a different id, an untrusted id, and no id each keep the live-owner refusal naming the recorded id, and the dead front-end is reclaimed onto the spare's pid rather than the outermost pty-host.
 The suite also models a shared Codex app-server process and proves that only its recorded thread owns the lock, a different thread remains refused, freshness and same-thread guards protect explicit reclaim, `--legacy` is required for a pre-upgrade lock without a sidecar, every successful reclaim archives rather than deletes the prior state, and a failed paired archive restores the live lock and sidecar together.
 `tests/fm-turnend-foreign-owner-repro.py` keeps the genuinely foreign live owner as the negative control and adds the same-id positive control.
-Both ran on 2026-09-18 on macOS with bash 3.2.57 as the fake harness interpreter:
+The pre-existing Claude session-id cases in the shell suite and the Python negative control ran on 2026-09-18 on macOS with bash 3.2.57 as the fake harness interpreter:
 
 ```sh
 tests/fm-session-lock-ancestry.test.sh
