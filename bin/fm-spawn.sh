@@ -318,6 +318,17 @@
 #   worktree, or record exists and names the accepted values. The file is read
 #   on every spawn and relaunch, so a change reaches the next launch without a
 #   restart, and it is inherited into secondmate homes (bin/fm-config-inherit-lib.sh).
+# Claude crew hooks (config/claude-crew-hooks.json):
+#   Opt-in. A JSON object mapping Claude hook event names (for example
+#   PreToolUse) to arrays of hook matcher groups in Claude's settings shape.
+#   Every claude ship and scout launch, relaunches included, appends those
+#   groups after Firstmate's own busy-state hooks in the task worktree's
+#   .claude/settings.local.json, so a home can arm a crew-only guard without
+#   touching the captain's global settings or the supervisor session.
+#   Secondmate launches never take it. A present file that is not a readable
+#   object of arrays, or a host without jq, refuses the spawn before any
+#   endpoint, worktree, or record exists. The file is local to the home and is
+#   not inherited into secondmate homes.
 # Claude crew admission: bin/fm-claude-admission-lib.sh guards directly
 # classified Claude launches before provisioning. Arbitrary raw shell
 # expressions remain an operator escape hatch whose indirection may bypass it;
@@ -574,6 +585,21 @@ case "$CLAUDE_PERMISSION_MODE" in
 auto) CLAUDE_PERM_FLAG='--permission-mode auto' ;;
 *) CLAUDE_PERM_FLAG='--dangerously-skip-permissions' ;;
 esac
+# config/claude-crew-hooks.json (header above): read and validated once per
+# spawn or relaunch, before any mutation, so a malformed file refuses instead
+# of launching a Claude worker without the hooks the home asked for.
+if ! CLAUDE_CREW_HOOKS_PRESENT=$(fm_config_source_present "$CONFIG/claude-crew-hooks.json"); then
+  exit 1
+fi
+CLAUDE_CREW_HOOKS=
+if [ "$CLAUDE_CREW_HOOKS_PRESENT" = 1 ]; then
+  if ! command -v jq >/dev/null 2>&1 \
+    || [ ! -f "$CONFIG/claude-crew-hooks.json" ] || [ ! -r "$CONFIG/claude-crew-hooks.json" ] \
+    || ! CLAUDE_CREW_HOOKS=$(jq -ce 'if type == "object" and all(.[]; type == "array") then . else error("shape") end' "$CONFIG/claude-crew-hooks.json" 2>/dev/null); then
+    echo "error: config/claude-crew-hooks.json must be a readable JSON object mapping Claude hook event names to arrays of hook matcher groups, and jq must be installed to apply it" >&2
+    exit 1
+  fi
+fi
 # config/lavish-axi-host is the primary-owned per-machine address for the
 # shared Lavish server. Read it once per launch and refuse malformed values so
 # every worker reaches the same server instead of starting a second one.
@@ -4674,6 +4700,20 @@ if [ "$KIND" != secondmate ]; then
     cat >"$WT/.claude/settings.local.json" <<EOF
 {"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF
+    # The home's optional config/claude-crew-hooks.json groups are appended
+    # after Firstmate's own, per event, so they never displace the busy-state
+    # wiring above.
+    if [ "$CLAUDE_CREW_HOOKS_PRESENT" = 1 ]; then
+      crew_hooks_tmp="$WT/.claude/settings.local.json.fm-tmp"
+      if ! jq -c --argjson extra "$CLAUDE_CREW_HOOKS" \
+        'reduce ($extra | to_entries[]) as $e (.; .hooks[$e.key] += $e.value)' \
+        "$WT/.claude/settings.local.json" >"$crew_hooks_tmp" \
+        || ! mv -f "$crew_hooks_tmp" "$WT/.claude/settings.local.json"; then
+        rm -f "$crew_hooks_tmp"
+        echo "error: could not add config/claude-crew-hooks.json to the Claude hook settings for task $ID" >&2
+        exit 1
+      fi
+    fi
     exclude_path '.claude/settings.local.json'
     ;;
   devin)

@@ -288,6 +288,41 @@ test_claude_hooks_stale_incarnation_harmless() {
   pass "claude hook events from a superseded incarnation are rejected without breaking the hook"
 }
 
+test_claude_crew_hooks_config_is_appended() {
+  local rec id=busy-cl-3 out settings marker
+  rec=$(make_spawn_case claude-crew-hooks claude "$id")
+  read_case_record "$rec"
+  marker="$CASE_DIR/crew-hook-ran"
+  printf '%s\n' "{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"touch $marker\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"true\"}]}]}" \
+    > "$HOME_DIR/config/claude-crew-hooks.json"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "claude spawn with crew hooks should succeed: $out"
+  settings="$WT_DIR/.claude/settings.local.json"
+  jq -e . "$settings" >/dev/null || fail "claude hook settings are not valid JSON"
+  [ "$(jq -r '.hooks.PreToolUse[0].matcher' "$settings")" = Bash ] || fail "crew PreToolUse group was not added"
+  run_claude_hook "$settings" PreToolUse || fail "crew PreToolUse hook command failed"
+  assert_present "$marker" "crew PreToolUse hook did not run the configured command"
+  [ "$(jq '.hooks.Stop | length' "$settings")" = 2 ] || fail "crew Stop group must be appended, not replace Firstmate's"
+  rm -f "$HOME_DIR/state/$id.turn-ended"
+  run_claude_hook "$settings" Stop || fail "Firstmate Stop hook command failed"
+  assert_present "$HOME_DIR/state/$id.turn-ended" "Firstmate's Stop hook must stay first"
+  pass "config/claude-crew-hooks.json groups are appended after Firstmate's own claude hooks"
+}
+
+test_malformed_claude_crew_hooks_refuses_spawn() {
+  local rec id=busy-cl-4 out
+  rec=$(make_spawn_case claude-crew-hooks-bad claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"PreToolUse":{"matcher":"Bash"}}' > "$HOME_DIR/config/claude-crew-hooks.json"
+  if out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" 2>&1); then
+    fail "a malformed claude-crew-hooks.json must refuse the spawn"
+  fi
+  assert_contains "$out" "claude-crew-hooks.json must be a readable JSON object" "refusal did not name the file"
+  [ ! -e "$WT_DIR/.claude/settings.local.json" ] || fail "a refused spawn must not write hook settings"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a refused spawn must not leave a task record"
+  pass "a malformed config/claude-crew-hooks.json refuses the claude spawn before any record exists"
+}
+
 test_codex_unverified_until_a_semantic_source_exists() {
   local rec id=busy-cx-1 out state
   rec=$(make_spawn_case codex-unverified codex "$id")
@@ -429,6 +464,8 @@ test_kimi_and_grok_install_no_unverified_wiring
 test_opencode_plugin_semantic_lifecycle
 test_claude_hooks_semantic_lifecycle
 test_claude_hooks_stale_incarnation_harmless
+test_claude_crew_hooks_config_is_appended
+test_malformed_claude_crew_hooks_refuses_spawn
 test_gemini_hooks_semantic_lifecycle
 test_gemini_hooks_stale_incarnation_harmless
 test_raw_gemini_launch_has_no_semantic_wiring

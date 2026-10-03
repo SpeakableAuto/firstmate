@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, quota admission, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [Claude crew admission](#claude-crew-admission), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
+| Worker permissions, accounts, quota admission, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Claude crew hooks](#claude-crew-hooks-configclaude-crew-hooksjson), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [Claude crew admission](#claude-crew-admission), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Private operating guidance and multi-task outcomes | [Private workflow context](#private-workflow-context-configworkflow-context) and [accepted delivery programs](#accepted-delivery-programs) |
@@ -916,6 +916,17 @@ When the file is absent, worker launches do not add a board address and retain t
 
 Malformed or unreadable values refuse the launch before the worker starts.
 The address selects the existing shared server; it does not authorize starting or stopping the server, and the Lavish startup crash remains a vendor-tool concern.
+
+## Claude crew hooks (config/claude-crew-hooks.json)
+
+The optional local, gitignored `config/claude-crew-hooks.json` adds home-chosen Claude Code hooks to every Claude ship and scout worker, for example a `PreToolUse` guard that denies tool calls the home never wants a worker to make.
+The file is a JSON object mapping Claude hook event names to arrays of hook matcher groups, in the same shape as the `hooks` key of a Claude settings file.
+Each launch appends those groups after Firstmate's own hooks in the task worktree's `.claude/settings.local.json`, so the hooks apply only to that worker and never to the supervisor session or the captain's global settings.
+A `PreToolUse` deny from such a hook still stops the tool call when the worker runs with the bypass permission flag.
+
+An absent file changes nothing, while a present file that is not a readable object of arrays, or a host without `jq`, stops the spawn before anything is created.
+Secondmate launches never take it, and the file is local to each home rather than part of secondmate inherited configuration.
+`bin/fm-spawn.sh`'s header owns the exact merge behavior.
 
 ## Home brief include (config/brief-include.md)
 
