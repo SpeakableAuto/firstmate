@@ -25,10 +25,12 @@
 #                             A held lock is not proof the holder is consuming
 #                             wakes. Machine-readable lock fields live on
 #                             fm-inbox.sh ready, from the same inspect helper.
-#        fm-lock.sh reclaim-shared-daemon
+#        fm-lock.sh reclaim-shared-daemon [--legacy]
 #                             Explicitly move aside a shared Codex daemon lock
 #                             from a different thread after its watcher beacon
-#                             and lock have both aged at least 30 minutes.
+#                             and lock have both aged at least 30 minutes. Pass
+#                             --legacy only for a pre-upgrade lock with no
+#                             .lock-session sidecar.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -216,7 +218,7 @@ refuse_live_owner() {  # <recorded-pid>
 }
 
 reclaim_shared_daemon() {
-  local old recorded current lock_age beat_age suffix parked
+  local allow_legacy=$1 old recorded current lock_age beat_age suffix parked has_sidecar=0
   current=$(fm_session_lock_codex_thread_id "$me") || {
     echo "error: reclaim requires a Codex thread under a shared app-server daemon" >&2
     exit 1
@@ -232,18 +234,26 @@ reclaim_shared_daemon() {
     echo "error: session lock does not name a shared Codex app-server daemon" >&2
     exit 1
   }
-  recorded=$(fm_session_lock_recorded_session_id "$STATE") || {
-    echo "error: shared-daemon lock has no recorded Codex thread id; inspect it manually" >&2
-    exit 1
-  }
-  case "$recorded" in codex:?*) ;; *)
-    echo "error: shared-daemon lock has no recorded Codex thread id; inspect it manually" >&2
-    exit 1 ;;
-  esac
-  [ "$recorded" != "$current" ] || {
-    echo "error: refusing to reclaim this Codex thread's own session lock" >&2
-    exit 1
-  }
+  if recorded=$(fm_session_lock_recorded_session_id "$STATE"); then
+    case "$recorded" in codex:?*) ;; *)
+      echo "error: shared-daemon lock has no recorded Codex thread id; inspect it manually" >&2
+      exit 1 ;;
+    esac
+    has_sidecar=1
+    [ "$recorded" != "$current" ] || {
+      echo "error: refusing to reclaim this Codex thread's own session lock" >&2
+      exit 1
+    }
+  else
+    if [ -e "$LOCK_SESSION" ] || [ -L "$LOCK_SESSION" ]; then
+      echo "error: shared-daemon lock has an invalid session sidecar; inspect it manually" >&2
+      exit 1
+    fi
+    [ "$allow_legacy" -eq 1 ] || {
+      echo "error: shared-daemon lock has no recorded Codex thread id; pass --legacy only after verifying it is a pre-upgrade lock" >&2
+      exit 1
+    }
+  fi
   lock_age=$(fm_path_age "$LOCK")
   beat_age=$(fm_path_age "$STATE/.last-watcher-beat")
   if [ "$lock_age" -lt 1800 ] || [ "$beat_age" -lt 1800 ]; then
@@ -258,9 +268,13 @@ reclaim_shared_daemon() {
     echo "error: a lock archive with this timestamp already exists" >&2
     exit 1
   }
-  mv "$LOCK_SESSION" "$STATE/.lock-session.stale-$suffix" || exit 1
+  if [ "$has_sidecar" -eq 1 ]; then
+    mv "$LOCK_SESSION" "$STATE/.lock-session.stale-$suffix" || exit 1
+  fi
   if ! mv "$LOCK" "$parked"; then
-    mv "$STATE/.lock-session.stale-$suffix" "$LOCK_SESSION" 2>/dev/null || true
+    if [ "$has_sidecar" -eq 1 ]; then
+      mv "$STATE/.lock-session.stale-$suffix" "$LOCK_SESSION" 2>/dev/null || true
+    fi
     echo "error: could not move shared-daemon lock aside" >&2
     exit 1
   fi
@@ -270,7 +284,13 @@ reclaim_shared_daemon() {
 }
 
 if [ "${1:-}" = reclaim-shared-daemon ]; then
-  reclaim_shared_daemon
+  case "$#:${2:-}" in
+    1:) reclaim_shared_daemon 0 ;;
+    2:--legacy) reclaim_shared_daemon 1 ;;
+    *)
+      echo "error: usage: fm-lock.sh reclaim-shared-daemon [--legacy]" >&2
+      exit 1 ;;
+  esac
 fi
 
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then

@@ -1096,7 +1096,7 @@ test_verified_reclaim_keeps_new_sidecar() {
 }
 
 test_shared_codex_daemon_requires_explicit_reclaim() {
-  local dir fakebin daemon archived
+  local dir fakebin daemon archived legacy_dir legacy_archived
   dir="$TMP_ROOT/codex-shared-daemon"
   fakebin=$(fm_fakebin "$dir")
   mkdir -p "$dir/state"
@@ -1178,7 +1178,48 @@ SH
     || fail "the new Codex conversation could not acquire after explicit reclaim: $(cat "$dir/next.out")"
   [ "$(cat "$dir/state/.lock-session")" = codex:B ] \
     || fail "the next conversation did not record its own thread id"
-  pass "session-lock: a shared Codex daemon refuses a second live thread and needs explicit aged-lock reclaim"
+
+  legacy_dir="$TMP_ROOT/codex-shared-daemon-legacy"
+  mkdir -p "$legacy_dir/state"
+  printf '%s\n' "$daemon" > "$legacy_dir/state/.lock"
+  touch -t 202001010000 "$legacy_dir/state/.lock" "$legacy_dir/state/.last-watcher-beat"
+
+  legacy_codex_lock() {  # [<option>]
+    local -a args=(reclaim-shared-daemon)
+    [ "$#" -eq 0 ] || args+=("$1")
+    env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
+      FM_HOME="$legacy_dir" FM_TEST_DAEMON_PID="$daemon" \
+      CODEX_THREAD_ID=B CODEX_SESSION_ID=B PATH="$fakebin:$PATH" \
+      bash "$ROOT/bin/fm-lock.sh" "${args[@]}"
+  }
+
+  if legacy_codex_lock > "$legacy_dir/unconfirmed.out" 2>&1; then
+    fail "an identity-less legacy lock was reclaimed without --legacy"
+  fi
+  [ -f "$legacy_dir/state/.lock" ] \
+    || fail "legacy-confirmation refusal moved the old lock"
+  touch "$legacy_dir/state/.lock"
+  if legacy_codex_lock --legacy > "$legacy_dir/fresh-lock.out" 2>&1; then
+    fail "--legacy bypassed the fresh-lock guard"
+  fi
+  touch -t 202001010000 "$legacy_dir/state/.lock"
+  touch "$legacy_dir/state/.last-watcher-beat"
+  if legacy_codex_lock --legacy > "$legacy_dir/fresh-beat.out" 2>&1; then
+    fail "--legacy bypassed the fresh-watcher-beacon guard"
+  fi
+  [ -f "$legacy_dir/state/.lock" ] \
+    || fail "a legacy freshness refusal moved the old lock"
+  touch -t 202001010000 "$legacy_dir/state/.last-watcher-beat"
+  legacy_codex_lock --legacy > "$legacy_dir/reclaim.out" 2>&1 \
+    || fail "an explicitly confirmed aged legacy reclaim failed: $(cat "$legacy_dir/reclaim.out")"
+  [ ! -e "$legacy_dir/state/.lock" ] \
+    || fail "successful legacy reclaim left the active lock in place"
+  legacy_archived=$(find "$legacy_dir/state" -maxdepth 1 -name '.lock.stale-*' -print)
+  [ -n "$legacy_archived" ] && [ "$(cat "$legacy_archived")" = "$daemon" ] \
+    || fail "successful legacy reclaim did not preserve the old lock"
+  [ -z "$(find "$legacy_dir/state" -maxdepth 1 -name '.lock-session.stale-*' -print)" ] \
+    || fail "legacy reclaim fabricated a session-sidecar archive"
+  pass "session-lock: shared Codex daemon reclaim guards identity-bearing and confirmed legacy locks"
 }
 
 test_version_named_session_is_identified_on_both_platforms
