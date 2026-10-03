@@ -1,0 +1,129 @@
+SCENARIO: Claude renders named Stop hook commands
+HERDR: herdr 0.9.3
+CLAUDE: 2.1.280 (Claude Code)
+
+STOP EVENT SELECTED:
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Opus 5.5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/.no-mistakes/worktrees/02f7ed18429b/01M41836TARZVWJDFQFRCBMMJT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Hooks
+   13 hooks configured
+
+   ℹ This menu is read-only. To add or modify hooks, edit settings.json directly or ask Claude. Learn more
+
+   ↑ 6.  Notification          When notifications are sent
+     7.  UserPromptSubmit (2)  When the user submits a prompt
+     8.  UserPromptExpansion   When a user-typed slash command expands into a prompt
+     9.  SessionStart (5)      When a new session is started
+   ❯ 10. Stop (3)              Right before Claude concludes its response
+
+   Enter to confirm · Esc to cancel
+
+STOP MATCHER DETAIL:
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Opus 5.5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/.no-mistakes/worktrees/02f7ed18429b/01M41836TARZVWJDFQFRCBMMJT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Stop
+   Exit code 0 - stdout/stderr not shown
+   Exit code 2 - show stderr to model and continue conversation
+   Other exit codes - show stderr to user only
+
+   ❯ 1. [command] "$CLAUDE_PROJECT_DIR"/bin/fm-claude-turnend-guard.sh  Project Settings
+     2. [command] "$CLAUDE_PROJECT_DIR"/bin/fm-claude-stop-hook.sh      Project Settings
+     3. [command] "$CLAUDE_PROJECT_DIR"/bin/fm-claude-host-mirror.sh    Project Settings
+
+   Enter to confirm · Esc to cancel
+
+STOP HOOK COMMANDS:
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Opus 5.5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/.no-mistakes/worktrees/02f7ed18429b/01M41836TARZVWJDFQFRCBMMJT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Hook details
+
+   Event:   Stop
+   Type:    command
+   Source:  Project settings (.claude/settings.json)
+
+   Command:
+   ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+   │ "$CLAUDE_PROJECT_DIR"/bin/fm-claude-turnend-guard.sh                                                           │
+   ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+   To modify or remove this hook, edit settings.json directly or ask Claude to help.
+
+   Esc to go back

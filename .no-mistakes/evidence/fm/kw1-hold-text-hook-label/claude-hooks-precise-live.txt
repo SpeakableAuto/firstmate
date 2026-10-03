@@ -1,0 +1,129 @@
+SCENARIO: Claude renders named PreToolUse guard commands
+HERDR: herdr 0.9.3
+CLAUDE: 2.1.280 (Claude Code)
+
+PRETOOLUSE / BASH HOOK COMMANDS:
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Opus 5.5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/.no-mistakes/worktrees/02f7ed18429b/01M41836TARZVWJDFQFRCBMMJT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   PreToolUse - Matcher: Bash
+   Input to command is JSON of tool call arguments.
+   Exit code 0 - stdout/stderr not shown
+   Exit code 2 - show stderr to model and block tool call
+   Other exit codes - show stderr to user only but continue with tool call
+
+   ❯ 1. [command] "$CLAUDE_PROJECT_DIR"/bin/fm-claude-arm-guard.sh  Project Settings
+     2. [command] "$CLAUDE_PROJECT_DIR"/bin/fm-claude-cd-guard.sh   Project Settings
+
+   Enter to confirm · Esc to cancel
+
+EVENT AFTER SEVEN DOWN KEYS:
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Opus 5.5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/.no-mistakes/worktrees/02f7ed18429b/01M41836TARZVWJDFQFRCBMMJT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Hooks
+   13 hooks configured
+
+   ℹ This menu is read-only. To add or modify hooks, edit settings.json directly or ask Claude. Learn more
+
+   ↑ 4.  PostToolBatch         After a batch of tool calls resolves
+     5.  PermissionDenied      After auto mode classifier denies a tool call
+     6.  Notification          When notifications are sent
+     7.  UserPromptSubmit (2)  When the user submits a prompt
+   ❯ 8.  UserPromptExpansion   When a user-typed slash command expands into a prompt
+
+   Enter to confirm · Esc to cancel
+
+SELECTED EVENT DETAIL:
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Opus 5.5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/.no-mistakes/worktrees/02f7ed18429b/01M41836TARZVWJDFQFRCBMMJT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   UserPromptExpansion - Matchers
+   Input to command is JSON with expansion_type, command_name, command_args, command_source, and original prompt.
+   Exit code 0 - stdout shown to Claude
+   Exit code 2 - block expansion and show stderr to user only
+   Other exit codes - show stderr to user only
+
+   No hooks configured for this event
+   To add hooks, edit settings.json directly or ask Claude
+
+   Esc to go back

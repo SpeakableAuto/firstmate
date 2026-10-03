@@ -1,0 +1,49 @@
+SCENARIO: captain-hold parentheses are sanitised through the public CLI
+CREATE INPUT: Choose (option A (preferred)) or B).
+punctuation-proof
+
+STATE AFTER CREATE:
+task:
+  id: punctuation-proof
+  title: Choose an option
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: yes
+  hold_reason: "Choose [option A [preferred]] or B]."
+  hold_kind: captain
+  hold_until: "-"
+  kind: captain
+  repo: sample
+  priority: "-"
+  created: 2026-10-04
+  closed: "-"
+  deps: none
+  links: none
+  body: "Captain hold set: 2026-10-03T16:17:58Z"
+
+UPDATE INPUT: Review (updated choice
+punctuation-proof
+
+STATE AFTER UPDATE:
+task:
+  id: punctuation-proof
+  title: Choose an option
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: yes
+  hold_reason: "Review [updated choice"
+  hold_kind: captain
+  hold_until: 2099-01-01
+  kind: captain
+  repo: sample
+  priority: "-"
+  created: 2026-10-04
+  closed: "-"
+  deps: none
+  links: none
+  body: "Captain hold set: 2026-10-03T16:17:58Z"
+
+OPEN CHECK:
+open exit: 0
