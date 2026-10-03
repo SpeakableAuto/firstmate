@@ -1417,6 +1417,9 @@ test_checkpoint_handoffs() {
     text=$(cat "$BRIEF_HOME/data/$id/brief.md")
     assert_contains "$text" 'done / next / how to resume' 'missing resume note contract'
     assert_contains "$text" 'exact commit' 'missing commit identity'
+    if [ "$mode" = direct-PR ]; then
+      assert_contains "$text" "branch and the separate \`wip/$id\` checkpoint ref described below" 'direct-PR safety rule contradicts checkpoint publication'
+    fi
     case "$mode" in
       local-only) assert_contains "$text" 'local-only contract forbids remote publication' 'local mode lost boundary'
                   assert_not_contains "$text" 'refs/heads/wip/' 'local mode received a checkpoint push' ;;
