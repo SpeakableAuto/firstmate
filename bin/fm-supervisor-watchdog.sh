@@ -18,8 +18,8 @@
 # Never clear input, retry Enter, kill an agent, or execute shell commands there.
 # Claim the incident durably BEFORE the nudge; ambiguous delivery is not retried.
 # A changed screen or draft holds the incident and queues a firstmate check.
-# Held/acted incidents rearm only after a stable, readable, error-free viewport
-# for IDLE_SECS and the cross-incident BACKOFF_SECS have both elapsed.
+# Held/acted incidents rearm after a stable, readable, error-free viewport for
+# IDLE_SECS; the retained action timestamp enforces cross-incident backoff.
 # Only hashes/classifications are logged, never pane text or prompt contents.
 # Unsupported harnesses/backends fail closed; this does not repair dead shells.
 # Residual race: reads and sends are not atomic. A human keystroke in the final
@@ -92,7 +92,7 @@ watchdog_identity() {
     | jq -er '[.result.agent.agent, .result.agent.agent_status] | @tsv'
 }
 watchdog_observe() {
-  local identity composer
+  local identity composer semantic
   STYLED=$(watchdog_read) || { VERDICT=unreadable; return; }
   SCREEN=$(printf '%s\n' "$STYLED" | fm_composer_strip_ansi)
   [ -n "$SCREEN" ] || { VERDICT=unreadable; return; }
@@ -107,7 +107,9 @@ watchdog_observe() {
   case "$VERDICT" in usage-limit|busy) return ;; esac
   composer=$(fm_composer_classify_screen "$CAPS" "$STYLED" '' "$identity")
   [ "$composer" = empty ] || { VERDICT="composer-${composer:-unknown}"; return; }
-  HASH=$(printf '%s' "$SCREEN" | shasum -a 256 | awk '{print $1}')
+  semantic=$(printf '%s\n' "$STYLED" | fm_composer_strip_ghost)
+  fm_composer_normalize_spaces_var semantic
+  HASH=$(printf '%s' "$semantic" | shasum -a 256 | awk '{print $1}')
 }
 
 watchdog_hold() {
@@ -172,7 +174,7 @@ watchdog_tick() {
       watchdog_update --argjson now "$NOW" --arg hash "$HASH" '.clean=$now | .clean_hash=$hash'
       return
     fi
-    if [ "$clean" -gt 0 ] && [ "$((NOW-clean))" -ge "$IDLE" ] && [ "$((NOW-last_action))" -ge "$BACKOFF" ]; then
+    if [ "$clean" -gt 0 ] && [ "$((NOW-clean))" -ge "$IDLE" ]; then
       watchdog_update '.hash="" | .since=0 | .acted=false | .next=0 | .failures=0 | .held="" | .alerted=""'
       [ -z "$oldhash" ] || watchdog_log rearmed
     fi

@@ -70,11 +70,26 @@ check "$SENT" 1 'same incident never replays'
 PANE=$CLEAR; TICK=1201; watchdog_tick
 PANE=$ERROR; TICK=1202; watchdog_tick
 check "$SENT" 1 'transient clear frame does not release incident claim'
-PANE=$CLEAR; TICK=1210; watchdog_tick
-TICK=1221; watchdog_tick
-PANE=$ERROR; TICK=1222; watchdog_tick
-TICK=1233; watchdog_tick
-check "$SENT" 2 'new error after stable recovery rearms'
+reset_case
+PANE=$'❯ continue\n⎿ API Error: ENOTFOUND\n────────────────────\n❯ \033[2mTry "write a test"\033[0m\n────────────────────'
+watchdog_tick
+TICK=1011
+PANE=$'❯ continue\n⎿ API Error: ENOTFOUND\n────────────────────\n❯ \033[2mTry "explain this code"\033[0m\n────────────────────'
+watchdog_tick
+check "$SENT" 1 'rotating empty-composer suggestion does not break error stability'
+reset_case
+BACKOFF=900
+arm
+watchdog_tick
+check "$SENT" 1 'first incident nudged before cross-incident backoff starts'
+PANE=$CLEAR; TICK=1100; watchdog_tick
+TICK=1111; watchdog_tick
+PANE=$ERROR; TICK=1200; watchdog_tick
+TICK=1910; watchdog_tick
+check "$SENT" 1 'new incident remains throttled until action backoff elapses'
+TICK=1911; watchdog_tick
+check "$SENT" 2 'stable recovery rearms before backoff for a later incident'
+BACKOFF=60
 reset_case; arm
 PANE="$ERROR extra output"; watchdog_tick
 check "$SENT" 0 'screen change blocks nudge'

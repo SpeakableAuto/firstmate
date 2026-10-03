@@ -67,7 +67,7 @@ launchctl bootout "gui/$(id -u)/local.firstmate.supervisor-watchdog"
 Inspect `state/supervisor-watchdog/events.jsonl` and the launchd error log to distinguish a refused configuration, a network wait, a held incident, and a confirmed submission.
 These records contain timestamps and classifications, not prompt contents or pane captures.
 Treat `held` as requiring inspection; it does not mean the original error recovered.
-A continuously stable, error-free idle screen can release the incident after the configured cooldown.
+A continuously stable, error-free idle screen releases the incident after the idle interval, while the retained action timestamp still delays another nudge until the configured backoff elapses.
 If an operator explicitly resets an incident after inspection, archive `incident.json` while the job is stopped, then reload the job.
 Do not delete incident state during an outage to force repeated nudges.
 Retain or rotate the local logs according to the home's normal operational policy.
