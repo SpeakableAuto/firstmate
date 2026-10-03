@@ -300,10 +300,24 @@ jq '(.providers[] | select(.provider == "claude" or .provider == "codex") |
 mv "$QUOTA.next" "$QUOTA"
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
 assert_contains "$out" 'status: escalate' "below-floor candidates do not place"
-assert_contains "$out" 'quota pacing below floor' "floor refusal is explained"
+assert_contains "$out" 'quota pacing at or below floor' "floor refusal is explained"
 assert_equals '1' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "blocked task is queued for one reset"
+assert_equals 'all_models' "$(jq -r '.accounts[] | select(.queuedTaskIds | length > 0) | .scope' "$HOME_DIR/state/quota-pacing.json")" "the task is queued on the scope that blocked it"
+jq '.quota_pacing.accounts += [
+      {"provider":"claude","scope":"model:sonnet","window_id":"weekly","window_seconds":7200,"floor_percent":79,"max_concurrent":3}
+    ]' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
+jq '(.providers[] | select(.provider == "claude") |
+      .quotaSemantics.effectiveAvailability[0].effectivePercentRemaining) = 79 |
+    (.providers[] | select(.provider == "claude") |
+      .windows[] | select(.id == "weekly") | .percentRemaining) = 79' "$QUOTA" > "$QUOTA.next"
+mv "$QUOTA.next" "$QUOTA"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: escalate' "a model-scoped pacing floor can block the selected model"
+assert_equals 'model:sonnet' "$(jq -r '.accounts[] | select(.queuedTaskIds | length > 0) | .scope' "$HOME_DIR/state/quota-pacing.json")" "the task moves to the actual model-scoped blocker"
 cp "$BASE_RULES" "$RULES"
 write_quota "$QUOTA" 0.7597
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_equals '0' "$(jq '.accounts | length' "$HOME_DIR/state/quota-pacing.json")" "accounts absent from the current pool are removed"
 pass "paced dispatch prefers the next reset and publishes a blocked task queue"
 
 # --- never-send list: a match or a bad list withholds the request -------------

@@ -138,6 +138,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-claude-admission-lib.sh
 . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
+# shellcheck source=bin/fm-quota-pacing-lib.sh
+. "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
 
 CONFIDENCE_FLOOR=0.6
 TS_MODEL=jev-latest
@@ -544,7 +546,7 @@ if pending; then
     fm_claude_admission_state "$CONFIG" "$STATE" "$QUOTA" > "$WORK/local-admission.json" 2>/dev/null \
       || printf '%s\n' '{"unknown":"Claude crew guard evidence failed"}' > "$WORK/local-admission.json"
     if [ -f "$RULES_PATH" ]; then
-      node "$SCRIPT_DIR/fm-quota-pacing.mjs" "$RULES_PATH" "$QUOTA" "$NOW" > "$WORK/local-pacing.json" \
+      fm_quota_pacing_state "$RULES_PATH" "$STATE" "$QUOTA" "$NOW" > "$WORK/local-pacing.json" \
         || die "invalid quota pacing settings"
     else
       printf '%s\n' '{"schemaVersion":1,"accounts":[]}' > "$WORK/local-pacing.json"
@@ -760,23 +762,37 @@ POOL_JQ='
       end);
   def where($id): if $id == "local" then "this machine" else $id end;
   def pacing_for($c; $h):
-    (($c.bounds // []) | map(.scope)) as $scopes |
+    (($c.profile.model // "") | split("/") | last) as $model |
+    ((($c.bounds // []) | map(.scope))
+      + (if $model == "" then [] else ["model:" + $model, "product:" + $model] end)
+      | unique) as $scopes |
     [($h.pacing.accounts // [])[] | .scope as $scope | select(.provider == $c.provider
       and .accountKey == (if $c.account == "" then "default" else $c.account end)
       and ($scopes | index($scope) != null))] as $items |
     if ($items | length) == 0 then null
-    else {allowed: ([$items[].allowedConcurrency | select(. != null)] | min // null),
+    else ([$items[].allowedConcurrency | select(. != null)] | min // null) as $allowed |
+      {allowed: $allowed,
           nextWindow: ([$items[].nextWindow | select(. != null)] | min // null),
           unknown: any($items[]; .allowedConcurrency == null),
+          blockingScopes: (if any($items[]; .allowedConcurrency == null)
+            then [$items[] | select(.allowedConcurrency == null) | .scope]
+            else [$items[] | select(.allowedConcurrency == $allowed) | .scope] end),
           state: (if any($items[]; .state == "below_floor") then "below_floor"
+                  elif any($items[]; .state == "at_floor") then "at_floor"
                   elif any($items[]; .state == "behind") then "behind" else "ahead" end)} end;
-  def worker_load($c; $h):
+  def worker_load($c; $h; $pace):
     recent_account($h.id; $c.provider; $c.account) as $recent |
-    if $fmap[$c.profile.harness] == "claude" and $h.admission != null and ($h.admission.unknown | not) then
-      $h.admission.count
-      + ([$recent[] | .key as $k | select(($h.admission.counted // []) | index($k) | not)] | length)
+    (if $pace != null and ($h.pacing.accounts // [] | length) > 0 then
+      ([($h.pacing.accounts // [])[] | select(.provider == $c.provider
+        and .accountKey == (if $c.account == "" then "default" else $c.account end))] | first) as $live |
+      ($live.liveCount // 0)
+      + ([$recent[] | .key as $k | select(($live.countedTaskIds // []) | index($k) | not)] | length)
     else $recent | length
-    end;
+    end) as $paced_load |
+    if $fmap[$c.profile.harness] == "claude" and $h.admission != null and ($h.admission.unknown | not) then
+      ([$paced_load, ($h.admission.count
+        + ([$recent[] | .key as $k | select(($h.admission.counted // []) | index($k) | not)] | length))] | max)
+    else $paced_load end;
   # The Claude crew guard for one machine: the same cap and session floor
   # spawn admission enforces there, charged with this call'"'"'s placements.
   # An unranked candidate keeps its quota uncertainty; it is never selected.
@@ -788,9 +804,9 @@ POOL_JQ='
     if $pace != null and ($pace.unknown or $pace.allowed == null) then
       $c + {eligible: false, reason: "quota pacing evidence unknown on \(where($h.id))"}
     elif $pace != null and $pace.allowed == 0 then
-      $c + {eligible: false, reason: "quota pacing below floor on \(where($h.id))"}
-    elif $pace != null and worker_load($c; $h) >= $pace.allowed then
-      $c + {eligible: false, reason: "quota pacing concurrency \(worker_load($c; $h))/\($pace.allowed) on \(where($h.id))"}
+      $c + {eligible: false, reason: "quota pacing at or below floor on \(where($h.id))"}
+    elif $pace != null and worker_load($c; $h; $pace) >= $pace.allowed then
+      $c + {eligible: false, reason: "quota pacing concurrency \(worker_load($c; $h; $pace))/\($pace.allowed) on \(where($h.id))"}
     elif $fmap[$c.profile.harness] != "claude" then $c
     else ($h.admission) as $a | slots($h.id; $a.counted) as $s |
       (if $a == null then "Claude crew guard unverifiable on \(where($h.id)): its quota snapshot carries no crew evidence"
@@ -869,7 +885,7 @@ POOL_JQ='
       $h + {index: $hi, sel: $sel, slots: slots($h.id; $h.admission.counted),
         candidates: [($sel.use // []) | to_entries[] | . as $e |
           (evaluate($e.value) + {home: $h.id, order: [$sel.rank, $e.key]}) | guard(.; $h) |
-          . + {workers: worker_load(.; $h)}]}
+          . + {workers: worker_load(.; $h; .pacing)}]}
     end] as $evald |
   ([$evald[] | select(.sel)]) as $usable |
   ([$evald[].candidates[]]) as $cands |
@@ -986,12 +1002,10 @@ for i in "${!BRIEFS[@]}"; do
       --slurpfile homes "$WORK/homes.$i.json" --slurpfile result "$WORK/result.$i.json" \
       --slurpfile old "$WORK/pacing-prev.json" '
       ($result[0]) as $r |
-      ([$homes[0][] as $h | ($h.pacing.accounts // [])[] | . + {home:$h.id}]
+      ([$homes[0][] as $h | ($h.pacing.accounts // [])[] | . + {home:$h.id} | del(.liveCount,.countedTaskIds)]
         | unique_by(.home,.provider,.accountKey,.scope)) as $current |
       ($old[0].accounts // []) as $previous |
-      ([$r.candidates[]? | select(.pacing != null and
-        ((.reason | startswith("quota pacing")) or (.reason | startswith("Claude crew at its limit"))
-          or (.reason | startswith("profile floor"))))]
+      ([$r.candidates[]? | select(.pacing != null and (.reason | startswith("quota pacing")))]
         | sort_by(.pacingNextWindow) | first) as $waiting |
       {schemaVersion:1, generatedAt:($now | todateiso8601),
        accounts: ([$current[] | . as $a |
@@ -1002,12 +1016,9 @@ for i in "${!BRIEFS[@]}"; do
          .queuedTaskIds = (if $waiting != null and $r.status != "clear"
            and .home == $waiting.home and .provider == $waiting.provider
            and .accountKey == (if $waiting.account == "" then "default" else $waiting.account end)
-           and (.scope == $waiting.scope or .scope == "all_models")
+           and (($waiting.pacing.blockingScopes // []) | index($a.scope)) != null
            then ($kept + [$key] | unique) else $kept end)]
-         + [$previous[] | . as $a | select(any($current[];
-             .home == $a.home and .provider == $a.provider and .accountKey == $a.accountKey and .scope == $a.scope) | not)
-             | .state = "unknown" | .allowedConcurrency = null | .remainingPercent = null | .pathPercent = null
-             | if $r.status == "clear" then .queuedTaskIds |= map(select(. != $key)) else . end])}' > "$WORK/pacing-next.json"; then
+       )}' > "$WORK/pacing-next.json"; then
     die "could not render quota pacing state"
   fi
   if jq -e '.accounts | length > 0' "$WORK/pacing-next.json" >/dev/null 2>&1 \

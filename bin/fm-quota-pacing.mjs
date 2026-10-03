@@ -69,7 +69,7 @@ const accounts = entries.map(entry => {
       || !Number.isFinite(reset) || reset <= now) return base;
   const fraction = Math.min(1, Math.max(0, (reset - now) / (entry.window_seconds * 1000)));
   const path = entry.floor_percent + (100 - entry.floor_percent) * fraction;
-  const aboveFloor = remaining >= entry.floor_percent;
+  const aboveFloor = remaining > entry.floor_percent;
   const ahead = remaining >= path;
   const ratio = path > entry.floor_percent
     ? (remaining - entry.floor_percent) / (path - entry.floor_percent)
@@ -81,7 +81,7 @@ const accounts = entries.map(entry => {
     ...base,
     pathPercent: Math.round(path * 10000) / 10000,
     allowedConcurrency: allowed,
-    state: !aboveFloor ? 'below_floor' : remaining === entry.floor_percent ? 'at_floor' : ahead ? 'ahead' : 'behind',
+    state: remaining === entry.floor_percent ? 'at_floor' : !aboveFloor ? 'below_floor' : ahead ? 'ahead' : 'behind',
   };
 });
 

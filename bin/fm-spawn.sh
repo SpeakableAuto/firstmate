@@ -655,6 +655,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
 # shellcheck source=bin/fm-claude-admission-lib.sh
 . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
+# shellcheck source=bin/fm-quota-pacing-lib.sh
+. "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -1246,6 +1248,9 @@ SPAWN_TASK_LOCK_HELD=0
 CLAUDE_ADMISSION_LOCK=
 CLAUDE_ADMISSION_LOCK_HELD=0
 CLAUDE_QUOTA_IDENTITY=
+QUOTA_PACING_ADMISSION_LOCK=
+QUOTA_PACING_ADMISSION_LOCK_HELD=0
+QUOTA_PACING_APPLIES=0
 SPAWN_CONTROL_LOCK=
 SPAWN_CONTROL_LOCK_HELD=0
 SPAWN_CONTROL_PARENT=0
@@ -1442,6 +1447,9 @@ spawn_abort_cleanup() {
   fi
   if [ "$CLAUDE_ADMISSION_LOCK_HELD" = 1 ]; then
     fm_lock_release "$CLAUDE_ADMISSION_LOCK" || true
+  fi
+  if [ "$QUOTA_PACING_ADMISSION_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$QUOTA_PACING_ADMISSION_LOCK" || true
   fi
   return "$status"
 }
@@ -2605,6 +2613,15 @@ if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS_FAMILY" = claude ]; then
   fi
 fi
 
+# Every configured pacing account shares one launch lock through metadata
+# publication. Claude retains its stricter admission gate under that boundary.
+if [ "$KIND" != secondmate ] && fm_quota_pacing_config_applies "$CONFIG" "$HARNESS" "$MODEL"; then
+  QUOTA_PACING_APPLIES=1
+  QUOTA_PACING_ADMISSION_LOCK="$STATE/.quota-pacing-admission.lock"
+  fm_lock_acquire_wait "$QUOTA_PACING_ADMISSION_LOCK" || exit 1
+  QUOTA_PACING_ADMISSION_LOCK_HELD=1
+fi
+
 # All Claude crew admission paths, including raw launches and relaunches, pass
 # this gate before allocating a worktree or endpoint. The lock survives until
 # EXIT cleanup, so another admission sees the finished launch or its rollback.
@@ -2622,7 +2639,9 @@ if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
   CLAUDE_ADMISSION_LOCK="$STATE/.claude-admission.lock"
   fm_lock_acquire_wait "$CLAUDE_ADMISSION_LOCK" || exit 1
   CLAUDE_ADMISSION_LOCK_HELD=1
-  fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" || exit 1
+  fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" "$MODEL" || exit 1
+elif [ "$QUOTA_PACING_APPLIES" = 1 ]; then
+  fm_quota_pacing_admission_check "$CONFIG" "$STATE" "$ID" "$HARNESS" "$MODEL" || exit 1
 fi
 
 secondmate_registry_value() {

@@ -1191,12 +1191,13 @@ Match the window ID to quota-axi's snapshot and set its known duration in second
 
 At each dispatch, the path is `floor_percent + (100 - floor_percent) * remaining_window_seconds / window_seconds`, with the time fraction limited to 0 through 1.
 An account ahead of the path allows its full configured concurrency.
-An account behind the path allows the ceiling of its configured cap times `(remaining_percent - floor_percent) / (path_percent - floor_percent)`, limited to at least one and at most one less than the cap when the cap exceeds one.
-Below the floor, its allowance is zero; missing or stale evidence yields `unknown` and cannot authorize a paced placement.
+An account behind the path but still above the floor allows the ceiling of its configured cap times `(remaining_percent - floor_percent) / (path_percent - floor_percent)`, limited to at least one and at most one less than the cap when the cap exceeds one.
+At or below the floor, its allowance is zero; missing or stale evidence yields `unknown` and cannot authorize a paced placement.
 Applicable scopes on the same account use the strictest allowance.
 The resolver checks live crew and recent placements against that allowance, then prefers the passing paced account whose reset comes soonest.
 Existing runway and selected profile floors still apply.
-Direct Claude launches apply the same pacing allowance in the admission guard.
+Every directly classified crew launch applies the same pacing allowance against recovery-grade live-worker evidence under a home-wide launch lock.
+Direct Claude launches retain their stricter account-identity and fixed session-floor checks and also apply every configured scope for the selected model.
 
 The resolver atomically writes `state/quota-pacing.json` as a private, machine-readable mirror input after each paced resolution.
 Its schema version is 1:
@@ -1204,7 +1205,7 @@ Its schema version is 1:
 | Field | Meaning |
 | --- | --- |
 | `schemaVersion`, `generatedAt` | Schema number and UTC observation time. |
-| `accounts[]` | One record for each configured account scope seen in the current or an earlier dispatch pool. |
+| `accounts[]` | One record for each configured account scope in the current dispatch pool. |
 | `home`, `provider`, `accountKey`, `scope`, `windowId` | Machine and quota identity. |
 | `observedAt` | Last successful account observation in UTC. |
 | `state` | `ahead`, `behind`, `at_floor`, `below_floor`, or `unknown`. |
@@ -1214,7 +1215,7 @@ Its schema version is 1:
 | `queuedTaskIds` | Task keys held by this paced account until its named next window; a successful placement removes its key. |
 
 The file is a dispatch view, refreshed when the resolver runs, rather than a continuously refreshed quota feed.
-An account's queue is cleared when its reset timestamp changes; an unavailable machine's previous record remains with state `unknown` and its earlier `observedAt`.
+An account's queue is cleared when its reset timestamp changes, and accounts absent from the current pool are removed.
 
 ## Claude crew admission
 

@@ -924,7 +924,7 @@ preflight_relaunch_admission() {
     identity=$(fm_worker_account_claude_ambient_identity) || return 1
   fi
   fm_claude_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
-    "$identity" "$TARGET_PROFILE_FLOOR_SCOPE" "$TARGET_PROFILE_FLOOR_MIN_PERCENT"
+    "$identity" "$TARGET_PROFILE_FLOOR_SCOPE" "$TARGET_PROFILE_FLOOR_MIN_PERCENT" "$TARGET_MODEL"
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch

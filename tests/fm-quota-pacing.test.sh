@@ -43,7 +43,7 @@ assert_equals 'behind:2' "$(jq -r '.accounts[0] | "\(.state):\(.allowedConcurren
 write_snapshot 41 40
 out=$(node "$TOOL" "$CONFIG" "$SNAPSHOT" "$NOW")
 assert_equals 'behind:1' "$(jq -r '.accounts[0] | "\(.state):\(.allowedConcurrency)"' <<<"$out")" "near floor retains one crew"
-assert_equals 'at_floor:1' "$(jq -r '.accounts[1] | "\(.state):\(.allowedConcurrency)"' <<<"$out")" "the floor itself retains one crew"
+assert_equals 'at_floor:0' "$(jq -r '.accounts[1] | "\(.state):\(.allowedConcurrency)"' <<<"$out")" "the floor itself preserves its reserve"
 write_snapshot 39 80
 out=$(node "$TOOL" "$CONFIG" "$SNAPSHOT" "$NOW")
 assert_equals 'below_floor:0' "$(jq -r '.accounts[0] | "\(.state):\(.allowedConcurrency)"' <<<"$out")" "below floor blocks crew"

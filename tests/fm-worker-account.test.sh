@@ -431,7 +431,7 @@ SH
   quota_fixture() {
     jq -n --argjson pct "$1" '{schemaVersion:5,providers:[{provider:"claude",state:{stale:false},windows:[{id:"five_hour",kind:"session",percentRemaining:$pct}],quotaSemantics:{status:"known",effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:80,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
   }
-  check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary "${1:-}" "${2:-}" 2>&1; }
+  check_admission() { fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate ordinary "${1:-}" "${2:-}" "${3:-}" 2>&1; }
   local out rc n
   export FM_TEST_CACHED_QUOTA="$CASE/cached-quota.json"
   for age in 300 3540; do
@@ -496,12 +496,19 @@ JSON
   cp "$CASE/pacing.json" "$FM_TEST_QUOTA"
   out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_QUOTA")
   assert_equals 1 "$(jq -r .cap <<<"$out")" "near-floor pacing permits one direct Claude crew"
+  assert_equals false "$(jq 'has("pacing")' <<<"$out")" "admission state does not duplicate the pacing snapshot"
   jq '(.providers[0].windows[] | select(.id == "weekly") | .percentRemaining) = 39' \
     "$FM_TEST_QUOTA" > "$CASE/pacing-below.json"
   cp "$CASE/pacing-below.json" "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "pacing below its configured floor refuses a direct launch: $out"
   assert_contains "$out" 'limit 0' "direct admission enforces the paced zero allowance"
+  cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
+{"quota_pacing":{"accounts":[{"provider":"claude","scope":"model:sonnet","window_id":"weekly","window_seconds":7200,"floor_percent":41,"max_concurrent":3}]}}
+JSON
+  out=$(check_admission all_models 40 sonnet); rc=$?
+  expect_code 1 "$rc" "model pacing applies when the selected profile floor has another scope: $out"
+  assert_contains "$out" 'limit 0' "direct admission enforces the selected model scope"
   rm -f "$HOME_DIR/config/crew-dispatch.json"
   quota_fixture 80
   jq '.providers[0].windows += [{id:"five_hour",kind:"session"}]' \
@@ -820,6 +827,26 @@ SH
   pass 'simultaneous Claude spawns cannot both take the last account slot'
 }
 
+test_spawn_enforces_pacing_for_codex() {
+  local out rc id=codex-cap now reset
+  new_case codex-pacing codex
+  now=$(date +%s)
+  reset=$(node -e 'process.stdout.write(new Date((Number(process.argv[1])+3600)*1000).toISOString())' "$now")
+  cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
+{"quota_pacing":{"accounts":[{"provider":"codex","scope":"all_models","window_id":"weekly","window_seconds":7200,"floor_percent":20,"max_concurrent":1}]}}
+JSON
+  cat > "$FAKEBIN/quota-axi" <<SH
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"codex","state":{"stale":false},"windows":[{"id":"weekly","percentRemaining":80,"resetsAt":"$reset"}],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"}}]}}]}'
+SH
+  chmod +x "$FAKEBIN/quota-axi"
+  printf 'harness=codex\nkind=ship\nmodel=gpt-5.6-sol\nbackend=unknown\nwindow=recorded\nspawn_gen=s%s.1.1\n' "$now" > "$HOME_DIR/state/live-codex.meta"
+  out=$(spawn_ship "$id" --harness codex --model gpt-5.6-sol); rc=$?
+  expect_code 1 "$rc" "a live Codex worker must consume its configured pacing slot: $out"
+  assert_refused_before_launch "$id" "$out" '1 live or unverified crew, limit 1'
+  pass 'spawn pacing counts live Codex workers beyond the resolver charge window'
+}
+
 test_spawn_help_describes_claude_admission_boundaries() {
   local help
   help=$("$ROOT/bin/fm-spawn.sh" --help) || fail 'fm-spawn.sh --help failed'
@@ -833,6 +860,7 @@ test_spawn_help_describes_claude_admission_boundaries() {
 test_claude_admission_checks_processes_without_a_registration || exit 1
 test_claude_admission_limits
 test_spawn_enforces_claude_admission
+test_spawn_enforces_pacing_for_codex
 test_concurrent_claude_spawns_share_last_slot
 test_spawn_help_describes_claude_admission_boundaries
 

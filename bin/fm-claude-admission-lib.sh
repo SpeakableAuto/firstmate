@@ -4,7 +4,7 @@
 # through launch and metadata publication. No supervisor or secondmate admission
 # is charged against crew.
 # docs/configuration.md "Claude crew admission" owns configuration and semantics.
-# Usage: fm_claude_admission_check <config> <state> <id> <identity> <floor-scope> <floor-min-percent>
+# Usage: fm_claude_admission_check <config> <state> <id> <identity> <floor-scope> <floor-min-percent> [model]
 # The caller supplies the selected Claude config root, or ordinary, as identity.
 # Existing records without identity are conservatively charged to every account.
 # Backend recovery-grade liveness is reused, never inferred from status events.
@@ -21,6 +21,8 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-control-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-quota-pacing-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-quota-pacing-lib.sh"
 
 fm_claude_profile_floor_valid() {
   jq -en --arg scope "$1" --arg min_percent "$2" '
@@ -31,17 +33,8 @@ fm_claude_profile_floor_valid() {
 }
 
 # Admission needs proof of an agent-free pane, not a usable registration.
-# Keep this fallback local so other control paths retain their classifier.
 fm_claude_admission_agent_state() {  # <backend> <target>
-  local backend=$1 target=$2 verdict
-  [ -n "$target" ] || { printf 'unreadable'; return 0; }
-  verdict=$(fm_backend_agent_state "$backend" "$target")
-  if [ "$backend:$verdict" = herdr:unreadable ] \
-     && fm_backend_herdr_parse_target "$target" \
-     && [ "$(fm_backend_herdr_pane_process_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" = shell ]; then
-    verdict=dead
-  fi
-  printf '%s' "$verdict"
+  fm_quota_pacing_agent_state "$@"
 }
 
 # Session-floor evidence from one Claude quota row: {pct} from the session
@@ -161,15 +154,17 @@ fm_claude_admission_quota_row() {
   printf '%s\n' "$snapshot" | jq -c "$FM_QUOTA_ROW_JQ"'quota_row(.; "claude"; "")'
 }
 
-fm_claude_pacing_for_row() { # <config> <quota-row-json> <selected-scope>
-  local config=$1 row=$2 scope=$3 account_key calculated
+fm_claude_pacing_for_row() { # <config> <quota-row-json> <selected-scope> <model>
+  local config=$1 row=$2 scope=$3 model=$4 account_key calculated bare
   [ -f "$config/crew-dispatch.json" ] || { printf 'null\n'; return 0; }
   account_key=$(printf '%s\n' "$row" | jq -r '.accountKey // "default"')
   calculated=$(printf '%s\n' "$row" | node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-quota-pacing.mjs" \
     "$config/crew-dispatch.json" -) || return 1
-  printf '%s\n' "$calculated" | jq -c --arg scope "$scope" --arg account "$account_key" '
+  bare=${model##*/}
+  printf '%s\n' "$calculated" | jq -c --arg scope "$scope" --arg model "$bare" --arg account "$account_key" '
       [.accounts[] | select(.provider == "claude" and .accountKey == $account
-        and ($scope == "" or .scope == "all_models" or .scope == $scope))]
+        and (.scope == "all_models" or .scope == "all_products" or .scope == $scope
+          or ($model != "" and $model != "default" and (.scope == ("model:" + $model) or .scope == ("product:" + $model)))))]
       | if length == 0 then null
         else {allowedConcurrency: ([.[].allowedConcurrency | select(. != null)] | min // null),
               unknown: (any(.[]; .allowedConcurrency == null)),
@@ -177,8 +172,8 @@ fm_claude_pacing_for_row() { # <config> <quota-row-json> <selected-scope>
 }
 
 fm_claude_admission_check() {
-  local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6
-  local settings='{}' limits cap floor floors count counted row result pacing pacing_cap
+  local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6 model=${7:-}
+  local settings='{}' limits cap floor floors count counted row result pacing pacing_cap pacing_count pacing_counted pacing_snapshot account_key
   if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
     settings=$(cat "$config/crew-dispatch.json") || return 1
   fi
@@ -201,13 +196,27 @@ fm_claude_admission_check() {
     echo 'error: Claude crew admission refused because quota is unavailable or invalid; choose Codex or route to a second mate on another account' >&2
     return 1
   fi
-  pacing=$(fm_claude_pacing_for_row "$config" "$row" "$floor_scope") || return 1
+  pacing=$(fm_claude_pacing_for_row "$config" "$row" "$floor_scope" "$model") || return 1
   if [ "$pacing" != null ]; then
     if [ "$(printf '%s\n' "$pacing" | jq -r .unknown)" = true ]; then
       echo "error: Claude crew admission refused for account $identity: quota pacing evidence is incomplete" >&2
       return 1
     fi
     pacing_cap=$(printf '%s\n' "$pacing" | jq -r .allowedConcurrency)
+    pacing_snapshot=$(mktemp) || return 1
+    if ! printf '%s\n' "$row" | jq -c '{schemaVersion:(if has("accountKey") then 6 else 5 end),providers:[.]}' > "$pacing_snapshot"; then
+      rm -f "$pacing_snapshot"
+      return 1
+    fi
+    account_key=$(printf '%s\n' "$row" | jq -r '.accountKey // "default"')
+    fm_quota_pacing_count "$state" "$pacing_snapshot" "$id" claude "$account_key"
+    rm -f "$pacing_snapshot"
+    pacing_count=$FM_QUOTA_PACING_COUNT
+    pacing_counted=$FM_QUOTA_PACING_COUNTED
+    if [ "$pacing_count" -ge "$pacing_cap" ]; then
+      echo "error: Claude crew admission refused for account $identity: $pacing_count live or unverified crew, limit $pacing_cap; counted tasks: $pacing_counted; choose Codex or route to a second mate on another account" >&2
+      return 1
+    fi
     [ "$pacing_cap" -lt "$cap" ] && cap=$pacing_cap
   fi
   if [ "$count" -ge "$cap" ]; then
@@ -284,14 +293,14 @@ fm_claude_admission_state() {
   fi
   session=$(printf '%s\n' "${row:-null}" | jq -c "$FM_CLAUDE_SESSION_JQ"'claude_session(.)' 2>/dev/null) \
     || session='{"unknown":"Claude quota row is unreadable"}'
-  pacing=$(fm_claude_pacing_for_row "$config" "${row:-null}" '' 2>/dev/null) || pacing='{"unknown":true}'
+  pacing=$(fm_claude_pacing_for_row "$config" "${row:-null}" '' '' 2>/dev/null) || pacing='{"unknown":true}'
   pacing_cap=$(printf '%s\n' "$pacing" | jq -r '.allowedConcurrency // empty' 2>/dev/null)
   if [ -n "$pacing_cap" ] && [ "$pacing_cap" -lt "$(printf '%s\n' "$limits" | jq -r .cap)" ]; then
     limits=$(printf '%s\n' "$limits" | jq -c --argjson cap "$pacing_cap" '.cap = $cap')
   fi
   jq -nc --argjson limits "$limits" --arg count "$FM_CLAUDE_ADMISSION_COUNT" --arg counted "$FM_CLAUDE_ADMISSION_COUNTED" \
-    --arg account "$([ "$identity" = ordinary ] && printf ordinary || printf pinned)" --argjson session "$session" --argjson pacing "$pacing" '
+    --arg account "$([ "$identity" = ordinary ] && printf ordinary || printf pinned)" --argjson session "$session" '
     {cap: $limits.cap, floor: $limits.floor, count: ($count | tonumber),
      counted: (if $counted == "" then [] else ($counted | split(", ")) end),
-     account: $account, session: $session, pacing: $pacing}'
+     account: $account, session: $session}'
 }

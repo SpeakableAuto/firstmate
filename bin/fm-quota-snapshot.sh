@@ -52,6 +52,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-claude-admission-lib.sh
 . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
+# shellcheck source=bin/fm-quota-pacing-lib.sh
+. "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
 
 usage() { sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; }
 die_usage() { printf 'error: %s\n' "$1" >&2; exit 2; }
@@ -102,7 +104,7 @@ if [ -z "$SECONDMATE" ]; then
     || admission='{"unknown":"Claude crew guard evidence failed"}'
   pacing='{"schemaVersion":1,"accounts":[]}'
   if [ -f "$CONFIG/crew-dispatch.json" ]; then
-    pacing=$(node "$SCRIPT_DIR/fm-quota-pacing.mjs" "$CONFIG/crew-dispatch.json" "$MERGED_FILE") \
+    pacing=$(fm_quota_pacing_state "$CONFIG/crew-dispatch.json" "$STATE" "$MERGED_FILE") \
       || unavailable "invalid quota pacing settings"
   fi
   jq -c --argjson admission "$admission" --argjson pacing "$pacing" \
