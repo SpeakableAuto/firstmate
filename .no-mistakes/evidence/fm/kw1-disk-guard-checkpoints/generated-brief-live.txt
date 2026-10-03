@@ -1,0 +1,27 @@
+direct-PR BRIEF OBSERVED
+  Delivery contract: mode=direct-PR
+  At each meaningful step (implementation milestone, validation result, or handoff), append a short progress note to the status file: done / next / how to resume.
+  Include the branch, exact commit, relevant validation command and result, remaining work, and any blocker, so another crew on any machine can continue without this chat or a local-only path.
+  Publish each committed checkpoint to the separate remote ref wip/live-direct-PR with this command: git push origin HEAD:refs/heads/wip/live-direct-PR. This must not move the ship branch, PR branch or default branch.
+  Name wip/live-direct-PR and its exact commit in the progress note, then read that ref back from origin before claiming the checkpoint is transferable.
+  As soon as a PR exists, maintain a "## Status and next step" section in its body with the latest done / next / how to resume note and exact pushed commit, preserving every other section and the no-mistakes attestation.
+  isolated wip ref and PR Status section: present
+no-mistakes BRIEF OBSERVED
+  Delivery contract: mode=no-mistakes
+  At each meaningful step (implementation milestone, validation result, or handoff), append a short progress note to the status file: done / next / how to resume.
+  Include the branch, exact commit, relevant validation command and result, remaining work, and any blocker, so another crew on any machine can continue without this chat or a local-only path.
+  Publish each committed checkpoint to the separate remote ref wip/live-no-mistakes with this command: git push origin HEAD:refs/heads/wip/live-no-mistakes. This must not move the ship branch, PR branch or default branch.
+  Name wip/live-no-mistakes and its exact commit in the progress note, then read that ref back from origin before claiming the checkpoint is transferable.
+  As soon as a PR exists, maintain a "## Status and next step" section in its body with the latest done / next / how to resume note and exact pushed commit, preserving every other section and the no-mistakes attestation.
+  isolated wip ref and PR Status section: present
+local-only BRIEF OBSERVED
+  Delivery contract: mode=local-only
+  At each meaningful step (implementation milestone, validation result, or handoff), append a short progress note to the status file: done / next / how to resume.
+  Include the branch, exact commit, relevant validation command and result, remaining work, and any blocker, so another crew on any machine can continue without this chat or a local-only path.
+  Keep checkpoints on the local task branch; the local-only contract forbids remote publication, so report that cross-machine resume requires firstmate to arrange transfer.
+  remote checkpoint push: absent by local-only contract
+scout BRIEF OBSERVED
+  The scout contract forbids pushing a branch or opening a PR; firstmate must arrange report transfer for cross-machine continuation.
+  remote checkpoint push: absent by scout contract
+scout PROGRESS NOTE DETAILS
+  At each meaningful investigation step, append a short status note with done / next / how to resume and update the report with the evidence and remaining question, so another crew can continue without this chat.

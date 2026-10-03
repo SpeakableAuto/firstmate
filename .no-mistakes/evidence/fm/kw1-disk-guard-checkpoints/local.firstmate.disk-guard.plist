@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>local.firstmate.disk-guard</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string>
+    <string>/absolute/firstmate/bin/fm-disk-guard.sh</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>FM_HOME</key><string>/absolute/firstmate</string>
+    <key>HOME</key><string>/absolute/user</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>900</integer>
+  <key>StandardOutPath</key><string>/absolute/user/Library/Logs/firstmate-disk-guard.log</string>
+  <key>StandardErrorPath</key><string>/absolute/user/Library/Logs/firstmate-disk-guard.log</string>
+</dict></plist>

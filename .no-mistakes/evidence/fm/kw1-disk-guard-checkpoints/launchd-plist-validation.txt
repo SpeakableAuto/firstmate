@@ -1,0 +1,6 @@
+/Users/maxverstappen/.no-mistakes/evidence/01M417W0WYAJQWJ1B0BJDA8XD2/local.firstmate.disk-guard.plist: OK
+Label: local.firstmate.disk-guard
+RunAtLoad: true
+StartInterval seconds: 900
+ProgramArguments: ["\/bin\/bash","\/absolute\/firstmate\/bin\/fm-disk-guard.sh"]
+FM_HOME: /absolute/firstmate

@@ -1,0 +1,38 @@
+LOW CLEANUP OBSERVED
+  npm cache child: removed
+  Xcode cache child: removed
+  non-cache npm config: preserved
+  customer data: preserved
+  alerts:
+    1791044816	1	check	disk-guard	check: disk-guard: low space: 15262612 KiB available, threshold 1048576 GiB; starting configured cleanup
+    1791044816	2	check	disk-guard	check: disk-guard: cleanup complete: before=15262612 KiB after=15262616 KiB threshold=1048576 GiB failures=0
+DRY RUN OBSERVED
+  output: below 1048576 GiB: 15262460 KiB available; planned caches: npm
+  cache object: preserved
+  Firstmate state: not created
+INVALID TARGET OBSERVED
+  exit: 2
+  output: invalid disk-guard configuration: cache=volumes
+  configured cache: preserved
+  Firstmate state: not created
+SYMLINK REFUSAL OBSERVED
+  exit: 1
+  output: refusing linked cache ancestor: /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M417W0WYAJQWJ1B0BJDA8XD2/.live-disk-guard-82896/link/user/.npm
+  symlink target data: preserved
+  result alert:
+    1791044817	2	check	disk-guard	check: disk-guard: cleanup complete: before=15262140 KiB after=15262016 KiB threshold=1048576 GiB failures=1
+BLOCKED START ALERT OBSERVED
+  exit: 1 (reports missed alert)
+  output: could not queue the starting alert; continuing configured cleanup
+  cache child: removed despite blocked pre-alert
+  eventual result alert:
+    1791044820	1	check	disk-guard	check: disk-guard: cleanup complete: before=15261956 KiB after=15261888 KiB threshold=1048576 GiB failures=1
+HEALTHY THRESHOLD OBSERVED
+  configured threshold: 1 GiB
+  cache object: preserved
+  Firstmate state/alerts: not created
+DEFAULT POLICY OBSERVED
+  configuration file: absent
+  customer data: preserved
+  default-threshold alert:
+    1791044875	1	check	disk-guard	check: disk-guard: low space: 15284216 KiB available, threshold 15 GiB; starting configured cleanup
