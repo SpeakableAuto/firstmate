@@ -1,0 +1,20 @@
+LIVE_CHECK=real Claude on isolated named Herdr lab
+SESSION=fm-lab-watchdog-live-15486-12236
+CLAUDE_READY=claude:idle
+A_STATE={"hash":"e317a138338d285e669efe1d52fe43d2685334ae2b77e05362d1bcc4571c8269","since":1791059905,"acted":false,"held":""}
+AFTER_CLEAR={"hash":"","since":0,"acted":false,"held":""}
+B_OBSERVED={"hash":"d0dd5ddf431418b1167d8843ff3078a71ba92734e6e14fc3094838ab1e8dcce3","since":1791059910,"acted":false,"held":""}
+B_BEFORE_FULL_INTERVAL={"since":1791059910,"acted":false,"held":""}
+B_AFTER_FULL_INTERVAL={"since":1791059910,"acted":true,"held":""}
+B_LAST_EVENT={"event":"submitted","detail":"nudge"}
+PANE_EVIDENCE_BEGIN
+❯ /clear
+❯ Historic text only: esc to interrupt; ✻ Thinking… (12s · old turn).
+⏺ API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)
+❯ Resume the interrupted work.
+⏺ API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)
+❯
+PANE_EVIDENCE_END
+HEALTHY_STATE_FILE=absent after two clear ticks and one draft tick
+RESULT=PASS
+LAB_TEARDOWN=complete
