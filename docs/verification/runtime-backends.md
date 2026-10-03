@@ -2380,5 +2380,5 @@ ok - real Herdr transport preserves usage screen
 verification: Herdr 0.9.3; stub supervisor only, real Claude/operator check remains required
 ```
 
-`bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh` covers the portable pane-text and incident-state branches, including changed input before submission and an unconfirmed turn.
+`bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh` covers the portable pane-text and incident-state branches, including rotating empty-composer suggestions, later-incident rearming under backoff, changed input before submission, and an unconfirmed turn.
 The watchdog pins the operator-selected Claude version and refuses version drift; that pin is not a claim that the stub test verified Claude itself.

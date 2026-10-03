@@ -10,7 +10,8 @@
 # State/logs: FM_HOME/state/supervisor-watchdog/{incident.json,events.jsonl}.
 # A stable viewport with a terminal network error, native Claude idle/done,
 # no busy footer, and a proven empty composer must survive two observations
-# at least IDLE_SECS apart (minimum 10 seconds), with no observed screen change.
+# at least IDLE_SECS apart (minimum 10 seconds), with no semantic screen change.
+# Claude's dim rotating empty-composer suggestion is excluded from that check.
 # Unknown state, drafts, usage-limit notices and version drift defer recovery.
 # A successful TLS HTTP response below 500 (except 429) proves reachability;
 # failed probes use exponential backoff, capped at BACKOFF_SECS.
