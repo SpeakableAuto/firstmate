@@ -875,12 +875,14 @@ test_grok_adapter_missing_jq_and_no_supervision_allow() {
   pass "fm-turnend-guard-grok: missing jq and no-supervision-needed stops stay silent and bounded"
 }
 
-# Grok loads Claude-compatible settings, so a TRACKED .claude/settings.json entry
-# that also has a .grok/hooks/ counterpart must refuse to run under Grok, or the
-# home gets a duplicate path. The regression this pins: the guard once tested
-# GROK_AGENT alone, which a grok 1.0.0 HOOK process does not carry, so the
-# Claude-only Stop auto-arm ran synchronously under Grok, foregrounded the
-# watcher, and wedged the Grok turn for its declared 28800-second timeout.
+# Grok loads Claude-compatible settings, so every tracked Claude-only entrypoint
+# except the deliberate subagent exception must refuse to run there. Entries
+# with .grok/hooks/ counterparts would create duplicate paths; the Stop auto-arm
+# and dialog mirror do not own Grok sessions.
+# The regression this pins: the guard once tested GROK_AGENT alone, which a
+# grok 1.0.0 HOOK process does not carry, so the Claude-only Stop auto-arm ran
+# synchronously under Grok, foregrounded the watcher, and wedged the Grok turn
+# for its declared 28800-second timeout.
 #
 # bin/fm-subagent-pretool-check.sh is the deliberate exception: Grok has no
 # counterpart registration, so guarding it would REMOVE the guard from Grok
