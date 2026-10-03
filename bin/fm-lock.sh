@@ -2,21 +2,21 @@
 # Acquire or inspect the per-home firstmate session lock.
 #
 # Line 1 of state/.lock is the owning session's anchor pid, resolved by
-# fm_session_lock_anchor_pid in bin/fm-session-lock-lib.sh: the harness (agent)
-# process found by walking the shell's ancestry, which lives as long as the
-# firstmate session - unlike the transient subshell PID of any one tool call,
-# which is dead moments after it is written. For a Claude session that proves a
-# trusted session id the anchor is CLAUDE_PID, the model-loop process, so a
-# shared transient daemon or a front-end that outlives the session never keeps
-# a dead session's lock alive. Line 1 keeps its whole-line pid format because
-# every other reader takes the first line as the pid.
+# fm_session_lock_anchor_pid in bin/fm-session-lock-lib.sh from the harness
+# processes in the shell's ancestry rather than the transient subshell PID of
+# one tool call. For a Claude session that proves a trusted session id the
+# anchor is CLAUDE_PID, the model-loop process. A Codex app-server can be a
+# shared, longer-lived anchor, so its sidecar thread id is also required for
+# ownership. Line 1 keeps its whole-line pid format because every other reader
+# takes the first line as the pid.
 #
 # The trusted id itself is recorded beside the lock in state/.lock-session, a
 # sidecar written only here and only under the claim lock: refreshed on every
 # confirmed-own acquisition, including the early already-mine exit that waits
-# for the claim lock, removed when the acquiring session proves no trusted id,
-# and left byte-identical when it already names that id. A same-session
-# confirmation never rewrites line 1 while the recorded pid is alive, because
+# for the claim lock, removed when an ordinary anchor proves no trusted id, and
+# left byte-identical when it already names that id. A shared Codex anchor
+# instead fails closed without a trusted thread id. A same-session confirmation
+# never rewrites line 1 while the recorded pid is alive, because
 # bin/fm-startup-network.sh compares that pid across its deferred sweeps; a dead
 # recorded pid is reclaimed and rewritten to this session's anchor.
 #
@@ -149,10 +149,11 @@ remember_lock_session() {
   LOCK_SESSION_PHASE=1
 }
 
-# Record the trusted session id beside the lock, or remove a sidecar that no
-# trusted id backs. Called only while the claim lock is held. A sidecar already
-# naming this id is left untouched, so a same-session confirmation keeps it
-# byte-identical.
+# Record the trusted session or thread id beside the lock. An ordinary anchor
+# with no trusted id removes an unbacked sidecar, while a shared Codex anchor
+# must supply its trusted thread id. Called only while the claim lock is held.
+# A sidecar already naming this id is left untouched, so a same-session
+# confirmation keeps it byte-identical.
 publish_lock_session() {
   local trusted recorded tmp
   if fm_codex_shared_daemon_pid "$me"; then

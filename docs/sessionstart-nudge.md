@@ -94,13 +94,15 @@ The full digest updates the completion record in this order:
 
 So `clear` or `compact` cannot skip startup sweeps after a truncated run.
 
-`bin/fm-lock.sh` treats a lock as this session's own when it is owned through either of these:
+`bin/fm-lock.sh` treats a lock as this session's own when it is owned through one of these:
 
-- The shared ancestry verdict.
+- The ordinary shared-ancestry verdict.
 - A trusted same-session Claude id.
+- A shared Codex app-server anchor plus the same trusted Codex thread id recorded beside the lock.
 
 So a proven `clear` or `compact` re-emit re-verifies ownership and proceeds.
 A lock another live session took meanwhile still produces the ordinary read-only digest.
+For a shared Codex daemon, daemon liveness alone never proves conversation liveness, so a different thread remains read-only until the prior conversation is verified gone and the guarded operator reclaim in `bin/fm-lock.sh` succeeds.
 
 ### Nudge wrapper on a run-tier harness
 
