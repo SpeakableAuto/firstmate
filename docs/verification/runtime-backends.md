@@ -2067,6 +2067,21 @@ Refresh this harness-dependent proof before accepting a cursor upgrade:
 FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh
 ```
 
+## Pi Calm HTML export compatibility
+
+Verified on 2026-10-04 AEST with Node v24.18.0 and local npm installs of `@earendil-works/pi-coding-agent` 1.0.0 and 1.0.1.
+The real HTML renderer accepts the fixture's shared tool lookup through `getToolDefinition` on 1.0.0 and `getToolRenderers` on 1.0.1.
+Both versions pass the unchanged assertions that `/export` and `/share` retain tool calls and results while Calm is active, ordinary non-submit input leaves them hidden, and the terminal rows remain hidden afterwards.
+
+```sh
+PATH="$PWD/.no-mistakes/pi100/node_modules/.bin:$PATH" FM_PI_PACKAGE_DIR="$PWD/.no-mistakes/pi100/node_modules/@earendil-works/pi-coding-agent" TMPDIR="$PWD/.no-mistakes/tmp" bash bin/fm-test-run.sh tests/fm-calm-pi-extension.test.sh
+PATH="$PWD/.no-mistakes/pi101/node_modules/.bin:$PATH" FM_PI_PACKAGE_DIR="$PWD/.no-mistakes/pi101/node_modules/@earendil-works/pi-coding-agent" TMPDIR="$PWD/.no-mistakes/tmp" bash bin/fm-test-run.sh tests/fm-calm-pi-extension.test.sh
+```
+
+Both commands printed `ok - Pi calm centralizes transcript visibility, preserves execution/export data, keeps Pi's stock working row visible while no run is active, and persists its choice across session starts` and exited 0.
+The four terminal E2E cases capability-skipped because tmux was absent; this verifies the real renderer and lifecycle fixtures, not the interactive terminal journeys.
+Refresh with the same test against the installed Pi package, with tmux available to include those journeys.
+
 ## Pi supervision branch
 
 The supervision-branch extension (`.pi/extensions/fm-branch-supervision.ts`, [docs/pi-supervision-branch.md](../pi-supervision-branch.md)) builds its second session through the Pi SDK surface: `createAgentSession` (including its `model`, `modelRuntime`, and `thinkingLevel` options), `DefaultResourceLoader` with `extensionFactories`, `SessionManager`, `createBashToolDefinition` with a `spawnHook`, `sendCustomMessage` for routine notes, `appendEntry` and `registerEntryRenderer` for captain outcomes, the `before_provider_request` hook, the command context's model registry for picker candidates, a fresh `ModelRuntime` for isolated-branch resolution, and Pi's own `getSupportedThinkingLevels`/`clampThinkingLevel` plus its `getThinkingLevel` and `thinking_level_select` extension surface for effort.
