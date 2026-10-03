@@ -51,7 +51,7 @@ make_primary() {  # <name>
   : > "$root/AGENTS.md"
   : > "$root/config/supervision-host"
   ln -s "$ROOT/bin" "$root/bin"
-  jq '.hooks |= (with_entries(.value |= (map(.hooks |= map(select(.command | contains("fm-host-mirror.sh")))) | map(select(.hooks | length > 0)))) | with_entries(select(.value | length > 0))) | {hooks}' \
+  jq '.hooks |= (with_entries(.value |= (map(.hooks |= map(select(.command | contains("fm-claude-host-mirror.sh")))) | map(select(.hooks | length > 0)))) | with_entries(select(.value | length > 0))) | {hooks}' \
     "$ROOT/.claude/settings.json" > "$root/.claude/settings.json"
   jq '.hooks |= (with_entries(.value |= map(select(.command | contains("fm-host-mirror.sh")))) | with_entries(select(.value | length > 0)))' \
     "$ROOT/.cursor/hooks.json" > "$root/.cursor/hooks.json"

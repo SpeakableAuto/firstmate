@@ -230,8 +230,8 @@ Each subsection below gives one harness surface's tier, its tracked transport, a
 ### Claude
 
 Claude is a run-tier harness.
-`.claude/settings.json` registers one unmatched `SessionStart` hook, invoked through `CLAUDE_PROJECT_DIR` with a 180s timeout.
-The wrapper reads `source` from the hook payload.
+`.claude/settings.json` registers one unmatched `SessionStart` hook that invokes `bin/fm-claude-sessionstart.sh` through `CLAUDE_PROJECT_DIR` with a 180s timeout.
+That entrypoint delegates the payload unchanged to `bin/fm-sessionstart-run.sh`, which reads `source` from the hook payload.
 Native stdout context injection is supported.
 
 ### Codex exec

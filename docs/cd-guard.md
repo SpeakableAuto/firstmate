@@ -113,7 +113,7 @@ The cd-guard never duplicates shell lexing; it adds only the cd-specific decisio
 
 | Harness | Entry | Adapter behavior on checker exit 2 |
 | --- | --- | --- |
-| Claude | `.claude/settings.json` PreToolUse Bash hook forwarding stdin with `--claude` | Blocks the tool call; stderr deny object, stdout empty. |
+| Claude | `.claude/settings.json` PreToolUse Bash hook invoking `bin/fm-claude-cd-guard.sh`, which forwards stdin with `--claude` | Blocks the tool call; stderr deny object, stdout empty. |
 | Codex | `.codex/hooks.json` PreToolUse hook that anchors from `pwd -P`, verifies the hook-loaded firstmate root, and forwards the payload | Blocks on exit 2 and displays stderr. |
 | Grok | `.grok/hooks/fm-primary-cd-check.json` PreToolUse hook anchored on `${GROK_WORKSPACE_ROOT:-}` | Consumes the stdout `decision=deny` object. |
 | OpenCode | `.opencode/plugins/fm-primary-cd-check.js` `tool.execute.before` | Throws, which surfaces as the failed tool result. |

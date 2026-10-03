@@ -61,6 +61,7 @@ Repeat and edge cases:
 - Retries of an active hold preserve its hold-set timestamp.
 - Re-holding released work starts a new timestamped lifecycle.
 - A closed task is refused rather than reopened.
+- Parentheses in the hold reason become square brackets before the backlog write and parent notification, because tasks-axi reserves parentheses for its annotation syntax.
 - `--until` stores the captain's own deferral date through tasks-axi's date gate.
 
 ### Answering a call (`answer`)
