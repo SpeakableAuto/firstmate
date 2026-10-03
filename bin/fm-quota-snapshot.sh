@@ -11,10 +11,10 @@
 # fm_quota_json_valid from bin/fm-quota-axi-lib.sh, fills the rows it could
 # not measure from this home's optional config/quota-feed through
 # fm_quota_feed_merge (a fresh feed also stands in for a failed read), and
-# prints it on stdout with one added top-level firstmateClaudeAdmission object: this home's Claude
-# crew guard evidence from fm_claude_admission_state in
-# bin/fm-claude-admission-lib.sh, so a parent dispatching into this machine
-# applies its guard from the same read.
+# prints it on stdout with top-level firstmateClaudeAdmission and
+# firstmatePacing objects: this home's admission and opted-in pacing evidence,
+# so a parent dispatching into this machine applies its guards from the same
+# read. bin/fm-claude-admission-lib.sh owns the Claude guard.
 # Cache reuse is owned by docs/configuration.md "Quota snapshot reuse".
 # This is also the command the --secondmate form runs on the remote host.
 #
@@ -100,7 +100,13 @@ if [ -z "$SECONDMATE" ]; then
   fm_quota_feed_merge "$CONFIG" "$SNAPSHOT_FILE" > "$MERGED_FILE" || unavailable "$live_failure"
   admission=$(fm_claude_admission_state "$CONFIG" "$STATE" "$MERGED_FILE" 2>/dev/null) \
     || admission='{"unknown":"Claude crew guard evidence failed"}'
-  jq -c --argjson admission "$admission" '. + {firstmateClaudeAdmission: $admission}' "$MERGED_FILE" \
+  pacing='{"schemaVersion":1,"accounts":[]}'
+  if [ -f "$CONFIG/crew-dispatch.json" ]; then
+    pacing=$(node "$SCRIPT_DIR/fm-quota-pacing.mjs" "$CONFIG/crew-dispatch.json" "$MERGED_FILE") \
+      || unavailable "invalid quota pacing settings"
+  fi
+  jq -c --argjson admission "$admission" --argjson pacing "$pacing" \
+    '. + {firstmateClaudeAdmission: $admission, firstmatePacing: $pacing}' "$MERGED_FILE" \
     || unavailable "could not attach Claude crew guard evidence"
   exit 0
 fi

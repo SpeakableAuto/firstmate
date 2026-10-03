@@ -487,6 +487,22 @@ SH
   quota_fixture 40
   out=$(check_admission); rc=$?
   expect_code 0 "$rc" "the exact floor admits: $out"
+  cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
+{"quota_pacing":{"accounts":[{"provider":"claude","scope":"all_models","window_id":"weekly","window_seconds":7200,"floor_percent":40,"max_concurrent":3}]}}
+JSON
+  quota_fixture 80
+  jq '.providers[0].windows += [{id:"weekly",percentRemaining:41,resetsAt:((now+3600)|todateiso8601)}]' \
+    "$FM_TEST_QUOTA" > "$CASE/pacing.json"
+  cp "$CASE/pacing.json" "$FM_TEST_QUOTA"
+  out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_QUOTA")
+  assert_equals 1 "$(jq -r .cap <<<"$out")" "near-floor pacing permits one direct Claude crew"
+  jq '(.providers[0].windows[] | select(.id == "weekly") | .percentRemaining) = 39' \
+    "$FM_TEST_QUOTA" > "$CASE/pacing-below.json"
+  cp "$CASE/pacing-below.json" "$FM_TEST_QUOTA"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "pacing below its configured floor refuses a direct launch: $out"
+  assert_contains "$out" 'limit 0' "direct admission enforces the paced zero allowance"
+  rm -f "$HOME_DIR/config/crew-dispatch.json"
   quota_fixture 80
   jq '.providers[0].windows += [{id:"five_hour",kind:"session"}]' \
     "$FM_TEST_QUOTA" > "$CASE/incomplete-session.json"

@@ -45,11 +45,11 @@ Start each intake by running `quota-axi --max-age 900s` once with no `--json`, a
 Post-consolidation quota-axi (the floor owned by `bin/fm-quota-axi-lib.sh`) puts `spendPriority` in the default `quota[]` block beside `effectivePercentRemaining`, `runway`, `confidence`, `limitedBy`, and `resetsAt`.
 Sparse `exhaustion[]` carries finite-runway seconds only for `projected_exhaustion` and `exhausted_now`.
 Sparse `attention[]` names auth, stale, and unmeasurable facts.
-`spendPriority` is THE quota-perspective ranker.
+`spendPriority` is the quota-perspective ranker after any configured quota pacing preference.
 It already computes the economics that older instructions reconstructed by hand from headroom, pace, reserve, and window-id lists; do not recompute those.
 Do not read `--json` on the normal path, and do not reach for `--full` to rebuild that economics.
 
-After reading the TOON, fall back to one `quota-axi --json --max-age 900s` call only when that TOON is genuinely ambiguous for the decision, or when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`.
+After reading the TOON, fall back to one `quota-axi --json --max-age 900s` call only when that TOON is genuinely ambiguous for the decision, when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`, or when configured quota pacing requires the per-window percentage absent from TOON.
 Ambiguous means a candidate's `spendPriority` is the literal `unknown` or unmeasurable, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
 The fallback therefore has an explicit TOON-then-JSON call sequence; reuse its JSON result and do not take any further quota snapshots.
 Below-floor is rare: bootstrap enforces `FM_QUOTA_AXI_MIN` and normally reports `MISSING` before dispatch; if an intake somehow reaches an older build whose TOON lacks `spendPriority`, use the defensive `--json` fallback rather than treating the missing scalar as healthy.
@@ -114,13 +114,17 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 
 ## Rank by the configured selection policy
 
+When `quota_pacing.accounts` is configured, use the current snapshot's per-window percentages and reset times with the [quota pacing contract](../../../docs/configuration.md#quota-pacing) before the selection policy below.
+Apply its concurrency allowance as an eligibility gate, then prefer the passing paced account with the soonest reset; the selected policy ranks candidates within that window.
+Unknown pacing evidence cannot authorize a paced placement.
+
 Decide the selection policy once per intake under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson): use the matched rule's `select`, else the file's `select`, else `quota-balanced`.
 A per-machine rule-floor shortfall changes only the profiles that machine contributes and never changes the intake's selection policy.
-For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, and rankability checks under the uncertainty rules below.
+For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, optional pacing preference, and rankability checks under the uncertainty rules below.
 Pass over a candidate with `projected_exhaustion` runway only when a later passing candidate has `through_reset` runway; otherwise retain the configured order.
 Select the first candidate not passed over, and account for each skipped candidate as "passed over: projected to run out before reset".
 Earlier candidates with failed gates or unrankable evidence remain in the accounting with their reasons; preference never overrides those gates.
-For `quota-balanced` (the default), quota decides: pick the highest known `spendPriority` among those that pass all three gates, and use configured order only to break a near-tie under the [configuration schema's band](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
+For `quota-balanced` (the default), quota decides within the passing paced window when one applies: pick the highest known `spendPriority`, and use configured order only to break a near-tie under the [configuration schema's band](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
 While any passing candidate has `through_reset` runway, pass over every candidate with `projected_exhaustion` runway, however high its scalar, and account for each one passed over that would otherwise have won or tied.
 Do not use `spendPriority` to reorder an explicitly ordered array.
 A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
