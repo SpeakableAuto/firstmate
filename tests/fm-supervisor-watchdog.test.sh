@@ -50,6 +50,7 @@ check "$(watchdog_screen "$ERROR")" error 'terminal ENOTFOUND detected'
 check "$(watchdog_screen "${ERROR/ENOTFOUND/ECONNRESET}")" error 'independent connection failure detected'
 check "$(watchdog_screen $'Unable to connect to API\n❯ ')" error 'connection banner detected without API Error prefix'
 check "$(watchdog_screen $'API Error: ENOTFOUND\n● Work completed\n❯ ')" clear 'historic error followed by output ignored'
+check "$(watchdog_screen $'❯ continue\n⏺ API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)\n\n✻ Brewed for 0s · done 6:33 AM\n\n● high · /effort\n────────\n❯ \n────────')" error 'real Claude effort row does not hide terminal network error'
 check "$(watchdog_screen "$ERROR"$'\nUsage limit reached · continuing automatically')" usage-limit 'automatic usage-limit continuation vetoes recovery'
 check "$(watchdog_screen $'API Error: 401 unauthorized\n❯ ')" clear 'auth failure is not network recovery'
 check "$(watchdog_screen "$ERROR"$'\nesc to interrupt')" busy 'rendered busy footer overrides native idle'
@@ -70,6 +71,35 @@ check "$SENT" 1 'same incident never replays'
 PANE=$CLEAR; TICK=1201; watchdog_tick
 PANE=$ERROR; TICK=1202; watchdog_tick
 check "$SENT" 1 'transient clear frame does not release incident claim'
+# A single clear frame breaks an unclaimed error's continuous idle window.
+reset_case
+watchdog_tick
+PANE=$CLEAR; TICK=1005; watchdog_tick
+PANE="${ERROR/ENOTFOUND/ECONNRESET}"; TICK=1011; watchdog_tick
+check "$SENT" 0 'different error cannot reuse time before a clear frame'
+check "$(jq -r .since "$DIR/incident.json")" 1011 'different error starts a fresh observation window'
+check "$(held)" '' 'different error after clear is a new incident'
+TICK=1020; watchdog_tick
+check "$SENT" 0 'different error waits the entire new idle interval'
+TICK=1021; watchdog_tick
+check "$SENT" 1 'different stable error recovers after a full fresh interval'
+# Old transcript text must not impersonate the live footer or spinner.
+for historical in '● The footer says esc to interrupt' '✻ Thinking… (12s · old turn)'; do
+  reset_case
+  PANE="$historical"$'\n'"$ERROR"
+  check "$(watchdog_screen "$PANE")" error 'historical busy text does not veto terminal network error'
+  arm; watchdog_tick
+  check "$SENT" 1 'idle network error recovers despite historical busy text'
+done
+reset_case
+PANE=$'❯ continue\n⎿ API Error: ENOTFOUND\n✻ Thinking… (12s · live turn)\n────────────────────\n❯ \n────────────────────'
+check "$(watchdog_screen "$PANE")" busy 'current spinner above composer still vetoes recovery'
+arm; watchdog_tick
+check "$SENT" 0 'current spinner never receives a nudge'
+reset_case
+PANE="$ERROR"$'\nesc to interrupt'
+arm; watchdog_tick
+check "$SENT" 0 'current footer never receives a nudge'
 reset_case
 PANE=$'❯ continue\n⎿ API Error: ENOTFOUND\n────────────────────\n❯ \033[2mTry "write a test"\033[0m\n────────────────────'
 watchdog_tick
@@ -141,6 +171,23 @@ for HTTP_CODE in 200 301 401 404; do watchdog_probe || fail "HTTP $HTTP_CODE mus
 CURL_RC=7
 if watchdog_probe; then fail 'connection failure must defer'; fi
 pass 'provider probe distinguishes transport response, throttling, outage, and connection failure'
+# No active incident means healthy observations have nothing to persist.
+reset_case
+PANE=$CLEAR
+watchdog_tick; TICK=1011; watchdog_tick; TICK=1022; watchdog_tick
+PANE=$'Healthy response\n❯ human draft'; watchdog_tick
+[ ! -e "$DIR/incident.json" ] || fail 'healthy observations wrote empty state'
+pass 'healthy clear panes and drafts do not create redundant state files'
+reset_case; arm; watchdog_tick
+PANE=$CLEAR; TICK=1100; watchdog_tick; TICK=1111; watchdog_tick
+check "$(jq -r .clean "$DIR/incident.json")" 0 'rearming clears completed clean window'
+# A hard link detects atomic replacement portably without timestamp sleeps.
+ln "$DIR/incident.json" "$DIR/rearmed-snapshot"
+TICK=1122; watchdog_tick; TICK=1133; watchdog_tick
+PANE=$'Healthy response\n❯ human draft'; watchdog_tick
+[ "$DIR/incident.json" -ef "$DIR/rearmed-snapshot" ] || fail 'unchanged state was rewritten'
+pass 'healthy ticks after rearming preserve the existing state file'
+rm "$DIR/rearmed-snapshot"
 # Re-read the real transport observation after the network check.
 reset_case; arm
 curl() { PANE=ignored; printf '200'; }

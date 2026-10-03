@@ -2381,4 +2381,21 @@ verification: Herdr 0.9.3; stub supervisor only, real Claude/operator check rema
 ```
 
 `bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh` covers the portable pane-text and incident-state branches, including rotating empty-composer suggestions, later-incident rearming under backoff, changed input before submission, and an unconfirmed turn.
+On 2026-10-04 AEST, `bash bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh` also verified clear-frame observation resets, historical busy text with a live idle composer, current spinner/footer vetoes, and unchanged healthy state files:
+
+```text
+ok - different error cannot reuse time before a clear frame
+ok - different error starts a fresh observation window
+ok - different error after clear is a new incident
+ok - different error waits the entire new idle interval
+ok - different stable error recovers after a full fresh interval
+ok - historical busy text does not veto terminal network error
+ok - idle network error recovers despite historical busy text
+ok - current spinner never receives a nudge
+ok - current footer never receives a nudge
+ok - healthy clear panes and drafts do not create redundant state files
+ok - healthy ticks after rearming preserve the existing state file
+```
+
+These portable fixtures exercise the classifier and state machine, not the live Claude renderer.
 The watchdog pins the operator-selected Claude version and refuses version drift; that pin is not a claim that the stub test verified Claude itself.

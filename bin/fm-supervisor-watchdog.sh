@@ -11,6 +11,7 @@
 # A stable viewport with a terminal network error, native Claude idle/done,
 # no busy footer, and a proven empty composer must survive two observations
 # at least IDLE_SECS apart (minimum 10 seconds), with no semantic screen change.
+# A clear frame resets the pending error window immediately.
 # Claude's dim rotating empty-composer suggestion is excluded from that check.
 # Unknown state, drafts, usage-limit notices and version drift defer recovery.
 # A successful TLS HTTP response below 500 (except 429) proves reachability;
@@ -45,20 +46,20 @@ watchdog_save() {
   mv "$DIR/incident.json.tmp" "$DIR/incident.json"
 }
 watchdog_update() {
-  RECORD=$(printf '%s\n' "$RECORD" | jq "$@")
+  local updated
+  updated=$(printf '%s\n' "$RECORD" | jq -c "$@")
+  [ "$updated" != "$RECORD" ] || return 0
+  RECORD=$updated
   watchdog_save
 }
 
 # Public fixture interface: classify a captured viewport without touching a pane.
 watchdog_screen() {
-  local screen=$1 last
+  local screen=$1 last live
   screen=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
   fm_composer_normalize_spaces_var screen
   if printf '%s\n' "$screen" | grep -Eiq 'usage limit reached|continuing automatically'; then
     printf 'usage-limit'; return
-  fi
-  if printf '%s\n' "$screen" | fm_busy_lines_match claude; then
-    printf 'busy'; return
   fi
   # Only the last conversational output before the current composer counts.
   # A later user prompt or assistant response invalidates an old visible error.
@@ -71,11 +72,21 @@ watchdog_screen() {
         if (line ~ /^[[:space:]─━│╭╰╮╯┌└┐┘-]*$/) continue
         if (line ~ /^[[:space:]]*Update available! Run:/) continue
         if (line ~ /^[[:space:]]*[✻✽✢✳✶✺].* for [0-9].*· done /) continue
+        if (line ~ /^[[:space:]]*●[[:space:]]+(low|medium|high|max)[[:space:]]+·[[:space:]]+\/effort[[:space:]]*$/) continue
         last=line
       }
       print last
     }')
-  if printf '%s\n' "$last" | grep -Eiq '^[[:space:]⎿●]*((API Error:.*(ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|network|connection|fetch failed))|((Unable|Cannot|Could not) to (connect to|reach) (the )?API))'; then
+  # Match only the latest output row and current composer/footer region.
+  # Earlier transcript rows can quote busy hints or retain an old spinner.
+  live=$(printf '%s\n' "$screen" | awk '
+    {rows[NR]=$0}
+    /^[[:space:]]*[❯›>]/ {composer=NR}
+    END {if (composer) for (i=composer; i<=NR; i++) print rows[i]}')
+  if printf '%s\n%s\n' "$last" "$live" | fm_busy_lines_match claude; then
+    printf 'busy'; return
+  fi
+  if printf '%s\n' "$last" | grep -Eiq '^[[:space:]⎿⏺●]*((API Error:.*(ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|network|connection|fetch failed))|((Unable|Cannot|Could not) to (connect to|reach) (the )?API))'; then
     printf 'error'
   else
     printf 'clear'
@@ -170,13 +181,19 @@ watchdog_tick() {
   last_action=$(printf '%s' "$RECORD" | jq -r .last_action)
   held=$(printf '%s' "$RECORD" | jq -r .held)
   if [ "$VERDICT" = clear ]; then
+    # Break pending observation continuity without releasing a claim or hold.
+    # Healthy panes with no incident need no clean-window bookkeeping.
+    if [ "$acted" = false ] && [ -z "$held" ]; then
+      watchdog_update '.hash="" | .since=0'
+      return
+    fi
     clean=$(printf '%s' "$RECORD" | jq -r .clean)
     if [ "$clean" -eq 0 ] || [ "$HASH" != "$(printf '%s' "$RECORD" | jq -r .clean_hash)" ]; then
       watchdog_update --argjson now "$NOW" --arg hash "$HASH" '.clean=$now | .clean_hash=$hash'
       return
     fi
     if [ "$clean" -gt 0 ] && [ "$((NOW-clean))" -ge "$IDLE" ]; then
-      watchdog_update '.hash="" | .since=0 | .acted=false | .next=0 | .failures=0 | .held="" | .alerted=""'
+      watchdog_update '.hash="" | .since=0 | .acted=false | .next=0 | .failures=0 | .held="" | .alerted="" | .clean=0 | .clean_hash=""'
       [ -z "$oldhash" ] || watchdog_log rearmed
     fi
     return
