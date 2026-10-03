@@ -1,0 +1,11 @@
+FM_TEST_BEGIN 2026-10-03T16:43:39Z tests/fm-supervisor-watchdog-herdr-e2e.test.sh family=real-herdr-gated expected_gate_skip=herdr
+ok - real Herdr transport withholds input while network fixture is down
+ok - real Herdr transport submits and confirms one resume turn
+ok - durable incident prevents a duplicate resume
+ok - real Herdr transport preserves draft screen
+ok - real Herdr transport preserves usage screen
+verification: Herdr 0.9.3; stub supervisor only, real Claude/operator check remains required
+FM_TEST_END 2026-10-03T16:43:57Z tests/fm-supervisor-watchdog-herdr-e2e.test.sh exit=0 duration_ms=18779 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=18909
+FM_TEST_SUMMARY_FAMILY family=real-herdr-gated count=1 duration_ms=18779 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-supervisor-watchdog-herdr-e2e.test.sh duration_ms=18779

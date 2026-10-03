@@ -1,0 +1,53 @@
+FM_TEST_BEGIN 2026-10-03T16:43:20Z tests/fm-supervisor-watchdog.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - terminal ENOTFOUND detected
+ok - independent connection failure detected
+ok - connection banner detected without API Error prefix
+ok - historic error followed by output ignored
+ok - automatic usage-limit continuation vetoes recovery
+ok - auth failure is not network recovery
+ok - rendered busy footer overrides native idle
+ok - first observation never acts
+ok - less than ten seconds cannot authorize input
+ok - provider failure blocks action
+ok - probe backoff persists across ticks
+ok - unchanged idle error nudged once after connectivity returns
+ok - exact watchdog payload submitted once
+ok - new turn in transcript confirms submission
+ok - same incident never replays
+ok - transient clear frame does not release incident claim
+ok - rotating empty-composer suggestion does not break error stability
+ok - first incident nudged before cross-incident backoff starts
+ok - new incident remains throttled until action backoff elapses
+ok - stable recovery rearms before backoff for a later incident
+ok - screen change blocks nudge
+ok - screen change holds incident
+ok - screen change alerts firstmate
+ok - same hold does not flood wake queue
+ok - existing draft never receives watchdog input
+ok - draft holds incident
+ok - removing draft does not silently release hold
+ok - working native status vetoes stale error
+ok - unsupported harness refused
+ok - usage notice receives no input
+ok - unreadable pane receives no input
+ok - unreadable native state receives no input
+ok - native working plus empty composer confirms new turn
+ok - healthy drafting does not create a recovery alert
+ok - mixed input never submitted or cleared
+ok - mixed input alerts firstmate
+ok - ambiguous attempt consumes incident
+ok - usage notice before Enter blocks submission
+ok - transport send failure alerts without retry
+ok - Enter failure alerts without retry
+ok - Enter attempted only once
+ok - capture failure after typing withholds Enter
+ok - missing new turn alerts instead of claiming success
+ok - provider probe distinguishes transport response, throttling, outage, and connection failure
+ok - draft appearing during network check blocks typing
+ok - last-window change alerts firstmate
+ok - corrupt state fails closed
+ok - executable enforces minimum ten-second observation interval
+FM_TEST_END 2026-10-03T16:43:35Z tests/fm-supervisor-watchdog.test.sh exit=0 duration_ms=15215 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=15386
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=1 duration_ms=15215 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-supervisor-watchdog.test.sh duration_ms=15215
