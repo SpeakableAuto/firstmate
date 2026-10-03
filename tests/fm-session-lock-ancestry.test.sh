@@ -1095,6 +1095,92 @@ test_verified_reclaim_keeps_new_sidecar() {
   pass "session-lock: a verified reclaim keeps the new sidecar beside the new pid"
 }
 
+test_shared_codex_daemon_requires_explicit_reclaim() {
+  local dir fakebin daemon archived
+  dir="$TMP_ROOT/codex-shared-daemon"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid:$field" in
+  "$FM_TEST_DAEMON_PID":comm=) printf '%s\n' codex ;;
+  "$FM_TEST_DAEMON_PID":args=) printf '%s\n' 'codex app-server --stdio' ;;
+  "$FM_TEST_DAEMON_PID":ppid=) printf '%s\n' 1 ;;
+  1:comm=) printf '%s\n' launchd ;;
+  1:args=) printf '%s\n' launchd ;;
+  1:ppid=) printf '%s\n' 0 ;;
+  *:comm=) printf '%s\n' bash ;;
+  *:args=) printf '%s\n' 'bash /repo/bin/fm-lock.sh' ;;
+  *:ppid=) printf '%s\n' "$FM_TEST_DAEMON_PID" ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  sleep 120 &
+  daemon=$!
+  BG_FIXTURE_PIDS+=("$daemon")
+
+  codex_lock() {  # <thread-id> [<verb>]
+    env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
+      FM_HOME="$dir" FM_TEST_DAEMON_PID="$daemon" \
+      CODEX_THREAD_ID="$1" CODEX_SESSION_ID="$1" PATH="$fakebin:$PATH" \
+      bash "$ROOT/bin/fm-lock.sh" "${2:-}"
+  }
+
+  codex_lock A > "$dir/first.out" 2>&1 \
+    || fail "the first Codex conversation could not acquire its lock: $(cat "$dir/first.out")"
+  [ "$(cat "$dir/state/.lock")" = "$daemon" ] \
+    || fail "the fixture did not anchor to the shared daemon"
+  [ "$(cat "$dir/state/.lock-session")" = codex:A ] \
+    || fail "the first conversation's thread id was not recorded"
+  codex_lock A > "$dir/same.out" 2>&1 \
+    || fail "the same Codex conversation could not confirm its own lock: $(cat "$dir/same.out")"
+  if codex_lock B > "$dir/foreign.out" 2>&1; then
+    fail "a second live Codex conversation claimed the first one's shared-daemon lock"
+  fi
+  grep -q 'shared Codex app-server daemon' "$dir/foreign.out" \
+    || fail "the refusal did not identify the shared daemon: $(cat "$dir/foreign.out")"
+  codex_lock B status > "$dir/status.out" 2>&1 \
+    || fail "shared-daemon lock status failed"
+  grep -q 'conversation liveness unknown' "$dir/status.out" \
+    || fail "lock status reported daemon liveness as conversation liveness"
+  if codex_lock B reclaim-shared-daemon > "$dir/fresh.out" 2>&1; then
+    fail "a fresh shared-daemon lock was moved aside"
+  fi
+  [ -f "$dir/state/.lock" ] || fail "fresh-lock refusal moved the lock"
+
+  touch -t 202001010000 "$dir/state/.lock"
+  touch "$dir/state/.last-watcher-beat"
+  if codex_lock B reclaim-shared-daemon > "$dir/beat.out" 2>&1; then
+    fail "a fresh watcher beacon did not protect the shared-daemon lock"
+  fi
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  if codex_lock A reclaim-shared-daemon > "$dir/own.out" 2>&1; then
+    fail "the recorded Codex thread moved its own lock aside"
+  fi
+  [ -f "$dir/state/.lock" ] || fail "same-thread refusal moved the lock"
+  codex_lock B reclaim-shared-daemon > "$dir/reclaim.out" 2>&1 \
+    || fail "an explicit reclaim of the aged lock failed: $(cat "$dir/reclaim.out")"
+  [ ! -e "$dir/state/.lock" ] && [ ! -e "$dir/state/.lock-session" ] \
+    || fail "explicit reclaim left an active lock or sidecar"
+  archived=$(find "$dir/state" -maxdepth 1 -name '.lock.stale-*' -print)
+  [ -n "$archived" ] && [ "$(cat "$archived")" = "$daemon" ] \
+    || fail "explicit reclaim did not preserve the old lock"
+  codex_lock B > "$dir/next.out" 2>&1 \
+    || fail "the new Codex conversation could not acquire after explicit reclaim: $(cat "$dir/next.out")"
+  [ "$(cat "$dir/state/.lock-session")" = codex:B ] \
+    || fail "the next conversation did not record its own thread id"
+  pass "session-lock: a shared Codex daemon refuses a second live thread and needs explicit aged-lock reclaim"
+}
+
 test_version_named_session_is_identified_on_both_platforms
 test_harness_at_namespace_pid1_is_examined
 test_ordinary_paths_are_never_harness_processes
@@ -1111,3 +1197,4 @@ test_same_session_confirmation_does_not_steal_after_wait
 test_failed_lock_write_restores_previous_sidecar
 test_failed_lock_write_removes_new_sidecar_when_none_existed
 test_verified_reclaim_keeps_new_sidecar
+test_shared_codex_daemon_requires_explicit_reclaim
