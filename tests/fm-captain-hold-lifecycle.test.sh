@@ -1010,6 +1010,44 @@ EOF
   pass "captain holds become visible only after their hold-set timestamp is durable"
 }
 
+# A captain answer that closes a task retires its still-recorded worker through
+# bin/fm-auto-retire.sh once the task's control lock is free; a release never
+# does, and a refused retirement never undoes the recorded answer.
+test_closing_answer_retires_the_task_worker() {
+  local home fake
+  home=$(make_home answer-auto-retire)
+  fake="$home/fake-auto-retire"
+  cat > "$fake" <<'SH'
+#!/usr/bin/env bash
+if [ -e "$FM_STATE_OVERRIDE/.control-$1.lock" ]; then lock=held; else lock=free; fi
+printf '%s %s\n' "$*" "$lock" >> "$FAKE_AUTO_RETIRE_LOG"
+printf 'refused: %s: fixture refusal\n' "$1"
+exit 1
+SH
+  chmod +x "$fake"
+  for id in sample-closed sample-released; do
+    tasks_in "$home" add "$id" "Sample $id" --kind ship --repo sample >/dev/null \
+      || fail "could not create $id"
+    run_captain "$home" hold "$id" --reason "captain call" >/dev/null || fail "could not hold $id"
+    fm_write_meta "$home/state/$id.meta" "kind=ship" "spawn_gen=sample"
+  done
+  printf 'Drop it; we will not build this.\n' > "$home/drop.txt"
+  FM_AUTO_RETIRE_BIN="$fake" FAKE_AUTO_RETIRE_LOG="$home/calls" \
+    run_captain "$home" answer sample-closed --decision-file "$home/drop.txt" > "$home/closed.out" \
+    || fail "a refused retirement made the closing answer fail"
+  assert_contains "$(tasks_in "$home" show sample-closed --full)" "state: done" \
+    "a refused retirement undid the closing answer"
+  assert_grep 'refused: sample-closed: fixture refusal' "$home/closed.out" \
+    "the closing answer did not report the retirement outcome"
+  printf 'Go ahead.\n' > "$home/go.txt"
+  FM_AUTO_RETIRE_BIN="$fake" FAKE_AUTO_RETIRE_LOG="$home/calls" \
+    run_captain "$home" answer sample-released --decision-file "$home/go.txt" --release >/dev/null \
+    || fail "the releasing answer failed"
+  [ "$(cat "$home/calls")" = "sample-closed decision free" ] \
+    || fail "auto-retire was not called exactly for the closed task with its lock free: $(cat "$home/calls")"
+  pass "a closing captain answer retires the task's worker; a release does not"
+}
+
 test_interrupted_answer_preserves_hold_age() {
   local home snap show
   home=$(make_home interrupted-answer-age)
@@ -4039,6 +4077,7 @@ test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
+test_closing_answer_retires_the_task_worker
 test_release_frees_held_work
 test_hold_stamp_precedes_hold_visibility
 test_interrupted_answer_preserves_hold_age

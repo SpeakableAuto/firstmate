@@ -2164,6 +2164,62 @@ test_merged_poll_retires_once() {
   pass "validated merged polls notify once and retire before the next watcher cycle"
 }
 
+# A merged PR is landed work: the watcher retires its task through
+# bin/fm-auto-retire.sh (FM_AUTO_RETIRE_BIN stands in here), appends that
+# outcome row itself, and still delivers the merge. When the merge was already
+# reported, as after this home's own merge, a refused retirement still wakes.
+fake_auto_retire() {  # <dir>; writes <dir>/fake-auto-retire logging to <dir>/auto-retire.calls
+  local dir=$1
+  cat > "$dir/fake-auto-retire" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_AUTO_RETIRE_LOG"
+if [ "${FAKE_AUTO_RETIRE_REFUSE:-0}" = 1 ]; then
+  printf 'refused: %s: fixture refusal\nwake: check: auto-retire %s: fixture refusal\n' "$2" "$2"
+  exit 1
+fi
+printf 'retired: %s\nwake: check: auto-retire %s: fixture cleanup\n' "$2" "$2"
+SH
+  chmod +x "$dir/fake-auto-retire"
+}
+
+test_merged_poll_retires_its_task_automatically() {
+  local dir state rc
+  dir=$(make_case merged-auto-retire)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  fake_auto_retire "$dir"
+
+  set +e
+  FM_AUTO_RETIRE_BIN="$dir/fake-auto-retire" FAKE_AUTO_RETIRE_LOG="$dir/auto-retire.calls" \
+    FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch-1.out" 2> "$dir/watch-1.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "auto-retire merged watcher failed: $(cat "$dir/watch-1.err")"
+  case "$(cat "$dir/watch-1.out")" in check:*task-a.check.sh:*merged) ;; *) fail "the merge was not delivered: $(cat "$dir/watch-1.out")" ;; esac
+  [ "$(cat "$dir/auto-retire.calls")" = "--emit-wake task-a merged" ] \
+    || fail "the merged task was not handed to auto-retire exactly once: $(cat "$dir/auto-retire.calls" 2>/dev/null)"
+  grep -F "$(printf '\tcheck\tauto-retire-task-a\tcheck: auto-retire task-a: fixture cleanup')" "$state/.wake-queue" >/dev/null \
+    || fail "the watcher did not queue the auto-retire outcome: $(cat "$state/.wake-queue")"
+  grep -F 'merged-task-a-' "$state/.wake-queue" >/dev/null || fail "the merge outcome row was lost"
+  ack_watcher_cycle "$state" || fail "merged auto-retire acknowledgement failed"
+
+  # Re-observed after the merge was already reported: a refusal still wakes.
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  rm -f "$state/.last-check"
+  set +e
+  FM_AUTO_RETIRE_BIN="$dir/fake-auto-retire" FAKE_AUTO_RETIRE_LOG="$dir/auto-retire.calls" FAKE_AUTO_RETIRE_REFUSE=1 \
+    FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch-2.out" 2> "$dir/watch-2.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "already-reported merge watcher failed: $(cat "$dir/watch-2.err")"
+  [ "$(cat "$dir/watch-2.out")" = "check: auto-retire task-a: fixture refusal" ] \
+    || fail "a refused retirement after an already-reported merge did not wake: $(cat "$dir/watch-2.out")"
+  [ "$(grep -c . "$dir/auto-retire.calls")" -eq 2 ] || fail "the already-reported merge did not attempt retirement"
+  pass "a merged PR retires its task automatically, and a refused retirement always wakes"
+}
+
 # A poll's own retirement state is scoped to ONE registration, so it cannot by
 # itself catch a poll re-registered for a task whose merge was already
 # surfaced (e.g. bin/fm-pr-check.sh re-armed after the fact). The per-task
@@ -3447,6 +3503,7 @@ test_gerrit_ready_gate_reads_the_published_tree
 test_gerrit_nm_ready_gate_requires_recovered_custody
 test_merged_poll_retires_once
 test_merged_poll_reregistration_after_notification_is_absorbed
+test_merged_poll_retires_its_task_automatically
 test_merged_poll_retries_a_failed_upward_report
 test_self_merge_and_poll_publish_one_outcome
 test_merged_poll_row_carries_the_merge_authority

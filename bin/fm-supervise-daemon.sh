@@ -104,10 +104,12 @@
 #                                   as a possible wedge (default 240)
 #          FM_PAUSE_RESURFACE_SECS  seconds a declared wait stays declared,
 #                                   idle or busy, before it re-surfaces as a
-#                                   recheck (default 14400, four hours); an
-#                                   `until` time cannot extend this bound, and a
-#                                   captain-held transfer is never rechecked
-#                                   while an away record exists
+#                                   recheck (default 14400, four hours); a
+#                                   declared `until` time replaces this bound
+#                                   unless it lies beyond the honored horizon
+#                                   (FM_PAUSE_UNTIL_HORIZON_SECS, default seven
+#                                   days), and a captain-held transfer is never
+#                                   rechecked while an away record exists
 #          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
 #                                   digests; 0 = flush immediately (default 90)
 #          FM_HEARTBEAT_SCAN_SECS   cadence for the catch-all status scan
@@ -1289,9 +1291,10 @@ housekeeping() {  # <state>
       continue
     fi
     if until=$(status_paused_until "$last"); then
-      if [ "$now" -lt "$until" ] && [ "$age" -lt "$pause_secs" ]; then
+      if [ "$now" -lt "$until" ] && fm_pause_until_honored "$until" "$now"; then
         continue
       elif [ "$now" -lt "$until" ]; then
+        [ "$age" -ge "$pause_secs" ] || continue
         bounded_until=1
       elif [ "$(cat "$due" 2>/dev/null || true)" = "$until" ]; then
         [ "$age" -ge "$pause_secs" ] || continue
@@ -1316,7 +1319,7 @@ housekeeping() {  # <state>
           fi
         elif [ -n "$last" ] && status_is_paused "$last"; then
           if [ "$bounded_until" -eq 1 ]; then
-            pause_reason="paused ${age}s (awaiting external, the declared time is beyond the recheck cadence; confirm the wait still holds): $win"
+            pause_reason="paused ${age}s (awaiting external, the declared time is too far ahead to honor, so it keeps the recheck cadence; confirm the wait still holds and the time is right): $win"
           else
             pause_reason="paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
           fi

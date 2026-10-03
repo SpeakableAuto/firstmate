@@ -83,6 +83,9 @@ It then works in this order:
 If the close is interrupted, the still-held task therefore keeps its original age basis.
 A matching retry also completes any resolution-first normalization left unfinished after the close itself succeeded.
 
+A close (not `--release`), like an evidence-backed `reconcile close`, means the task's work is finished, so a worker still recorded for that task is then retired through `bin/fm-auto-retire.sh`.
+That is plain guarded teardown: a task with unlanded work is refused and left untouched, the refusal never undoes the recorded answer, and either outcome queues an `auto-retire` notification for the supervisor.
+
 ### Answer retries and tasks closed elsewhere
 
 - An exact retry is idempotent only when the requested close mode matches the newest record.

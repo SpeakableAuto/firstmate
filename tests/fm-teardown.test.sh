@@ -4073,6 +4073,136 @@ EOF
 # Copy the public teardown script tree, then drop or blank one required file.
 # Symlinks keep the copy cheap; an unreadable case replaces one link with a
 # real mode-000 file so the probe is of the file itself.
+# --- automatic retirement of landed or decision-closed work -----------------
+# bin/fm-auto-retire.sh retires through this same guarded teardown, never with
+# --force, and always leaves one durable wake row naming the outcome.
+AUTO_RETIRE="$ROOT/bin/fm-auto-retire.sh"
+
+run_auto_retire() {  # <case-dir> <cause> [extra env...]; AUTO_RETIRE_FLAGS precede the task id
+  local case_dir=$1 cause=$2; shift 2
+  # shellcheck disable=SC2086 # Deliberately word-split optional flags.
+  env FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" \
+    PATH="$case_dir/fakebin:$PATH" "$@" \
+    "$AUTO_RETIRE" ${AUTO_RETIRE_FLAGS:-} task-x1 "$cause"
+}
+
+auto_retire_rows() {  # <case-dir>
+  grep -c "$(printf '\tcheck\tauto-retire-task-x1\t')" "$1/state/.wake-queue" 2>/dev/null || true
+}
+
+test_auto_retire_cleans_up_landed_work() {
+  local case_dir out
+  case_dir=$(make_case auto-retire-landed)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+
+  out=$(run_auto_retire "$case_dir" merged 2>"$case_dir/stderr") \
+    || fail "auto-retire-landed: landed work was not retired: $out $(cat "$case_dir/stderr")"
+  [ "$out" = "retired: task-x1" ] || fail "auto-retire-landed: unexpected outcome: $out"
+  assert_absent "$case_dir/state/task-x1.meta" "auto-retire-landed: the retired task kept its record"
+  assert_grep 'check: auto-retire task-x1: cleaned up automatically after its PR merged' \
+    "$case_dir/state/.wake-queue" "auto-retire-landed: the retirement left no durable notification"
+  pass "auto-retire cleans up a task whose work has landed and reports it durably"
+}
+
+test_auto_retire_never_touches_unlanded_work() {
+  local case_dir out rc
+  case_dir=$(make_case auto-retire-dirty)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  printf '%s\n' "uncommitted edit" > "$case_dir/wt/feature.txt"
+  cp "$case_dir/state/task-x1.meta" "$case_dir/meta.before"
+
+  set +e
+  out=$(run_auto_retire "$case_dir" decision 2>"$case_dir/stderr")
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "auto-retire-dirty: unlanded work was not refused"
+  case "$out" in "refused: task-x1: "*uncommitted*) ;; *) fail "auto-retire-dirty: the refusal did not name the unlanded work: $out" ;; esac
+  [ "$(cat "$case_dir/wt/feature.txt")" = "uncommitted edit" ] || fail "auto-retire-dirty: the uncommitted edit was touched"
+  cmp -s "$case_dir/meta.before" "$case_dir/state/task-x1.meta" || fail "auto-retire-dirty: the task record changed"
+  [ -d "$case_dir/wt" ] || fail "auto-retire-dirty: the worktree was removed"
+  [ "$(auto_retire_rows "$case_dir")" = 1 ] || fail "auto-retire-dirty: the refusal was not queued exactly once"
+  assert_grep 'after a captain decision closed it did not complete and nothing was forced' \
+    "$case_dir/state/.wake-queue" "auto-retire-dirty: the queued refusal did not name its cause"
+
+  # A re-observed cause for the same incarnation does not re-run or re-report.
+  out=$(run_auto_retire "$case_dir" decision 2>/dev/null) || fail "auto-retire-dirty: the repeated attempt failed"
+  [ "$out" = "already-refused: task-x1" ] || fail "auto-retire-dirty: a repeated cause re-ran teardown: $out"
+  [ "$(auto_retire_rows "$case_dir")" = 1 ] || fail "auto-retire-dirty: a repeated cause re-reported the refusal"
+
+  # Clearing the blocker and retiring through ordinary teardown drops the
+  # refusal record along with the task.
+  rm -f "$case_dir/wt/feature.txt"
+  run_teardown "$case_dir" >/dev/null 2>&1 || fail "auto-retire-dirty: ordinary teardown failed once the work was clean"
+  assert_absent "$case_dir/state/task-x1.auto-retire-refused" "auto-retire-dirty: teardown left the refusal record behind"
+  pass "auto-retire refuses unlanded work, leaves it untouched, and reports the refusal once"
+}
+
+test_auto_retire_contract_without_teardown_side_effects() {
+  local case_dir fake out rc
+  case_dir=$(make_case auto-retire-contract)
+  fake="$case_dir/fake-teardown"
+  cat > "$fake" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_TEARDOWN_LOG"
+[ "${FAKE_TEARDOWN_RC:-0}" -eq 0 ] || { echo "error: teardown refused: fixture refusal" >&2; exit "$FAKE_TEARDOWN_RC"; }
+rm -f "$FM_STATE_OVERRIDE/$1.meta"
+SH
+  chmod +x "$fake"
+
+  out=$(run_auto_retire "$case_dir" merged FM_TEARDOWN_BIN="$fake" FAKE_TEARDOWN_LOG="$case_dir/calls") \
+    || fail "auto-retire-contract: an absent task failed"
+  [ "$out" = "absent: task-x1" ] || fail "auto-retire-contract: an absent task was not reported absent: $out"
+  assert_absent "$case_dir/calls" "auto-retire-contract: teardown ran for an absent task"
+  assert_absent "$case_dir/state/.wake-queue" "auto-retire-contract: an absent task queued a notification"
+
+  write_meta "$case_dir" no-mistakes secondmate
+  out=$(run_auto_retire "$case_dir" decision FM_TEARDOWN_BIN="$fake" FAKE_TEARDOWN_LOG="$case_dir/calls") \
+    || fail "auto-retire-contract: a second mate failed"
+  case "$out" in "skipped: task-x1: "*) ;; *) fail "auto-retire-contract: a second mate was not skipped: $out" ;; esac
+  assert_absent "$case_dir/calls" "auto-retire-contract: teardown ran for a second mate"
+
+  write_meta "$case_dir" no-mistakes ship
+  : > "$case_dir/state/task-x1.backlog-close"
+  out=$(run_auto_retire "$case_dir" merged FM_TEARDOWN_BIN="$fake" FAKE_TEARDOWN_LOG="$case_dir/calls") \
+    || fail "auto-retire-contract: a pending interrupted cleanup failed"
+  case "$out" in "skipped: task-x1: "*interrupted*) ;; *) fail "auto-retire-contract: a pending interrupted cleanup was not left to session start: $out" ;; esac
+  assert_absent "$case_dir/calls" "auto-retire-contract: teardown rewrote a pending interrupted cleanup"
+  rm -f "$case_dir/state/task-x1.backlog-close"
+
+  write_meta "$case_dir" no-mistakes ship
+  set +e
+  out=$(run_auto_retire "$case_dir" merged FM_TEARDOWN_BIN="$fake" FAKE_TEARDOWN_LOG="$case_dir/calls" FAKE_TEARDOWN_RC=1)
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "auto-retire-contract: a refusal was not reported as one"
+  [ "$(cat "$case_dir/calls")" = "task-x1" ] || fail "auto-retire-contract: teardown got flags beyond the task id: $(cat "$case_dir/calls")"
+  # A respawned incarnation of the same id is attempted afresh.
+  fm_write_meta "$case_dir/state/task-x1.meta" "kind=ship" "spawn_gen=respawned"
+  out=$(run_auto_retire "$case_dir" merged FM_TEARDOWN_BIN="$fake" FAKE_TEARDOWN_LOG="$case_dir/calls") \
+    || fail "auto-retire-contract: the respawned task was not retired"
+  [ "$out" = "retired: task-x1" ] || fail "auto-retire-contract: the respawned task was not attempted afresh: $out"
+  assert_absent "$case_dir/state/task-x1.auto-retire-refused" "auto-retire-contract: a retirement kept the refusal record"
+
+  # --emit-wake hands the row to the caller instead of appending it.
+  write_meta "$case_dir" no-mistakes ship
+  : > "$case_dir/state/.wake-queue"
+  out=$(AUTO_RETIRE_FLAGS=--emit-wake run_auto_retire "$case_dir" merged FM_TEARDOWN_BIN="$fake" \
+    FAKE_TEARDOWN_LOG="$case_dir/calls" | sed -n 's/^wake: //p')
+  [ "$out" = "check: auto-retire task-x1: cleaned up automatically after its PR merged" ] \
+    || fail "auto-retire-contract: --emit-wake did not print the wake payload: $out"
+  [ ! -s "$case_dir/state/.wake-queue" ] || fail "auto-retire-contract: --emit-wake still appended its own row"
+  pass "auto-retire calls plain teardown only for a live non-secondmate task and reports each outcome once"
+}
+
 prepare_teardown_source_copy() {  # <case-dir>
   local case_dir=$1 f base dest="$1/test-root/bin" s
   mkdir -p "$dest/backends"
@@ -4291,6 +4421,9 @@ test_pr_check_records_remote_head_when_local_lags
 test_content_in_default_fallback_allows
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
+test_auto_retire_cleans_up_landed_work
+test_auto_retire_never_touches_unlanded_work
+test_auto_retire_contract_without_teardown_side_effects
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses
 test_windowless_legacy_record_with_gone_worktree_tears_down

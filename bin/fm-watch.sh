@@ -12,8 +12,9 @@
 # separate idle absorb case and re-surfaces only on its long bounded cadence,
 # although its initial no-verb status signal still surfaces in normal mode.
 # That cadence is hours long and condition-aware: a paused: line naming
-# `until <UTC ISO 8601>` is rechecked when that time passes, but a declared time
-# beyond FM_PAUSE_RESURFACE_SECS cannot extend the ordinary recheck cadence, and
+# `until <UTC ISO 8601>` is not rechecked before that time and is rechecked when
+# it passes, unless the time lies beyond the horizon fm_pause_until_honored
+# (fm-classify-lib.sh) honors, which keeps the ordinary recheck cadence, and
 # while an away record (state/.afk-contract, never quiet mode's) exists an
 # item held for the captain is never rechecked at all, in either posture.
 # While state/.afk exists, the daemon owns triage and this watcher queues and exits
@@ -386,8 +387,10 @@ case "$SECONDMATE_LIVENESS_WINDOW_SECS" in ''|*[!0-9]*|0) SECONDMATE_LIVENESS_WI
 PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
 # A declared wait that names WHEN it clears (`paused: ... until <UTC ISO 8601>`,
 # status_paused_until in fm-classify-lib.sh) is condition-aware: it is not
-# rechecked before that time, and it is rechecked once as soon as that time
-# passes even when the flat cadence has not elapsed, then held to the cadence.
+# rechecked before that time, even when that time lies beyond the flat cadence,
+# and it is rechecked once as soon as that time passes, then held to the
+# cadence. Only a time beyond fm_pause_until_honored's horizon, read as a
+# mistyped date, keeps the flat cadence instead.
 # Consecutive event-path failures (fm_backend_wait_transition returning 2 -
 # connect/subscribe failure) before the push fast-path is disabled for the rest
 # of this watcher process and the loop reverts to pure polling (report section
@@ -1593,12 +1596,12 @@ handle_paused_stale() {  # <window> <task> <hash>
     detail="captain-held, awaiting the captain"
     reason="captain-held ${age}s, awaiting the captain - verified hold transfer, rechecked on a long cadence not a wedge; answer the held decision or release the hold"
   elif until=$(status_paused_until "$last"); then
-    if [ "$now" -lt "$until" ] && [ "$age" -lt "$PAUSE_RESURFACE_SECS" ]; then
+    if [ "$now" -lt "$until" ] && fm_pause_until_honored "$until" "$now"; then
       triage_log "absorbed stale (paused until $(( until - now ))s from now, declared time not reached): $win"
       return 0
     elif [ "$now" -lt "$until" ]; then
-      detail="paused, declared time beyond recheck cadence"
-      reason="paused ${age}s, awaiting external - the declared time is beyond the recheck cadence; confirm the wait still holds"
+      detail="paused, declared time beyond the honored horizon"
+      reason="paused ${age}s, awaiting external - the declared time is too far ahead to honor, so it keeps the recheck cadence; confirm the wait still holds and the time is right"
     else
       # The declared time has passed: recheck now, once per declaration, then
       # hold the cadence.
@@ -1895,8 +1898,10 @@ surface_nonterminal_stale() {  # <window> <hash>
     STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
     if until=$(status_paused_until "$last"); then
       now=$(date +%s)
-      if [ "$now" -lt "$until" ]; then
+      if [ "$now" -lt "$until" ] && fm_pause_until_honored "$until" "$now"; then
         throttled=0
+      elif [ "$now" -lt "$until" ]; then
+        stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0
       else
         STALE_WAIT_DECLARATION="$STALE_WAIT_DECLARATION:due"
         stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0
@@ -2561,6 +2566,25 @@ retire_merged_pr_poll() {  # <id>
   fi
 }
 
+# A merged PR is landed work, so its task is retired at once through
+# bin/fm-auto-retire.sh, which owns the guarded teardown call and the outcome
+# wording; a refusal leaves the task and its work untouched. Runs after the
+# poll's control lock is released, because teardown takes that lock. The
+# outcome row is appended here, in the watcher's own process, like every other
+# wake this watcher delivers. Returns 1 only when teardown refused, so a merge
+# this home already reported (its own merge) still wakes firstmate for it.
+AUTO_RETIRE_WAKE=
+auto_retire_merged() {  # <id>
+  local out rc=0
+  AUTO_RETIRE_WAKE=
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "${FM_AUTO_RETIRE_BIN:-$SCRIPT_DIR/fm-auto-retire.sh}" --emit-wake "$1" merged 2>/dev/null) || rc=$?
+  triage_log "merged PR auto-retire for $1: $(printf '%s' "${out:-exit $rc}" | head -1)"
+  AUTO_RETIRE_WAKE=$(printf '%s\n' "$out" | sed -n 's/^wake: //p' | head -1)
+  [ -z "$AUTO_RETIRE_WAKE" ] || fm_wake_append check "auto-retire-$1" "$AUTO_RETIRE_WAKE" || exit 1
+  [ "$rc" -ne 1 ]
+}
+
 # A poll armed before a state volume remount can fail capture only because its
 # registration names the old device number; bin/fm-pr-lib.sh
 # fm_pr_poll_registration_rerecord_device owns the proof and the rewrite.
@@ -2821,8 +2845,11 @@ EOF
           retire_merged_pr_poll "$id"
           pr_poll_control_release || exit 1
           touch "$STATE/.last-check"
+          auto_retire_rc=0
+          auto_retire_merged "$id" || auto_retire_rc=$?
           if [ "$FM_MERGE_OUTCOME_ALREADY_RECORDED" = true ]; then
             triage_log "absorbed duplicate merged PR poll result for $id"
+            [ "$auto_retire_rc" -eq 0 ] || [ -z "$AUTO_RETIRE_WAKE" ] || wake "$AUTO_RETIRE_WAKE"
             continue
           fi
           wake "$reason"

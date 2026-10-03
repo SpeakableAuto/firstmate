@@ -29,6 +29,7 @@ Only `answer` with the captain's words or an evidence-backed `reconcile close` m
 
 Never close anything the captain owns without recording what he actually said: `bin/fm-captain-hold.sh answer` writes his exact words into the task and closes a question-shaped call, while `--release` frees a captain-gated work item to proceed.
 A merge approval uses that existing release path because approval permits the merge to proceed; cleanup closes the work only after it lands and records what shipped.
+A close (not `--release`) or a `reconcile close` also retires any worker still recorded for that task through guarded teardown, so act only on a refused `auto-retire` notification ([lifecycle doc](../../../docs/captain-hold-lifecycle.md#answering-a-call-answer)).
 Closing a held row at merge approval instead records completion before landing, so the backlog claims completion before the work actually ships.
 When the answer changes what a task must build, follow `AGENTS.md` section 7's mid-task ask rule to preserve the captain's words in the brief and steer the worker.
 When the captain says "later", that is an answer too: re-hold with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` so the item leaves the live Captain's Call and resurfaces on its date, instead of leaving a live-looking card or fabricating a closure.

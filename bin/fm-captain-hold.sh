@@ -63,6 +63,8 @@
 # ordering. An exact retry also completes unfinished ordering normalization and
 # is idempotent only when its requested close mode
 # matches the newest record; a changed decision or a mode mismatch is rejected.
+# A close (not --release) then retires any worker still recorded for the task
+# through bin/fm-auto-retire.sh's guarded teardown, as `reconcile close` does.
 # A re-held task may record a new answer on top. On a task already closed outside this script,
 # `answer` records the missing resolution block (the old `repair` path) only
 # when the task still carries the captain-hold provenance tasks-axi preserves
@@ -994,7 +996,29 @@ remove_interrupted_answer_stamp() {  # <task-id>
   rm -f -- "$tmp"
 }
 
+# A captain answer that closes the task (not --release), like a reconcile
+# close, means the task's work is finished, so a worker still recorded for it
+# is retired at once through bin/fm-auto-retire.sh, after this command's locks
+# are released because teardown takes the same task control lock. That script owns the guarded
+# teardown and the durable outcome row; a refusal leaves the task's work
+# untouched and never undoes the recorded answer.
 command_answer() {
+  local arg release=0
+  for arg in "$@"; do
+    [ "$arg" != --release ] || release=1
+  done
+  record_answer "$@"
+  [ "$release" = 0 ] || return 0
+  retire_closed_task "$1"
+}
+
+retire_closed_task() {  # <task-id>
+  captain_hold_cleanup
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "${FM_AUTO_RETIRE_BIN:-$SCRIPT_DIR/fm-auto-retire.sh}" "$1" decision || true
+}
+
+record_answer() {
   local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1537,6 +1561,7 @@ reconcile_close() {
       || fail "could not publish the reconciled captain-held task $id to its parent"
     reconcile_request_retire "$id"
     printf 'reconciled: %s\n' "$id"
+    retire_closed_task "$id"
     return 0
   fi
   [ "$hold_kind" = captain ] \
@@ -1560,6 +1585,7 @@ reconcile_close() {
     || fail "could not publish the reconciled captain-held task $id to its parent"
   reconcile_request_retire "$id"
   printf 'reconciled: %s\n' "$id"
+  retire_closed_task "$id"
 }
 
 # The still-active outcome. The hold survives, so the call stays the captain's

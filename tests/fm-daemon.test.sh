@@ -1262,7 +1262,7 @@ test_housekeeping_busy_declared_wait_matures_its_window() {
 }
 
 test_housekeeping_declared_time_controls_pause_recheck() {
-  local dir state fakebin task win pane key now future distant past escalations
+  local dir state fakebin task win pane key now future beyond distant past escalations
   dir=$(make_supercase pause-until-cadence)
   state="$dir/state"; fakebin="$dir/fakebin"
   task='held-until'; win="sess:fm-$task"; pane="$dir/pane.txt"
@@ -1286,13 +1286,27 @@ test_housekeeping_declared_time_controls_pause_recheck() {
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "a near-future declared time was rechecked before that time"
 
+  # A declared time past the flat cadence but within the honored horizon
+  # silences the recheck until that time, however old the marker is.
+  if [ "$(uname)" = Darwin ]; then
+    beyond=$(date -u -r "$((now + 900))" +%Y-%m-%dT%H:%M:%SZ)
+  else
+    beyond=$(date -u -d "@$((now + 900))" +%Y-%m-%dT%H:%M:%SZ)
+  fi
+  printf 'paused: waiting for release until %s\n' "$beyond" > "$state/$task.status"
+  echo $((now - 300)) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a declared time beyond the cadence was rechecked before that time"
+
   printf 'paused: waiting for release until %s\n' "$distant" > "$state/$task.status"
   echo $((now - 300)) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
   escalations=$(wc -l < "$state/.subsuper-escalations" | tr -d ' ')
   [ "$escalations" -eq 1 ] || fail "a wrong-year declared time silenced daemon housekeeping beyond the cadence"
-  grep -F 'declared time is beyond the recheck cadence' "$state/.subsuper-escalations" >/dev/null \
+  grep -F 'declared time is too far ahead to honor' "$state/.subsuper-escalations" >/dev/null \
     || fail "the bounded daemon recheck gave the wrong reason: $(cat "$state/.subsuper-escalations")"
   grep -F 'declared clearing time has passed' "$state/.subsuper-escalations" >/dev/null \
     && fail "the bounded daemon recheck falsely claimed the future declared time passed"
@@ -1307,7 +1321,7 @@ test_housekeeping_declared_time_controls_pause_recheck() {
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
   escalations=$(wc -l < "$state/.subsuper-escalations" | tr -d ' ')
   [ "$escalations" -eq 2 ] || fail "a reached declared time bypassed the reset pause cadence"
-  pass "housekeeping bounds a distant declared time, defers to a near one, and rechecks a passed one at once"
+  pass "housekeeping bounds a distant declared time, defers to a near or past-cadence one, and rechecks a passed one at once"
 }
 
 # A pane still idle but whose status is no longer a pause (the crew changed state

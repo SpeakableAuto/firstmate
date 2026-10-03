@@ -114,14 +114,22 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # invisibly - it re-surfaces once for a recheck every window. Four hours by
 # default: a declared wait is by definition expected to clear on its own, so a
 # recheck is a backstop, not progress, and an hourly one only produced nagging
-# (the 2026-09-07 away-window audit). A worker that knows when its wait clears
-# names it with `until` (status_paused_until below) and is rechecked at that
-# time or this cadence bound, whichever comes first. Both consumers read
-# FM_PAUSE_RESURFACE_SECS with this default so
-# the cadence has one owner. An item held for the captain is not rechecked at all
+# (the 2026-09-07 away-window audit). The status protocol asks every pause to
+# name when it clears with `until` (status_paused_until below); such a pause is
+# not rechecked before that time, however far past this cadence it lies, and
+# is rechecked once as soon as it passes. This cadence remains the recheck for
+# a legacy pause that names no time, and for a declared time beyond
+# FM_PAUSE_UNTIL_HORIZON_SECS (fm_pause_until_honored below). Both consumers
+# read FM_PAUSE_RESURFACE_SECS with this default so the cadence has one owner. An item held for the captain is not rechecked at all
 # while the away-posture record exists (bin/fm-watch.sh owns that rule).
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=14400
+
+# How far ahead a declared `until` time is honored as written: seven days by
+# default. A wait named within this horizon silences rechecks until its time; a
+# time further out reads as a mistyped date rather than a real wait, so it keeps
+# the flat recheck cadence and a wrong year cannot park a pane unseen for a year.
+FM_PAUSE_UNTIL_HORIZON_SECS_DEFAULT=604800
 
 # fm_utc_iso_to_epoch <YYYY-MM-DDTHH:MM[:SS]Z>: the one portable UTC ISO 8601
 # reader shared by the declared-wait vocabulary and the away-posture record
@@ -415,13 +423,14 @@ _fm_status_declared_wait_scan() {  # <resolve-verb> <legacy-captain-re>
   return 1
 }
 
-# A condition-aware declared wait: a `paused:` line may say WHEN it expects to
+# A condition-aware declared wait: a `paused:` line says WHEN it expects to
 # clear with `until <YYYY-MM-DDTHH:MM[:SS]Z>` anywhere in its text (UTC only, so
-# no local-zone guess is ever recorded). Prints that time as epoch seconds so a
+# no local-zone guess is ever recorded). bin/fm-brief.sh's status protocol
+# requires one on every pause. Prints that time as epoch seconds so a
 # supervisor rechecks the wait when the worker said it would clear instead of on
-# the flat cadence; returns 1 when the line is not a pause or declares no time,
-# or the time is malformed, so a bad token falls back to the cadence rather than
-# silencing the wait.
+# the flat cadence; returns 1 when the line is not a pause or declares no time
+# (a legacy un-timed pause), or the time is malformed, so a bad token falls back
+# to the cadence rather than silencing the wait.
 status_paused_until() {  # <status-line> -> epoch on stdout
   local line=$1 token
   status_is_paused "$line" || return 1
@@ -430,6 +439,17 @@ status_paused_until() {  # <status-line> -> epoch on stdout
     | head -1)
   [ -n "$token" ] || return 1
   fm_utc_iso_to_epoch "$token"
+}
+
+# fm_pause_until_honored <until-epoch> <now-epoch>: 0 when a declared `until`
+# time still in the future lies within FM_PAUSE_UNTIL_HORIZON_SECS of now, so
+# no recheck may fire before it; 1 when it lies beyond that horizon and the
+# flat recheck cadence still applies. A time already passed is the caller's
+# due-recheck case, not this one.
+fm_pause_until_honored() {  # <until-epoch> <now-epoch>
+  local horizon=${FM_PAUSE_UNTIL_HORIZON_SECS:-$FM_PAUSE_UNTIL_HORIZON_SECS_DEFAULT}
+  case "$horizon" in ''|*[!0-9]*) horizon=$FM_PAUSE_UNTIL_HORIZON_SECS_DEFAULT ;; esac
+  [ $(( $1 - $2 )) -le "$horizon" ]
 }
 
 # --- optional event emission time -------------------------------------------
