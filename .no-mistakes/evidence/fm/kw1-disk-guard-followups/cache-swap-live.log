@@ -1,0 +1,7 @@
+product: bin/fm-disk-guard.sh with cache=npm
+swap_triggered_after_first_delete=1
+guard_exit=1
+replacement_path_type=symlink
+protected_payload=protected-data
+guard_error=cache cleanup refused: [Errno 2] No such file or directory: '.npm' 
+result_alert=1791057625	2	check	disk-guard	check: disk-guard: cleanup complete: before=12482848 KiB after=12482944 KiB threshold=1048576 GiB failures=1

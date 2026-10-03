@@ -1,0 +1,4 @@
+product: bin/fm-brief.sh checkpoint-proof demo --mode direct-PR
+generated_safety_rule=1. Never push to the default branch (push only your `fm/checkpoint-proof` branch and the separate `wip/checkpoint-proof` checkpoint ref described below). Never merge a PR.
+generated_checkpoint_command=Publish each committed checkpoint to the separate remote ref wip/checkpoint-proof with this command: git push origin HEAD:refs/heads/wip/checkpoint-proof. This must not move the ship branch, PR branch or default branch.
+generated_checkpoint_boundary=Publish each committed checkpoint to the separate remote ref wip/checkpoint-proof with this command: git push origin HEAD:refs/heads/wip/checkpoint-proof. This must not move the ship branch, PR branch or default branch.
