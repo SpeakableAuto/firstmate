@@ -339,6 +339,31 @@ There is no pull request, no \`gh-axi\` call, and no forge CI result to report: 
 EOF
 }
 
+# Shared checkpoint contract for generated ships and promoted scouts.
+# Delivery-specific publication authority remains with fm_dod_block below.
+fm_checkpoint_block() {  # <mode> <forge>
+  cat <<'EOF'
+
+# Progress checkpoints
+At each meaningful step (implementation milestone, validation result, or handoff), append a short progress note to the status file: done / next / how to resume.
+Include the branch, exact commit, relevant validation command and result, remaining work, and any blocker, so another crew on any machine can continue without this chat or a local-only path.
+Before validation takes custody, commit each meaningful implementation checkpoint with that same concise resume note in the commit body; never commit secrets or private operational context.
+While no-mistakes owns the branch, report its run identifier, current gate and supported reattach command instead of editing or committing its work.
+EOF
+  case "$1:$2" in
+    local-only:*)
+      printf '%s\n' 'Keep checkpoints on the local task branch; the local-only contract forbids remote publication, so report that cross-machine resume requires firstmate to arrange transfer.' ;;
+    *:gerrit)
+      printf '%s\n' 'Publish checkpoints only through the Gerrit publication path in Definition of done; until that path permits publication, explicitly mark the checkpoint as local and not yet transferable.'
+      printf '%s\n' 'Keep a "Status and next step" section in the change description with the latest done / next / how to resume note, preserving existing review metadata.' ;;
+    *)
+      printf '%s\n' 'Push your branch at each meaningful checkpoint through the selected delivery path, never to the default branch and never around the no-mistakes gate.'
+      printf '%s\n' 'If no-mistakes publication is pending, explicitly report the checkpoint as local and not yet transferable; its pipeline owns the push under Definition of done.'
+      printf '%s\n' 'As soon as a PR exists, maintain a "## Status and next step" section in its body with the latest done / next / how to resume note and exact pushed commit, preserving every other section and the no-mistakes attestation.'
+      printf '%s\n' 'Read the branch back from the remote before claiming it is pushed; the branch and progress note together must be sufficient for a crew on another machine to resume.' ;;
+  esac
+}
+
 fm_dod_block() {  # <mode> <task-id> [branch] [<forge>]
   local mode=$1 id=$2 forge=${4:-none}
   local branch=${3:-fm/$id}
@@ -445,6 +470,7 @@ EOF
       echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2
       return 1 ;;
   esac
+  fm_checkpoint_block "$mode" "$forge"
 }
 
 # 0 when <sha> is contained in a ref under <namespace> in <repo>.
