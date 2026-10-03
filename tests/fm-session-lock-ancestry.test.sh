@@ -1123,7 +1123,16 @@ case "$pid:$field" in
   *:ppid=) printf '%s\n' "$FM_TEST_DAEMON_PID" ;;
 esac
 SH
+  cat > "$fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${FM_TEST_FAIL_LOCK_ARCHIVE_MOVE:-0}:${1:-}:${2:-}" in
+  1:*/state/.lock:*/state/.lock.stale-*) exit 73 ;;
+esac
+exec /bin/mv "$@"
+SH
   chmod +x "$fakebin/ps"
+  chmod +x "$fakebin/mv"
   sleep 120 &
   daemon=$!
   BG_FIXTURE_PIDS+=("$daemon")
@@ -1167,6 +1176,15 @@ SH
     fail "the recorded Codex thread moved its own lock aside"
   fi
   [ -f "$dir/state/.lock" ] || fail "same-thread refusal moved the lock"
+  if FM_TEST_FAIL_LOCK_ARCHIVE_MOVE=1 codex_lock B reclaim-shared-daemon > "$dir/move-failure.out" 2>&1; then
+    fail "a failed lock archive move reported a successful reclaim"
+  fi
+  [ "$(cat "$dir/state/.lock")" = "$daemon" ] \
+    || fail "a failed lock archive move did not restore the live lock"
+  [ "$(cat "$dir/state/.lock-session")" = codex:A ] \
+    || fail "a failed lock archive move did not restore the live thread sidecar"
+  [ -z "$(find "$dir/state" -maxdepth 1 \( -name '.lock.stale-*' -o -name '.lock-session.stale-*' \) -print)" ] \
+    || fail "a failed lock archive move left half of the pair archived"
   codex_lock B reclaim-shared-daemon > "$dir/reclaim.out" 2>&1 \
     || fail "an explicit reclaim of the aged lock failed: $(cat "$dir/reclaim.out")"
   [ ! -e "$dir/state/.lock" ] && [ ! -e "$dir/state/.lock-session" ] \

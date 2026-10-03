@@ -86,6 +86,9 @@ LOCK_SESSION_PHASE=0
 LOCK_SESSION_KIND=0
 LOCK_SESSION_PREV="$STATE/.lock-session.prev"
 LOCK_LINE_PRE=
+RECLAIM_ARCHIVE_PHASE=0
+RECLAIM_LOCK_ARCHIVE=
+RECLAIM_SESSION_ARCHIVE=
 release_claim_lock() {
   if [ "$CLAIM_LOCK_HELD" -eq 1 ]; then
     fm_lock_release "$CLAIM_LOCK"
@@ -110,7 +113,23 @@ commit_lock_session() {
   LOCK_SESSION_KIND=0
   rm -f "$LOCK_SESSION_PREV" 2>/dev/null || true
 }
+restore_uncommitted_reclaim() {
+  if [ "$RECLAIM_ARCHIVE_PHASE" -ge 1 ] \
+    && [ -n "$RECLAIM_SESSION_ARCHIVE" ] \
+    && { [ -e "$RECLAIM_SESSION_ARCHIVE" ] || [ -L "$RECLAIM_SESSION_ARCHIVE" ]; }; then
+    mv -f "$RECLAIM_SESSION_ARCHIVE" "$LOCK_SESSION" 2>/dev/null || true
+  fi
+  if [ "$RECLAIM_ARCHIVE_PHASE" -eq 2 ] \
+    && [ -n "$RECLAIM_LOCK_ARCHIVE" ] \
+    && { [ -e "$RECLAIM_LOCK_ARCHIVE" ] || [ -L "$RECLAIM_LOCK_ARCHIVE" ]; }; then
+    mv -f "$RECLAIM_LOCK_ARCHIVE" "$LOCK" 2>/dev/null || true
+  fi
+  RECLAIM_ARCHIVE_PHASE=0
+  RECLAIM_LOCK_ARCHIVE=
+  RECLAIM_SESSION_ARCHIVE=
+}
 on_lock_exit() {
+  restore_uncommitted_reclaim
   restore_uncommitted_lock_session
   [ -n "$LOCK_LINE_PRE" ] && rm -f "$LOCK_LINE_PRE"
   release_claim_lock
@@ -269,15 +288,19 @@ reclaim_shared_daemon() {
     exit 1
   }
   if [ "$has_sidecar" -eq 1 ]; then
+    RECLAIM_LOCK_ARCHIVE="$parked"
+    RECLAIM_SESSION_ARCHIVE="$STATE/.lock-session.stale-$suffix"
+    RECLAIM_ARCHIVE_PHASE=1
     mv "$LOCK_SESSION" "$STATE/.lock-session.stale-$suffix" || exit 1
+    RECLAIM_ARCHIVE_PHASE=2
   fi
   if ! mv "$LOCK" "$parked"; then
-    if [ "$has_sidecar" -eq 1 ]; then
-      mv "$STATE/.lock-session.stale-$suffix" "$LOCK_SESSION" 2>/dev/null || true
-    fi
     echo "error: could not move shared-daemon lock aside" >&2
     exit 1
   fi
+  RECLAIM_ARCHIVE_PHASE=0
+  RECLAIM_LOCK_ARCHIVE=
+  RECLAIM_SESSION_ARCHIVE=
   release_claim_lock
   echo "shared Codex app-server lock moved to $parked; start the new session again"
   exit 0
