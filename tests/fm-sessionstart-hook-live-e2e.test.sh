@@ -109,9 +109,14 @@ make_lab() {  # <harness> -> echoes lab dir
   git -C "$lab" commit -q -m init >/dev/null 2>&1 || true
 
   for stub in fm-turnend-guard.sh fm-claude-stop-autoarm.sh fm-arm-pretool-check.sh \
-    fm-cd-pretool-check.sh fm-subagent-pretool-check.sh; do
+    fm-cd-pretool-check.sh fm-subagent-pretool-check.sh fm-host-mirror.sh; do
     printf '#!/usr/bin/env bash\nexit 0\n' > "$lab/bin/$stub"
     chmod +x "$lab/bin/$stub"
+  done
+
+  for stub in fm-claude-sessionstart.sh fm-claude-arm-guard.sh fm-claude-cd-guard.sh \
+    fm-claude-turnend-guard.sh fm-claude-stop-hook.sh fm-claude-host-mirror.sh; do
+    cp "$ROOT/bin/$stub" "$lab/bin/$stub"
   done
 
   # The REAL deferred-network stage plus the two libraries it sources, so fact

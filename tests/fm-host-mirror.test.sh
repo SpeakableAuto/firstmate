@@ -46,7 +46,7 @@ as_session() {  # <home> <script>
 }
 
 # The command string one tracked registration runs.
-claude_cmd() { jq -r --arg e "$1" '.hooks[$e][].hooks[] | select(.command | contains("fm-host-mirror.sh")) | .command' "$ROOT/.claude/settings.json"; }
+claude_cmd() { jq -r --arg e "$1" '.hooks[$e][].hooks[] | select(.command | contains("fm-claude-host-mirror.sh")) | .command' "$ROOT/.claude/settings.json"; }
 cursor_cmd() { jq -r --arg e "$1" '.hooks[$e][] | select(.command | contains("fm-host-mirror.sh")) | .command' "$ROOT/.cursor/hooks.json"; }
 
 # Inside an as_session script: one Claude prompt-submit (captain) or Stop

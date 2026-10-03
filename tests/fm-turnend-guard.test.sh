@@ -887,33 +887,60 @@ test_grok_adapter_missing_jq_and_no_supervision_allow() {
 # rather than deduplicate it (docs/subagent-guard.md "Known residual gap").
 # It is asserted to stay unguarded so the exception cannot be closed silently.
 test_tracked_claude_entries_inert_under_grok() {
-  local dir cmd script target guarded=0 unguarded=0
+  local dir cmd script target expected_args hook_status guarded=0 unguarded=0
   command -v jq >/dev/null 2>&1 || fail "test host must provide jq"
   dir="$TMP_ROOT/claude-entries-grok-inert"
   mkdir -p "$dir/bin"
   for script in fm-turnend-guard.sh fm-claude-stop-autoarm.sh fm-sessionstart-run.sh \
     fm-arm-pretool-check.sh fm-cd-pretool-check.sh fm-subagent-pretool-check.sh fm-host-mirror.sh; do
-    printf '#!/usr/bin/env bash\nprintf ran >> %q\n' "$dir/invoked" > "$dir/bin/$script"
+    # shellcheck disable=SC2016 # Fixture variables expand when the hook runs.
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" > %q\ncat > %q\nprintf hook-stdout\nprintf hook-stderr >&2\nexit "${FM_TEST_HOOK_EXIT:-0}"\n' \
+      "$dir/invoked" "$dir/payload" > "$dir/bin/$script"
     chmod +x "$dir/bin/$script"
+  done
+
+  # Exercise the real named entrypoints with isolated downstream executables.
+  for script in fm-claude-sessionstart.sh fm-claude-arm-guard.sh fm-claude-cd-guard.sh \
+    fm-claude-turnend-guard.sh fm-claude-stop-hook.sh fm-claude-host-mirror.sh; do
+    cp "$ROOT/bin/$script" "$dir/bin/$script"
   done
 
   # Runs one tracked command string and reports whether it reached its script.
   ran_under() {
     rm -f "$dir/invoked"
-    env "$@" CLAUDE_PROJECT_DIR="$dir" bash -c "$cmd" </dev/null >/dev/null 2>&1
+    printf '%s' '{"hook_event_name":"test"}' > "$dir/input"
+    env "$@" CLAUDE_PROJECT_DIR="$dir" bash -c "$cmd" \
+      < "$dir/input" > "$dir/stdout" 2> "$dir/stderr"
+    hook_status=$?
     [ -e "$dir/invoked" ]
   }
 
   while IFS= read -r cmd; do
     [ -n "$cmd" ] || continue
+    # shellcheck disable=SC2016 # Match the registered variable, before hook expansion.
+    case "$cmd" in
+      '"$CLAUDE_PROJECT_DIR"/bin/fm-'*) ;;
+      *) fail "hook label must name its script instead of inline guard logic: $cmd" ;;
+    esac
     target=$(printf '%s\n' "$cmd" | sed -n 's|.*/bin/\([a-z0-9-]*\.sh\).*|\1|p')
     [ -n "$target" ] || fail "could not identify the target script of tracked entry: $cmd"
 
     # Native Claude: EVERY tracked entry must still reach its script, or a guard
     # has silently disarmed Claude's own protection.
     ran_under -u GROK_AGENT -u GROK_HOOK_EVENT -u GROK_HOOK_NAME -u GROK_SESSION_ID \
-      -u GROK_WORKSPACE_ROOT \
+      -u GROK_WORKSPACE_ROOT FM_TEST_HOOK_EXIT=2 \
       || fail "tracked entry for $target did not run under a native Claude environment"
+    expect_code 2 "$hook_status" "tracked entry for $target must preserve a denial exit"
+    assert_equals "hook-stdout" "$(cat "$dir/stdout")" "$target changed stdout"
+    assert_equals "hook-stderr" "$(cat "$dir/stderr")" "$target changed stderr"
+    cmp -s "$dir/input" "$dir/payload" || fail "$target changed the hook payload"
+    case "$target" in
+      fm-claude-arm-guard.sh|fm-claude-cd-guard.sh|fm-claude-turnend-guard.sh|fm-subagent-pretool-check.sh)
+        expected_args=--claude ;;
+      fm-claude-host-mirror.sh) expected_args='hook claude' ;;
+      *) expected_args='' ;;
+    esac
+    assert_equals "$expected_args" "$(cat "$dir/invoked")" "$target changed downstream arguments"
 
     if [ "$target" = fm-subagent-pretool-check.sh ]; then
       unguarded=$((unguarded + 1))

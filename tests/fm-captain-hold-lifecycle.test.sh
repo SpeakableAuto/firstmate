@@ -798,6 +798,29 @@ EOF
   pass "the completion gate attests captain-held inventory and transfers open status decisions"
 }
 
+# Hold annotations reserve parentheses for their own syntax; ordinary prose
+# must still create and update a durable hold through the public command.
+test_hold_sanitizes_parentheses() {
+  local home show
+  home=$(make_home punctuation)
+  run_captain "$home" hold sample-punctuation --title "Choose an option" \
+    --reason "Choose (option A (preferred)) or B)." --repo sample >/dev/null \
+    || fail "parentheses prevented creation of a captain hold"
+  show=$(tasks_in "$home" show sample-punctuation --full)
+  assert_contains "$show" "held: yes" "punctuated reason did not create an active hold"
+  assert_contains "$show" "Choose [option A [preferred]] or B]." \
+    "hold did not retain the sanitized reason"
+  run_captain "$home" hold sample-punctuation \
+    --reason "Review (updated choice" --until 2099-01-01 >/dev/null \
+    || fail "unmatched parenthesis prevented updating a deferred hold"
+  show=$(tasks_in "$home" show sample-punctuation --full)
+  assert_contains "$show" "Review [updated choice" "updated hold lost its reason"
+  assert_contains "$show" "2099-01-01" "sanitization lost the deferral date"
+  run_captain "$home" open sample-punctuation >/dev/null \
+    || fail "sanitized hold cannot be resolved through the hold interface"
+  pass "hold sanitizes nested and unmatched parentheses on creation and update"
+}
+
 # The recorded-answer rule: answering closes with the captain's exact words, an
 # exact retry is idempotent, a drifted retry is rejected, dependent work routed
 # behind the answered task is released by the close, and the completion gate is
@@ -4034,6 +4057,7 @@ test_retained_body_keeps_its_utf8_bytes() {
   pass "cleanup preserves every byte of a retained body's non-ASCII characters"
 }
 
+test_hold_sanitizes_parentheses
 test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes

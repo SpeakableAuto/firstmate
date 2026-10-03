@@ -49,6 +49,8 @@
 # a UTC `Captain hold set:` timestamp in the task body: repeating an active
 # hold preserves the existing timestamp, while re-holding released work starts
 # a new lifecycle. A task already closed is refused rather than reopened.
+# Hold reasons replace parentheses with square brackets to preserve the
+# tasks-axi annotation syntax without rejecting ordinary punctuation.
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card.
@@ -828,7 +830,10 @@ command_hold() {
   done
   validate_slug task-id "$id"
   validate_one_line reason "$reason"
-  case "$reason" in *'('*|*')'*) fail "reason must not contain parentheses (tasks-axi hold contract)" ;; esac
+  # Parentheses delimit tasks-axi hold annotations, so normalize prose before
+  # either the backlog write or the parent notification consumes it.
+  reason=${reason//\(/[}
+  reason=${reason//\)/]}
   if [ -n "$origin" ]; then
     validate_slug origin-id "$origin"
   fi
