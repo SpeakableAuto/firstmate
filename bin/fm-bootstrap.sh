@@ -1142,6 +1142,12 @@ crew_dispatch_validate() {
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - $err"
     return 0
   fi
+  if jq -e 'has("quota_pacing")' "$file" >/dev/null 2>&1; then
+    if ! printf '%s\n' '{"providers":[]}' | node "$SCRIPT_DIR/fm-quota-pacing.mjs" "$file" - >/dev/null 2>&1; then
+      echo "CREW_DISPATCH: invalid config/crew-dispatch.json - invalid quota pacing settings"
+      return 0
+    fi
+  fi
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
     jq -r '
     def profile($p):
