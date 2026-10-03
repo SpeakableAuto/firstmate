@@ -2384,10 +2384,11 @@ verification: Herdr 0.9.3; stub supervisor only, real Claude/operator check rema
 On 2026-10-04 AEST, `bash bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh` also verified clear-frame observation resets, historical busy text with a live idle composer, current spinner/footer vetoes, and unchanged healthy state files:
 
 ```text
-ok - returning error cannot reuse time before a clear frame
-ok - returning error starts a fresh observation window
-ok - returning error waits the entire new idle interval
-ok - returning stable error recovers after a full fresh interval
+ok - different error cannot reuse time before a clear frame
+ok - different error starts a fresh observation window
+ok - different error after clear is a new incident
+ok - different error waits the entire new idle interval
+ok - different stable error recovers after a full fresh interval
 ok - historical busy text does not veto terminal network error
 ok - idle network error recovers despite historical busy text
 ok - current spinner never receives a nudge

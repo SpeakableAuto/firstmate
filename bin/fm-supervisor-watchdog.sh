@@ -72,6 +72,7 @@ watchdog_screen() {
         if (line ~ /^[[:space:]─━│╭╰╮╯┌└┐┘-]*$/) continue
         if (line ~ /^[[:space:]]*Update available! Run:/) continue
         if (line ~ /^[[:space:]]*[✻✽✢✳✶✺].* for [0-9].*· done /) continue
+        if (line ~ /^[[:space:]]*●[[:space:]]+(low|medium|high|max)[[:space:]]+·[[:space:]]+\/effort[[:space:]]*$/) continue
         last=line
       }
       print last
@@ -85,7 +86,7 @@ watchdog_screen() {
   if printf '%s\n%s\n' "$last" "$live" | fm_busy_lines_match claude; then
     printf 'busy'; return
   fi
-  if printf '%s\n' "$last" | grep -Eiq '^[[:space:]⎿●]*((API Error:.*(ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|network|connection|fetch failed))|((Unable|Cannot|Could not) to (connect to|reach) (the )?API))'; then
+  if printf '%s\n' "$last" | grep -Eiq '^[[:space:]⎿⏺●]*((API Error:.*(ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|network|connection|fetch failed))|((Unable|Cannot|Could not) to (connect to|reach) (the )?API))'; then
     printf 'error'
   else
     printf 'clear'

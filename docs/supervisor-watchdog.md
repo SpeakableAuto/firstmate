@@ -5,8 +5,10 @@ Its state machine, guards, supported configuration, and residual input race are 
 It does not restart a process, repair a dead shell, or manage workers.
 Other primary harnesses and tmux, Zellij, Orca, cmux, and Codex App are unsupported and must not be configured as targets.
 
-Recovery uses two semantically unchanged, empty-prompt observations at least ten seconds apart, followed by fresh checks immediately before sending one short resume line.
-Claude's dim rotating empty-composer suggestion is ignored by that stability check, while a draft or substantive screen change holds recovery and queues a `check: supervisor-watchdog` alert for Firstmate.
+Recovery requires two continuous, semantically unchanged terminal-network-error observations with an empty prompt at least ten seconds apart, followed by fresh checks immediately before sending one short resume line.
+An intervening clear frame discards the pending observation window, so any returning error must remain stable for a full new interval.
+Only the latest output row and current composer/footer region can veto recovery as busy; busy-looking text from earlier transcript rows is ignored.
+Claude's dim rotating empty-composer suggestion is also ignored by the stability check, while a draft or substantive change during an error holds recovery and queues a `check: supervisor-watchdog` alert for Firstmate.
 Herdr cannot atomically check the prompt and send input, so a human keystroke in the final read/send window can still mix with the nudge.
 This is a guarded best-effort safeguard; it is not an input lock.
 The watchdog never clears mixed input or retries a submission, and it verifies a new turn before reporting success.
