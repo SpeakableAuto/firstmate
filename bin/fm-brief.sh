@@ -616,6 +616,8 @@ Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
+At each meaningful investigation step, append a short status note with done / next / how to resume and update the report with the evidence and remaining question, so another crew can continue without this chat.
+The scout contract forbids pushing a branch or opening a PR; firstmate must arrange report transfer for cross-machine continuation.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.${PRIVATE_WORKFLOW_TAIL}
 EOF
