@@ -2,21 +2,21 @@
 # Acquire or inspect the per-home firstmate session lock.
 #
 # Line 1 of state/.lock is the owning session's anchor pid, resolved by
-# fm_session_lock_anchor_pid in bin/fm-session-lock-lib.sh: the harness (agent)
-# process found by walking the shell's ancestry, which lives as long as the
-# firstmate session - unlike the transient subshell PID of any one tool call,
-# which is dead moments after it is written. For a Claude session that proves a
-# trusted session id the anchor is CLAUDE_PID, the model-loop process, so a
-# shared transient daemon or a front-end that outlives the session never keeps
-# a dead session's lock alive. Line 1 keeps its whole-line pid format because
-# every other reader takes the first line as the pid.
+# fm_session_lock_anchor_pid in bin/fm-session-lock-lib.sh from the harness
+# processes in the shell's ancestry rather than the transient subshell PID of
+# one tool call. For a Claude session that proves a trusted session id the
+# anchor is CLAUDE_PID, the model-loop process. A Codex app-server can be a
+# shared, longer-lived anchor, so its sidecar thread id is also required for
+# ownership. Line 1 keeps its whole-line pid format because every other reader
+# takes the first line as the pid.
 #
 # The trusted id itself is recorded beside the lock in state/.lock-session, a
 # sidecar written only here and only under the claim lock: refreshed on every
 # confirmed-own acquisition, including the early already-mine exit that waits
-# for the claim lock, removed when the acquiring session proves no trusted id,
-# and left byte-identical when it already names that id. A same-session
-# confirmation never rewrites line 1 while the recorded pid is alive, because
+# for the claim lock, removed when an ordinary anchor proves no trusted id, and
+# left byte-identical when it already names that id. A shared Codex anchor
+# instead fails closed without a trusted thread id. A same-session confirmation
+# never rewrites line 1 while the recorded pid is alive, because
 # bin/fm-startup-network.sh compares that pid across its deferred sweeps; a dead
 # recorded pid is reclaimed and rewritten to this session's anchor.
 #
@@ -25,6 +25,12 @@
 #                             A held lock is not proof the holder is consuming
 #                             wakes. Machine-readable lock fields live on
 #                             fm-inbox.sh ready, from the same inspect helper.
+#        fm-lock.sh reclaim-shared-daemon [--legacy]
+#                             Explicitly move aside a shared Codex daemon lock
+#                             from a different thread after its watcher beacon
+#                             and lock have both aged at least 30 minutes. Pass
+#                             --legacy only for a pre-upgrade lock with no
+#                             .lock-session sidecar.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +55,13 @@ if [ "${1:-}" = "status" ]; then
   case "$FM_LOCK_INSPECT_STATE" in
     free) echo "lock: free" ;;
     unreadable) echo "lock: unreadable" ;;
-    held) echo "lock: held by live harness pid $FM_LOCK_INSPECT_PID" ;;
+    held)
+      if fm_codex_shared_daemon_pid "$FM_LOCK_INSPECT_PID"; then
+        echo "lock: held by shared Codex app-server daemon pid $FM_LOCK_INSPECT_PID (conversation liveness unknown)"
+      else
+        echo "lock: held by live harness pid $FM_LOCK_INSPECT_PID"
+      fi
+      ;;
     *) echo "lock: stale (pid $FM_LOCK_INSPECT_PID dead or not a harness)" ;;
   esac
   exit 0
@@ -74,6 +86,9 @@ LOCK_SESSION_PHASE=0
 LOCK_SESSION_KIND=0
 LOCK_SESSION_PREV="$STATE/.lock-session.prev"
 LOCK_LINE_PRE=
+RECLAIM_ARCHIVE_PHASE=0
+RECLAIM_LOCK_ARCHIVE=
+RECLAIM_SESSION_ARCHIVE=
 release_claim_lock() {
   if [ "$CLAIM_LOCK_HELD" -eq 1 ]; then
     fm_lock_release "$CLAIM_LOCK"
@@ -98,7 +113,23 @@ commit_lock_session() {
   LOCK_SESSION_KIND=0
   rm -f "$LOCK_SESSION_PREV" 2>/dev/null || true
 }
+restore_uncommitted_reclaim() {
+  if [ "$RECLAIM_ARCHIVE_PHASE" -ge 1 ] \
+    && [ -n "$RECLAIM_SESSION_ARCHIVE" ] \
+    && { [ -e "$RECLAIM_SESSION_ARCHIVE" ] || [ -L "$RECLAIM_SESSION_ARCHIVE" ]; }; then
+    mv -f "$RECLAIM_SESSION_ARCHIVE" "$LOCK_SESSION" 2>/dev/null || true
+  fi
+  if [ "$RECLAIM_ARCHIVE_PHASE" -eq 2 ] \
+    && [ -n "$RECLAIM_LOCK_ARCHIVE" ] \
+    && { [ -e "$RECLAIM_LOCK_ARCHIVE" ] || [ -L "$RECLAIM_LOCK_ARCHIVE" ]; }; then
+    mv -f "$RECLAIM_LOCK_ARCHIVE" "$LOCK" 2>/dev/null || true
+  fi
+  RECLAIM_ARCHIVE_PHASE=0
+  RECLAIM_LOCK_ARCHIVE=
+  RECLAIM_SESSION_ARCHIVE=
+}
 on_lock_exit() {
+  restore_uncommitted_reclaim
   restore_uncommitted_lock_session
   [ -n "$LOCK_LINE_PRE" ] && rm -f "$LOCK_LINE_PRE"
   release_claim_lock
@@ -118,13 +149,19 @@ remember_lock_session() {
   LOCK_SESSION_PHASE=1
 }
 
-# Record the trusted session id beside the lock, or remove a sidecar that no
-# trusted id backs. Called only while the claim lock is held. A sidecar already
-# naming this id is left untouched, so a same-session confirmation keeps it
-# byte-identical.
+# Record the trusted session or thread id beside the lock. An ordinary anchor
+# with no trusted id removes an unbacked sidecar, while a shared Codex anchor
+# must supply its trusted thread id. Called only while the claim lock is held.
+# A sidecar already naming this id is left untouched, so a same-session
+# confirmation keeps it byte-identical.
 publish_lock_session() {
   local trusted recorded tmp
-  if trusted=$(fm_session_lock_trusted_session_id); then
+  if fm_codex_shared_daemon_pid "$me"; then
+    trusted=$(fm_session_lock_codex_thread_id "$me") || return 1
+  else
+    trusted=$(fm_session_lock_trusted_session_id) || trusted=
+  fi
+  if [ -n "$trusted" ]; then
     if recorded=$(fm_session_lock_recorded_session_id "$STATE") && [ "$recorded" = "$trusted" ]; then
       return 0
     fi
@@ -166,7 +203,7 @@ confirm_own_lock() {  # <recorded-pid>
     waited=1
   fi
   recorded=$(cat "$LOCK" 2>/dev/null || true)
-  if [ "$recorded" = "$me" ] || fm_session_lock_owned_by_self "$STATE"; then
+  if current_owns_recorded "$recorded"; then
     publish_lock_session_or_die
     commit_lock_session
     release_claim_lock
@@ -179,8 +216,19 @@ confirm_own_lock() {  # <recorded-pid>
   return 1
 }
 
+current_owns_recorded() {  # <recorded-pid>
+  if [ "$1" = "$me" ] && ! fm_codex_shared_daemon_pid "$1"; then
+    return 0
+  fi
+  fm_session_lock_owned_by_self "$STATE"
+}
+
 refuse_live_owner() {  # <recorded-pid>
   local recorded
+  if fm_codex_shared_daemon_pid "$1"; then
+    echo "error: session lock names shared Codex app-server daemon pid $1; another conversation may still be live. Use fm-lock.sh reclaim-shared-daemon only after verifying the old conversation has exited." >&2
+    exit 1
+  fi
   if recorded=$(fm_session_lock_recorded_session_id "$STATE"); then
     echo "error: another live firstmate session holds the lock (pid $1, session $recorded); operate read-only until resolved" >&2
   else
@@ -189,9 +237,89 @@ refuse_live_owner() {  # <recorded-pid>
   exit 1
 }
 
+reclaim_shared_daemon() {
+  local allow_legacy=$1 old recorded current lock_age beat_age suffix parked has_sidecar=0
+  current=$(fm_session_lock_codex_thread_id "$me") || {
+    echo "error: reclaim requires a Codex thread under a shared app-server daemon" >&2
+    exit 1
+  }
+  fm_lock_acquire_wait "$CLAIM_LOCK"
+  CLAIM_LOCK_HELD=1
+  [ -f "$LOCK" ] && [ ! -L "$LOCK" ] || {
+    echo "error: no regular session lock to reclaim" >&2
+    exit 1
+  }
+  old=$(cat "$LOCK" 2>/dev/null || true)
+  fm_codex_shared_daemon_pid "$old" || {
+    echo "error: session lock does not name a shared Codex app-server daemon" >&2
+    exit 1
+  }
+  if recorded=$(fm_session_lock_recorded_session_id "$STATE"); then
+    case "$recorded" in codex:?*) ;; *)
+      echo "error: shared-daemon lock has no recorded Codex thread id; inspect it manually" >&2
+      exit 1 ;;
+    esac
+    has_sidecar=1
+    [ "$recorded" != "$current" ] || {
+      echo "error: refusing to reclaim this Codex thread's own session lock" >&2
+      exit 1
+    }
+  else
+    if [ -e "$LOCK_SESSION" ] || [ -L "$LOCK_SESSION" ]; then
+      echo "error: shared-daemon lock has an invalid session sidecar; inspect it manually" >&2
+      exit 1
+    fi
+    [ "$allow_legacy" -eq 1 ] || {
+      echo "error: shared-daemon lock has no recorded Codex thread id; pass --legacy only after verifying it is a pre-upgrade lock" >&2
+      exit 1
+    }
+  fi
+  lock_age=$(fm_path_age "$LOCK")
+  beat_age=$(fm_path_age "$STATE/.last-watcher-beat")
+  if [ "$lock_age" -lt 1800 ] || [ "$beat_age" -lt 1800 ]; then
+    echo "error: refusing to reclaim a recent lock or fresh watcher beacon" >&2
+    exit 1
+  fi
+  suffix="$(date +%s)-$old"
+  parked="$STATE/.lock.stale-$suffix"
+  [ ! -e "$parked" ] && [ ! -L "$parked" ] \
+    && [ ! -e "$STATE/.lock-session.stale-$suffix" ] \
+    && [ ! -L "$STATE/.lock-session.stale-$suffix" ] || {
+    echo "error: a lock archive with this timestamp already exists" >&2
+    exit 1
+  }
+  if [ "$has_sidecar" -eq 1 ]; then
+    RECLAIM_LOCK_ARCHIVE="$parked"
+    RECLAIM_SESSION_ARCHIVE="$STATE/.lock-session.stale-$suffix"
+    RECLAIM_ARCHIVE_PHASE=1
+    mv "$LOCK_SESSION" "$STATE/.lock-session.stale-$suffix" || exit 1
+    RECLAIM_ARCHIVE_PHASE=2
+  fi
+  if ! mv "$LOCK" "$parked"; then
+    echo "error: could not move shared-daemon lock aside" >&2
+    exit 1
+  fi
+  RECLAIM_ARCHIVE_PHASE=0
+  RECLAIM_LOCK_ARCHIVE=
+  RECLAIM_SESSION_ARCHIVE=
+  release_claim_lock
+  echo "shared Codex app-server lock moved to $parked; start the new session again"
+  exit 0
+}
+
+if [ "${1:-}" = reclaim-shared-daemon ]; then
+  case "$#:${2:-}" in
+    1:) reclaim_shared_daemon 0 ;;
+    2:--legacy) reclaim_shared_daemon 1 ;;
+    *)
+      echo "error: usage: fm-lock.sh reclaim-shared-daemon [--legacy]" >&2
+      exit 1 ;;
+  esac
+fi
+
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   old=$(cat "$LOCK" 2>/dev/null || true)
-  if [ "$old" = "$me" ] || fm_session_lock_owned_by_self "$STATE"; then
+  if current_owns_recorded "$old"; then
     confirm_own_lock "$old"
     old=$(cat "$LOCK" 2>/dev/null || true)
   fi
@@ -219,10 +347,10 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
     echo "error: session lock is unreadable; operate read-only until resolved" >&2
     exit 1
   }
-  if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
-    fm_session_lock_owned_by_self "$STATE" && confirm_own_lock "$old"
+  if fm_harness_pid_alive "$old"; then
+    current_owns_recorded "$old" && confirm_own_lock "$old"
     old=$(cat "$LOCK" 2>/dev/null || true)
-    if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
+    if fm_harness_pid_alive "$old"; then
       refuse_live_owner "$old"
     fi
   fi
