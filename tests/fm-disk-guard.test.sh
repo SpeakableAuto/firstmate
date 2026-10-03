@@ -117,8 +117,8 @@ fi
 touch "$case_home/alert-lock-ready.release"
 wait "$alert_holder"
 [ ! -e "$case_home/user/.npm/_cacache/cache" ] || fail 'blocked starting alert prevented cleanup'
-[ "$(find "$case_home/fm/state/.disk-guard-alerts" -name '*.alert' | wc -l | tr -d ' ')" = 2 ] \
-  || fail 'timed-out alerts were not persisted'
+[ "$(wc -l < "$case_home/fm/state/.disk-guard-alerts/alerts" | tr -d ' ')" = 2 ] \
+  || fail 'timed-out alerts were not persisted in one ordered journal'
 echo 20971520 > "$case_home/user/free"
 run_guard --dry-run
 [ ! -e "$case_home/fm/state/.wake-queue" ] || fail 'dry-run retried pending alerts'
@@ -126,12 +126,21 @@ run_guard
 grep -q 'low space:' "$case_home/fm/state/.wake-queue" || fail 'starting alert not retried'
 grep -q 'cleanup complete:.*failures=1' "$case_home/fm/state/.wake-queue" \
   || fail 'result alert not retried after disk recovered'
-[ "$(find "$case_home/fm/state/.disk-guard-alerts" -name '*.alert' | wc -l | tr -d ' ')" = 0 ] \
-  || fail 'delivered alerts retained for retry'
+[ ! -e "$case_home/fm/state/.disk-guard-alerts/alerts" ] || fail 'delivered alerts retained for retry'
+FM_HOME="$case_home/fm" FM_STATE_OVERRIDE="$case_home/fm/state" \
+  FM_WAKE_QUEUE="$case_home/fm/state/.wake-queue" \
+  FM_WAKE_QUEUE_LOCK="$case_home/fm/state/.wake-queue.lock" \
+  bash "$ROOT/bin/fm-wake-drain.sh" > "$case_home/drain.out" 2> "$case_home/drain.err" \
+  || fail 'real wake consumer could not drain retried alerts'
+grep -q 'cleanup complete:.*failures=1' "$case_home/drain.out" \
+  || fail 'wake deduplication did not retain the cleanup result'
+if grep -q 'starting configured cleanup' "$case_home/drain.out"; then
+  fail 'wake deduplication surfaced the superseded starting alert'
+fi
 cp "$case_home/fm/state/.wake-queue" "$TMP_ROOT/delivered-alerts"
 run_guard
 cmp "$case_home/fm/state/.wake-queue" "$TMP_ROOT/delivered-alerts" || fail 'delivered alerts repeated'
-pass 'both timed-out alerts survive and retry once on a healthy check; dry-run stays read-only'
+pass 'both timed-out alerts retry chronologically and the real wake consumer retains the result'
 
 new_case dry_run
 seed_caches

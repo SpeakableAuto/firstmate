@@ -16,8 +16,8 @@
 # are refused. Missing tools or failed cleanup alert and exit 1.
 # Below threshold, queue a Firstmate check wake before cleanup, then a result
 # wake with before/after KiB and failures. Failed measurement also alerts.
-# Alerts first persist in state/.disk-guard-alerts and retry on every check,
-# even after space recovers. Delivery is at least once after an interrupted append.
+# Alerts first persist in an ordered journal below state/.disk-guard-alerts and
+# retry on every check, even after space recovers. Delivery is at least once.
 # Healthy checks without pending alerts are silent. Dry-run never mutates.
 # A per-home mkdir lock prevents overlapping cleanup; contention exits 1.
 # After an interrupted run, remove state/.disk-guard.lock only after verifying
@@ -55,37 +55,76 @@ case "$threshold" in ''|*[!0-9]*|0*) echo 'invalid threshold_gib' >&2; exit 2 ;;
 threshold_kib=$((threshold * 1048576))
 
 pending="$FM_HOME/state/.disk-guard-alerts"
-flush_alerts() {
-  [ -d "$pending" ] || return 0
-  local status=0 file payload
-  for file in "$pending"/*.alert; do
-    [ -f "$file" ] && break
-  done
-  [ -f "$file" ] || return 0
+pending_journal="$pending/alerts"
+pending_lock="$pending/.lock"
+wake_lib_loaded=0
+load_wake_lib() {
+  [ "$wake_lib_loaded" -eq 0 ] || return 0
   # shellcheck source=bin/fm-wake-lib.sh
-  . "$SCRIPT_DIR/fm-wake-lib.sh"
-  fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" 2 || return 1
-  for file in "$pending"/*.alert; do
-    [ -f "$file" ] || continue
-    if payload=$(cat "$file") && fm_wake_append_locked check disk-guard "$payload"; then
-      rm -- "$file" || status=1
-    else
-      status=1
+  . "$SCRIPT_DIR/fm-wake-lib.sh" || return 1
+  wake_lib_loaded=1
+}
+
+persist_alert() {
+  local payload=$1 tmp status=0
+  mkdir -p "$pending" || return 1
+  load_wake_lib || return 1
+  fm_lock_acquire_wait "$pending_lock" || return 1
+  tmp=$(mktemp "$pending/.alerts.XXXXXXXX") || status=1
+  if [ "$status" -eq 0 ]; then
+    if [ -e "$pending_journal" ] || [ -L "$pending_journal" ]; then
+      if [ -f "$pending_journal" ] && [ ! -L "$pending_journal" ]; then
+        cat "$pending_journal" > "$tmp" || status=1
+      else
+        status=1
+      fi
     fi
-  done
+  fi
+  if [ "$status" -eq 0 ]; then
+    printf 'check: disk-guard: %s\n' "$payload" >> "$tmp" || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    chmod 0600 "$tmp" || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    mv -f -- "$tmp" "$pending_journal" || status=1
+  fi
+  if [ "$status" -ne 0 ] && [ -n "${tmp:-}" ]; then rm -f -- "$tmp"; fi
+  fm_lock_release "$pending_lock" || status=1
+  return "$status"
+}
+flush_alerts() {
+  local status=0 payload
+  if [ ! -e "$pending_journal" ] && [ ! -L "$pending_journal" ]; then return 0; fi
+  [ -f "$pending_journal" ] && [ ! -L "$pending_journal" ] || return 1
+  load_wake_lib || return 1
+  fm_lock_acquire_wait "$pending_lock" || return 1
+  if [ ! -e "$pending_journal" ] && [ ! -L "$pending_journal" ]; then
+    fm_lock_release "$pending_lock"
+    return 0
+  fi
+  if [ ! -f "$pending_journal" ] || [ -L "$pending_journal" ]; then
+    fm_lock_release "$pending_lock"
+    return 1
+  fi
+  if ! fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" 2; then
+    fm_lock_release "$pending_lock"
+    return 1
+  fi
+  while IFS= read -r payload || [ -n "$payload" ]; do
+    if ! fm_wake_append_locked check disk-guard "$payload"; then
+      status=1
+      break
+    fi
+  done < "$pending_journal"
+  if [ "$status" -eq 0 ]; then rm -- "$pending_journal" || status=1; fi
   fm_lock_release "$FM_WAKE_QUEUE_LOCK" || status=1
+  fm_lock_release "$pending_lock" || status=1
   return "$status"
 }
 alert() {
   if [ "$dry_run" -eq 1 ]; then printf '%s\n' "$*"; return; fi
-  local file
-  mkdir -p "$pending" || return 1
-  file=$(mktemp "$pending/pending.XXXXXXXX") || return 1
-  if ! printf 'check: disk-guard: %s\n' "$*" > "$file"; then
-    rm -f -- "$file"
-    return 1
-  fi
-  mv -- "$file" "$file.alert" || return 1
+  persist_alert "$*" || return 1
   flush_alerts
 }
 retry_status=0
