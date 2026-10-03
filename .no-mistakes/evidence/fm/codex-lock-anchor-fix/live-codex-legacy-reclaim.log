@@ -1,0 +1,21 @@
+APP_SERVER no-mistakes-live-test/0.156.0 (Mac OS 26.4.1; arm64) dumb (no-mistakes-live-test; 1.0)
+THREAD 01a103e5-fc9a-7af1-97de-37068b64ee94
+COMMAND_OUTPUT_BEGIN
+lock acquired: harness pid 34942
+DAEMON=34942
+NO_LEGACY_RC=1
+NO_LEGACY_OUT=error: shared-daemon lock has no recorded Codex thread id; pass --legacy only after verifying it is a pre-upgrade lock
+LOCK_AFTER_NO_LEGACY=34942
+FRESH_RC=1
+FRESH_OUT=error: refusing to reclaim a recent lock or fresh watcher beacon
+LOCK_AFTER_FRESH=34942
+shared Codex app-server lock moved to /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M41WB7Y49W87YW3M9KSPTVE5/.fm-codex-legacy.aAOkGE/legacy/state/.lock.stale-1791066867-34942; start the new session again
+ACTIVE_LOCK_EXISTS=no
+ARCHIVE=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M41WB7Y49W87YW3M9KSPTVE5/.fm-codex-legacy.aAOkGE/legacy/state/.lock.stale-1791066867-34942
+ARCHIVE_CONTENT=34942
+SIDECAR_ARCHIVES=0
+COMMAND_TOOL_EXIT 0
+COMMAND_OUTPUT_END
+TURN_STATUS completed
+FINAL_STATE [[".lock.stale-1791066867-34942", "34942"]]
+APP_SERVER_EXIT 0

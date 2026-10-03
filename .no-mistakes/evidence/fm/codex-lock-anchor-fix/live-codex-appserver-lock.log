@@ -1,0 +1,56 @@
+APP_SERVER no-mistakes-live-test/0.156.0 (Mac OS 26.4.1; arm64) dumb (no-mistakes-live-test; 1.0)
+THREAD 2 01a103e2-99f2-75d0-86f7-77537882d988
+TURN_DONE 3 completed
+STATE_AFTER_A {"lock": "36078", "sidecar": "codex:01a103e2-99f2-75d0-86f7-77537882d988"}
+THREAD 4 01a103e2-f65c-7603-9c4e-24d3127743d8
+TURN_DONE 5 completed
+STATE_AFTER_B {"lock": "36078", "sidecar": "codex:01a103e2-99f2-75d0-86f7-77537882d988"}
+TURN_DONE 6 completed
+STATE_AFTER_A_CONFIRM {"lock": "36078", "sidecar": "codex:01a103e2-99f2-75d0-86f7-77537882d988"}
+TURN_DONE 7 completed
+STATE_AFTER_RECLAIM [[".lock-session.stale-1791066617-36078", "codex:01a103e2-99f2-75d0-86f7-77537882d988"], [".lock.stale-1791066617-36078", "36078"]]
+TURN_DONE 8 completed
+STATE_AFTER_B_ACQUIRE {"lock": "36078", "sidecar": "codex:01a103e2-f65c-7603-9c4e-24d3127743d8"}
+APP_SERVER_EXIT 0
+DIRECT_COMMAND_OUTPUT
+lock acquired: harness pid 36078
+RC=0
+THREAD=01a103e2-99f2-75d0-86f7-77537882d988
+SESSION=01a103e2-99f2-75d0-86f7-77537882d988
+LOCK=
+36078
+SIDECAR=
+codex:01a103e2-99f2-75d0-86f7-77537882d988
+error: session lock names shared Codex app-server daemon pid 36078; another conversation may still be live. Use fm-lock.sh reclaim-shared-daemon only after verifying the old conversation has exited.
+RC=1
+THREAD=01a103e2-f65c-7603-9c4e-24d3127743d8
+SESSION=01a103e2-f65c-7603-9c4e-24d3127743d8
+LOCK=
+36078
+SIDECAR=
+codex:01a103e2-99f2-75d0-86f7-77537882d988
+lock acquired: harness pid 36078
+RC=0
+THREAD=01a103e2-99f2-75d0-86f7-77537882d988
+SESSION=01a103e2-99f2-75d0-86f7-77537882d988
+LOCK=
+36078
+SIDECAR=
+codex:01a103e2-99f2-75d0-86f7-77537882d988
+shared Codex app-server lock moved to /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M41WB7Y49W87YW3M9KSPTVE5/.fm-codex-live.dWw8Ny/state/.lock.stale-1791066617-36078; start the new session again
+RC=0
+THREAD=01a103e2-f65c-7603-9c4e-24d3127743d8
+/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M41WB7Y49W87YW3M9KSPTVE5/.fm-codex-live.dWw8Ny/state/.lock.stale-1791066617-36078
+CONTENT=
+36078
+/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M41WB7Y49W87YW3M9KSPTVE5/.fm-codex-live.dWw8Ny/state/.lock-session.stale-1791066617-36078
+CONTENT=
+codex:01a103e2-99f2-75d0-86f7-77537882d988
+lock acquired: harness pid 36078
+RC=0
+THREAD=01a103e2-f65c-7603-9c4e-24d3127743d8
+SESSION=01a103e2-f65c-7603-9c4e-24d3127743d8
+LOCK=
+36078
+SIDECAR=
+codex:01a103e2-f65c-7603-9c4e-24d3127743d8
