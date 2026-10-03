@@ -325,10 +325,13 @@
 #   groups after Firstmate's own busy-state hooks in the task worktree's
 #   .claude/settings.local.json, so a home can arm a crew-only guard without
 #   touching the captain's global settings or the supervisor session.
-#   Secondmate launches never take it. A present file that is not a readable
-#   object of arrays, or a host without jq, refuses the spawn before any
-#   endpoint, worktree, or record exists. The file is local to the home and is
-#   not inherited into secondmate homes.
+#   Secondmate launches never take it. Each event value must be an array of
+#   matcher-group objects, each with a hooks array of objects carrying string
+#   type and command fields. For an applicable launch, a malformed or unreadable
+#   file, or a host without jq, refuses the spawn before any endpoint, worktree,
+#   busy state, or record exists. Non-Claude and secondmate launches ignore the
+#   file entirely. It is local to the home and is not inherited into secondmate
+#   homes.
 # Claude crew admission: bin/fm-claude-admission-lib.sh guards directly
 # classified Claude launches before provisioning. Arbitrary raw shell
 # expressions remain an operator escape hatch whose indirection may bypass it;
@@ -585,21 +588,8 @@ case "$CLAUDE_PERMISSION_MODE" in
 auto) CLAUDE_PERM_FLAG='--permission-mode auto' ;;
 *) CLAUDE_PERM_FLAG='--dangerously-skip-permissions' ;;
 esac
-# config/claude-crew-hooks.json (header above): read and validated once per
-# spawn or relaunch, before any mutation, so a malformed file refuses instead
-# of launching a Claude worker without the hooks the home asked for.
-if ! CLAUDE_CREW_HOOKS_PRESENT=$(fm_config_source_present "$CONFIG/claude-crew-hooks.json"); then
-  exit 1
-fi
+CLAUDE_CREW_HOOKS_PRESENT=0
 CLAUDE_CREW_HOOKS=
-if [ "$CLAUDE_CREW_HOOKS_PRESENT" = 1 ]; then
-  if ! command -v jq >/dev/null 2>&1 \
-    || [ ! -f "$CONFIG/claude-crew-hooks.json" ] || [ ! -r "$CONFIG/claude-crew-hooks.json" ] \
-    || ! CLAUDE_CREW_HOOKS=$(jq -ce 'if type == "object" and all(.[]; type == "array") then . else error("shape") end' "$CONFIG/claude-crew-hooks.json" 2>/dev/null); then
-    echo "error: config/claude-crew-hooks.json must be a readable JSON object mapping Claude hook event names to arrays of hook matcher groups, and jq must be installed to apply it" >&2
-    exit 1
-  fi
-fi
 # config/lavish-axi-host is the primary-owned per-machine address for the
 # shared Lavish server. Read it once per launch and refuse malformed values so
 # every worker reaches the same server instead of starting a second one.
@@ -2417,6 +2407,31 @@ case "$ARG3" in
   ;;
 esac
 HARNESS_FAMILY=$(fm_control_harness_family "$HARNESS") || HARNESS_FAMILY=
+
+# config/claude-crew-hooks.json (header above): only a resolved Claude ship or
+# scout reads it. Validate before provisioning so malformed local policy can
+# never launch a Claude worker without the requested hooks.
+if [ "$KIND" != secondmate ] && [ "$HARNESS_FAMILY" = claude ]; then
+  if ! CLAUDE_CREW_HOOKS_PRESENT=$(fm_config_source_present "$CONFIG/claude-crew-hooks.json"); then
+    exit 1
+  fi
+  if [ "$CLAUDE_CREW_HOOKS_PRESENT" = 1 ]; then
+    if ! command -v jq >/dev/null 2>&1 \
+      || [ ! -f "$CONFIG/claude-crew-hooks.json" ] || [ ! -r "$CONFIG/claude-crew-hooks.json" ] \
+      || ! CLAUDE_CREW_HOOKS=$(jq -ce '
+        if type == "object" and all(.[];
+          type == "array" and all(.[];
+            type == "object" and
+            (.hooks | type == "array") and
+            all(.hooks[]; type == "object" and (.type | type == "string") and (.command | type == "string"))
+          )
+        ) then . else error("shape") end
+      ' "$CONFIG/claude-crew-hooks.json" 2>/dev/null); then
+      echo "error: config/claude-crew-hooks.json must be a readable JSON object mapping Claude hook event names to arrays of matcher-group objects whose hooks carry string type and command fields, and jq must be installed to apply it" >&2
+      exit 1
+    fi
+  fi
+fi
 
 # muse, gemini, agy, and devin are verified as CREWMATE/SCOUT adapters only. A secondmate is
 # a firstmate instance, so it needs a primary supervision protocol.

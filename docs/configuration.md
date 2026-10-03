@@ -920,12 +920,13 @@ The address selects the existing shared server; it does not authorize starting o
 ## Claude crew hooks (config/claude-crew-hooks.json)
 
 The optional local, gitignored `config/claude-crew-hooks.json` adds home-chosen Claude Code hooks to every Claude ship and scout worker, for example a `PreToolUse` guard that denies tool calls the home never wants a worker to make.
-The file is a JSON object mapping Claude hook event names to arrays of hook matcher groups, in the same shape as the `hooks` key of a Claude settings file.
+The file is a JSON object mapping Claude hook event names to arrays of matcher-group objects, in the same shape as the `hooks` key of a Claude settings file.
+Each matcher group must have a `hooks` array whose entries are objects with string `type` and `command` fields.
 Each launch appends those groups after Firstmate's own hooks in the task worktree's `.claude/settings.local.json`, so the hooks apply only to that worker and never to the supervisor session or the captain's global settings.
 A `PreToolUse` deny from such a hook still stops the tool call when the worker runs with the bypass permission flag.
 
-An absent file changes nothing, while a present file that is not a readable object of arrays, or a host without `jq`, stops the spawn before anything is created.
-Secondmate launches never take it, and the file is local to each home rather than part of secondmate inherited configuration.
+An absent file changes nothing, while a present file that does not have that shape, or a host without `jq`, stops an applicable Claude spawn before its endpoint, worktree, busy state, or task record is created.
+Non-Claude and secondmate launches ignore the file entirely, and the file is local to each home rather than part of secondmate inherited configuration.
 `bin/fm-spawn.sh`'s header owns the exact merge behavior.
 
 ## Home brief include (config/brief-include.md)

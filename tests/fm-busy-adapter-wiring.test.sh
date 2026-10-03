@@ -313,7 +313,7 @@ test_malformed_claude_crew_hooks_refuses_spawn() {
   local rec id=busy-cl-4 out
   rec=$(make_spawn_case claude-crew-hooks-bad claude "$id")
   read_case_record "$rec"
-  printf '%s\n' '{"PreToolUse":{"matcher":"Bash"}}' > "$HOME_DIR/config/claude-crew-hooks.json"
+  printf '%s\n' '{"PreToolUse":[42]}' > "$HOME_DIR/config/claude-crew-hooks.json"
   if out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" 2>&1); then
     fail "a malformed claude-crew-hooks.json must refuse the spawn"
   fi
@@ -321,6 +321,18 @@ test_malformed_claude_crew_hooks_refuses_spawn() {
   [ ! -e "$WT_DIR/.claude/settings.local.json" ] || fail "a refused spawn must not write hook settings"
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "a refused spawn must not leave a task record"
   pass "a malformed config/claude-crew-hooks.json refuses the claude spawn before any record exists"
+}
+
+test_malformed_claude_crew_hooks_does_not_affect_codex() {
+  local rec id=busy-cx-hooks out
+  rec=$(make_spawn_case codex-ignores-claude-crew-hooks codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"PreToolUse":[42]}' > "$HOME_DIR/config/claude-crew-hooks.json"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "codex spawn must ignore malformed claude crew hooks: $out"
+  assert_contains "$out" 'spawned '"$id"' harness=codex' "codex spawn did not complete normally"
+  assert_present "$HOME_DIR/state/$id.meta" "codex spawn did not publish its task record"
+  pass "malformed config/claude-crew-hooks.json does not affect a codex spawn"
 }
 
 test_codex_unverified_until_a_semantic_source_exists() {
@@ -466,6 +478,7 @@ test_claude_hooks_semantic_lifecycle
 test_claude_hooks_stale_incarnation_harmless
 test_claude_crew_hooks_config_is_appended
 test_malformed_claude_crew_hooks_refuses_spawn
+test_malformed_claude_crew_hooks_does_not_affect_codex
 test_gemini_hooks_semantic_lifecycle
 test_gemini_hooks_stale_incarnation_harmless
 test_raw_gemini_launch_has_no_semantic_wiring
