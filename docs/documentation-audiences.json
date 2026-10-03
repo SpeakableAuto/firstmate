@@ -27,6 +27,7 @@
     "docs/configuration.md",
     "docs/disk-guard.md",
     "docs/wedge-alarm.md",
+    "docs/supervisor-watchdog.md",
     "docs/tmux-backend.md",
     "docs/herdr-backend.md",
     "docs/zellij-backend.md",
@@ -531,6 +532,10 @@
     },
     {
       "path": "docs/watcher-continuity.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/supervisor-watchdog.md",
       "audience": "operator-current"
     },
     {

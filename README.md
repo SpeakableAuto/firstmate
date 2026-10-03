@@ -222,6 +222,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/voice-relay.md](docs/voice-relay.md) - the optional spoken interface: setup on both machines, measured round-trip cost, what a spoken answer may read, and what this build does not do yet.
 - [docs/fleet-ledger.md](docs/fleet-ledger.md) - the opt-in activity ledger outside tools can read to follow a home's tasks, and its record contract.
 - [docs/disk-guard.md](docs/disk-guard.md) - configure, verify, and install the optional local low-disk cache guard.
+- [docs/supervisor-watchdog.md](docs/supervisor-watchdog.md) - install optional external recovery for an idle Claude supervisor after a network error.
 - [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure the active alert for an away-mode escalation delivery that gets stuck.
 - [docs/tmux-backend.md](docs/tmux-backend.md) - current setup and limits for the tmux reference backend.
 - [docs/herdr-backend.md](docs/herdr-backend.md) - current setup, CI coverage, safety boundaries, and limits for the Herdr backend.

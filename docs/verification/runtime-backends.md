@@ -2364,3 +2364,21 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --m
 6. `bin/fm-control.sh <id> exit` stopped the agent and `bin/fm-teardown.sh` returned the worktree and closed the item.
 
 `FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh` refreshes the primary evidence; the worker path above is refreshed by repeating the scout dispatch after any omp upgrade.
+
+## Supervisor watchdog transport
+
+Verified on 2026-10-04 AEST with Herdr 0.9.3 through `bin/fm-test-run.sh tests/fm-supervisor-watchdog-herdr-e2e.test.sh`, using the guarded named-session lab helper.
+This uses a stub supervisor, not a real Claude login or renderer, and does not certify provider credentials.
+The real-supervisor acceptance check remains an operator step after installation, as [the setup guide](../supervisor-watchdog.md) specifies.
+
+```text
+ok - real Herdr transport withholds input while network fixture is down
+ok - real Herdr transport submits and confirms one resume turn
+ok - durable incident prevents a duplicate resume
+ok - real Herdr transport preserves draft screen
+ok - real Herdr transport preserves usage screen
+verification: Herdr 0.9.3; stub supervisor only, real Claude/operator check remains required
+```
+
+`bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh` covers the portable pane-text and incident-state branches, including rotating empty-composer suggestions, later-incident rearming under backoff, changed input before submission, and an unconfirmed turn.
+The watchdog pins the operator-selected Claude version and refuses version drift; that pin is not a claim that the stub test verified Claude itself.

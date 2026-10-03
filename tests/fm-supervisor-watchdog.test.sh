@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Pane fixtures exercise the public classifier/tick API with a recording transport.
+set -eu
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=bin/fm-supervisor-watchdog.sh
+. "$ROOT/bin/fm-supervisor-watchdog.sh"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+DIR=$TMP
+IDLE=10
+BACKOFF=60
+ERROR=$'❯ continue\n⎿ API Error: ENOTFOUND\n────────────────────\n❯ \n────────────────────'
+CLEAR=$'● Healthy response\n────────────────────\n❯ \n────────────────────'
+date() { if [ "${1:-}" = +%s ]; then printf '%s\n' "$TICK"; else command date "$@"; fi; }
+sleep() { :; }
+watchdog_read() { [ "$READ_FAIL" = 0 ] || return 1; printf '%s\n' "$PANE"; }
+watchdog_identity() { [ "$IDENTITY_FAIL" = 0 ] || return 1; printf '%s\n' "$IDENTITY"; }
+curl() { printf '%s\n' probe >> "$DIR/probes"; printf '%s' "$HTTP_CODE"; return "$CURL_RC"; }
+fm_wake_append() { printf '%s\n' "$*" >> "$DIR/alerts"; }
+watchdog_send() {
+  SENT=$((SENT+1))
+  [ "$SEND_FAIL" = 0 ] || return 1
+  PANE="API Error: ENOTFOUND"$'\n❯ '"$1"
+  [ "$CHANGE_DURING_SEND" = 0 ] || PANE="$PANE human draft"
+  [ "$LIMIT_DURING_SEND" = 0 ] || PANE="$PANE"$'\nUsage limit reached · continuing automatically'
+  [ "$READ_FAIL_AFTER_SEND" = 0 ] || READ_FAIL=1
+}
+watchdog_enter() {
+  ENTERED=$((ENTERED+1))
+  [ "$ENTER_FAIL" = 0 ] || return 1
+  [ "$STALL" = 0 ] || return 0
+  if [ "$CONFIRM_NATIVE" = 1 ]; then IDENTITY=$'claude\tworking'; PANE=$'❯ '; return; fi
+  PANE=$'❯ Resume the interrupted work.\n● Resumed\n────────────────────\n❯ \n────────────────────'
+}
+check() { [ "$1" = "$2" ] || fail "$3 (got $1, expected $2)"; pass "$3"; }
+reset_case() {
+  rm -f "$DIR/incident.json" "$DIR/events.jsonl" "$DIR/alerts" "$DIR/probes"
+  TICK=1000; IDENTITY=$'claude\tidle'; PANE=$ERROR
+  SENT=0; ENTERED=0; HTTP_CODE=200; CURL_RC=0
+  CONFIRM_NATIVE=0
+  READ_FAIL=0; IDENTITY_FAIL=0; SEND_FAIL=0; ENTER_FAIL=0; STALL=0
+  CHANGE_DURING_SEND=0; LIMIT_DURING_SEND=0; READ_FAIL_AFTER_SEND=0
+  FM_WATCHDOG_PROBE_URL=https://provider.example/
+}
+arm() { watchdog_tick; TICK=1011; }
+held() { jq -r .held "$DIR/incident.json"; }
+reset_case
+check "$(watchdog_screen "$ERROR")" error 'terminal ENOTFOUND detected'
+check "$(watchdog_screen "${ERROR/ENOTFOUND/ECONNRESET}")" error 'independent connection failure detected'
+check "$(watchdog_screen $'Unable to connect to API\n❯ ')" error 'connection banner detected without API Error prefix'
+check "$(watchdog_screen $'API Error: ENOTFOUND\n● Work completed\n❯ ')" clear 'historic error followed by output ignored'
+check "$(watchdog_screen "$ERROR"$'\nUsage limit reached · continuing automatically')" usage-limit 'automatic usage-limit continuation vetoes recovery'
+check "$(watchdog_screen $'API Error: 401 unauthorized\n❯ ')" clear 'auth failure is not network recovery'
+check "$(watchdog_screen "$ERROR"$'\nesc to interrupt')" busy 'rendered busy footer overrides native idle'
+watchdog_tick
+check "$SENT" 0 'first observation never acts'
+TICK=1009; watchdog_tick
+check "$SENT" 0 'less than ten seconds cannot authorize input'
+TICK=1011; HTTP_CODE=503; watchdog_tick
+check "$SENT" 0 'provider failure blocks action'
+TICK=1012; HTTP_CODE=200; watchdog_tick
+check "$(wc -l < "$DIR/probes" | tr -d ' ')" 1 'probe backoff persists across ticks'
+TICK=1042; watchdog_tick
+check "$SENT" 1 'unchanged idle error nudged once after connectivity returns'
+check "$ENTERED" 1 'exact watchdog payload submitted once'
+check "$(tail -1 "$DIR/events.jsonl" | jq -r .event)" submitted 'new turn in transcript confirms submission'
+PANE=$ERROR; TICK=1200; watchdog_tick
+check "$SENT" 1 'same incident never replays'
+PANE=$CLEAR; TICK=1201; watchdog_tick
+PANE=$ERROR; TICK=1202; watchdog_tick
+check "$SENT" 1 'transient clear frame does not release incident claim'
+reset_case
+PANE=$'❯ continue\n⎿ API Error: ENOTFOUND\n────────────────────\n❯ \033[2mTry "write a test"\033[0m\n────────────────────'
+watchdog_tick
+TICK=1011
+PANE=$'❯ continue\n⎿ API Error: ENOTFOUND\n────────────────────\n❯ \033[2mTry "explain this code"\033[0m\n────────────────────'
+watchdog_tick
+check "$SENT" 1 'rotating empty-composer suggestion does not break error stability'
+reset_case
+BACKOFF=900
+arm
+watchdog_tick
+check "$SENT" 1 'first incident nudged before cross-incident backoff starts'
+PANE=$CLEAR; TICK=1100; watchdog_tick
+TICK=1111; watchdog_tick
+PANE=$ERROR; TICK=1200; watchdog_tick
+TICK=1910; watchdog_tick
+check "$SENT" 1 'new incident remains throttled until action backoff elapses'
+TICK=1911; watchdog_tick
+check "$SENT" 2 'stable recovery rearms before backoff for a later incident'
+BACKOFF=60
+reset_case; arm
+PANE="$ERROR extra output"; watchdog_tick
+check "$SENT" 0 'screen change blocks nudge'
+check "$(held)" screen-changed 'screen change holds incident'
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'screen change alerts firstmate'
+watchdog_tick
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'same hold does not flood wake queue'
+reset_case; arm
+PANE=$'API Error: ENOTFOUND\n❯ draft'; watchdog_tick
+check "$SENT" 0 'existing draft never receives watchdog input'
+check "$(held)" composer-pending 'draft holds incident'
+PANE=$ERROR; TICK=1300; watchdog_tick
+check "$SENT" 0 'removing draft does not silently release hold'
+reset_case; arm; IDENTITY=$'claude\tworking'; watchdog_tick
+check "$SENT" 0 'working native status vetoes stale error'
+reset_case; arm; IDENTITY=$'codex\tidle'; watchdog_tick
+check "$SENT" 0 'unsupported harness refused'
+reset_case; arm; PANE="$ERROR"$'\nUsage limit reached · continuing automatically'; watchdog_tick
+check "$SENT" 0 'usage notice receives no input'
+reset_case; arm; READ_FAIL=1; watchdog_tick
+check "$SENT" 0 'unreadable pane receives no input'
+reset_case; arm; IDENTITY_FAIL=1; watchdog_tick
+check "$SENT" 0 'unreadable native state receives no input'
+reset_case; arm; CONFIRM_NATIVE=1; watchdog_tick
+check "$(tail -1 "$DIR/events.jsonl" | jq -r .event)" submitted 'native working plus empty composer confirms new turn'
+reset_case; PANE=$'Healthy response\n❯ human draft'; watchdog_tick
+[ ! -e "$DIR/alerts" ] || fail 'ordinary healthy drafting must not alert'
+pass 'healthy drafting does not create a recovery alert'
+reset_case; arm; CHANGE_DURING_SEND=1; watchdog_tick
+check "$ENTERED" 0 'mixed input never submitted or cleared'
+check "$(held)" input-changed 'mixed input alerts firstmate'
+check "$(jq -r .acted "$DIR/incident.json")" true 'ambiguous attempt consumes incident'
+reset_case; arm; LIMIT_DURING_SEND=1; watchdog_tick
+check "$ENTERED" 0 'usage notice before Enter blocks submission'
+reset_case; arm; SEND_FAIL=1; watchdog_tick
+check "$(held)" send-failed 'transport send failure alerts without retry'
+reset_case; arm; ENTER_FAIL=1; watchdog_tick
+check "$(held)" enter-failed 'Enter failure alerts without retry'
+check "$ENTERED" 1 'Enter attempted only once'
+reset_case; arm; READ_FAIL_AFTER_SEND=1; watchdog_tick
+check "$ENTERED" 0 'capture failure after typing withholds Enter'
+reset_case; arm; STALL=1; watchdog_tick
+check "$(held)" submit-not-confirmed 'missing new turn alerts instead of claiming success'
+reset_case
+for HTTP_CODE in 000 429 500 503; do
+  if watchdog_probe; then fail "HTTP $HTTP_CODE must defer"; fi
+done
+for HTTP_CODE in 200 301 401 404; do watchdog_probe || fail "HTTP $HTTP_CODE must prove transport"; done
+CURL_RC=7
+if watchdog_probe; then fail 'connection failure must defer'; fi
+pass 'provider probe distinguishes transport response, throttling, outage, and connection failure'
+# Re-read the real transport observation after the network check.
+reset_case; arm
+curl() { PANE=ignored; printf '200'; }
+# curl runs in a subshell, so use a file-backed hook at the observation boundary.
+watchdog_probe() { PANE=$'API Error: ENOTFOUND\n❯ draft'; return 0; }
+watchdog_tick
+check "$SENT" 0 'draft appearing during network check blocks typing'
+check "$(held)" changed-before-action 'last-window change alerts firstmate'
+reset_case
+printf '{bad\n' > "$DIR/incident.json"
+if watchdog_tick 2>/dev/null; then fail 'corrupt incident must refuse'; fi
+pass 'corrupt state fails closed'
+# Public executable refuses unsafe configuration before touching any endpoint.
+for interval in 0 9 010 garbage 86401; do
+  if FM_HOME="$TMP" FM_SUPERVISOR_TARGET=lab:w1:p1 FM_WATCHDOG_IDLE_SECS="$interval" \
+    FM_WATCHDOG_CLAUDE_VERSION=unused FM_WATCHDOG_PROBE_URL=https://provider.example/ \
+    bash "$ROOT/bin/fm-supervisor-watchdog.sh" tick >/dev/null 2>&1; then fail "unsafe interval $interval accepted"; fi
+done
+pass 'executable enforces minimum ten-second observation interval'
