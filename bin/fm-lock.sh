@@ -25,6 +25,10 @@
 #                             A held lock is not proof the holder is consuming
 #                             wakes. Machine-readable lock fields live on
 #                             fm-inbox.sh ready, from the same inspect helper.
+#        fm-lock.sh reclaim-shared-daemon
+#                             Explicitly move aside a shared Codex daemon lock
+#                             from a different thread after its watcher beacon
+#                             and lock have both aged at least 30 minutes.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +53,13 @@ if [ "${1:-}" = "status" ]; then
   case "$FM_LOCK_INSPECT_STATE" in
     free) echo "lock: free" ;;
     unreadable) echo "lock: unreadable" ;;
-    held) echo "lock: held by live harness pid $FM_LOCK_INSPECT_PID" ;;
+    held)
+      if fm_codex_shared_daemon_pid "$FM_LOCK_INSPECT_PID"; then
+        echo "lock: held by shared Codex app-server daemon pid $FM_LOCK_INSPECT_PID (conversation liveness unknown)"
+      else
+        echo "lock: held by live harness pid $FM_LOCK_INSPECT_PID"
+      fi
+      ;;
     *) echo "lock: stale (pid $FM_LOCK_INSPECT_PID dead or not a harness)" ;;
   esac
   exit 0
@@ -124,7 +134,12 @@ remember_lock_session() {
 # byte-identical.
 publish_lock_session() {
   local trusted recorded tmp
-  if trusted=$(fm_session_lock_trusted_session_id); then
+  if fm_codex_shared_daemon_pid "$me"; then
+    trusted=$(fm_session_lock_codex_thread_id "$me") || return 1
+  else
+    trusted=$(fm_session_lock_trusted_session_id) || trusted=
+  fi
+  if [ -n "$trusted" ]; then
     if recorded=$(fm_session_lock_recorded_session_id "$STATE") && [ "$recorded" = "$trusted" ]; then
       return 0
     fi
@@ -166,7 +181,7 @@ confirm_own_lock() {  # <recorded-pid>
     waited=1
   fi
   recorded=$(cat "$LOCK" 2>/dev/null || true)
-  if [ "$recorded" = "$me" ] || fm_session_lock_owned_by_self "$STATE"; then
+  if current_owns_recorded "$recorded"; then
     publish_lock_session_or_die
     commit_lock_session
     release_claim_lock
@@ -179,8 +194,19 @@ confirm_own_lock() {  # <recorded-pid>
   return 1
 }
 
+current_owns_recorded() {  # <recorded-pid>
+  if [ "$1" = "$me" ] && ! fm_codex_shared_daemon_pid "$1"; then
+    return 0
+  fi
+  fm_session_lock_owned_by_self "$STATE"
+}
+
 refuse_live_owner() {  # <recorded-pid>
   local recorded
+  if fm_codex_shared_daemon_pid "$1"; then
+    echo "error: session lock names shared Codex app-server daemon pid $1; another conversation may still be live. Use fm-lock.sh reclaim-shared-daemon only after verifying the old conversation has exited." >&2
+    exit 1
+  fi
   if recorded=$(fm_session_lock_recorded_session_id "$STATE"); then
     echo "error: another live firstmate session holds the lock (pid $1, session $recorded); operate read-only until resolved" >&2
   else
@@ -189,9 +215,67 @@ refuse_live_owner() {  # <recorded-pid>
   exit 1
 }
 
+reclaim_shared_daemon() {
+  local old recorded current lock_age beat_age suffix parked
+  current=$(fm_session_lock_codex_thread_id "$me") || {
+    echo "error: reclaim requires a Codex thread under a shared app-server daemon" >&2
+    exit 1
+  }
+  fm_lock_acquire_wait "$CLAIM_LOCK"
+  CLAIM_LOCK_HELD=1
+  [ -f "$LOCK" ] && [ ! -L "$LOCK" ] || {
+    echo "error: no regular session lock to reclaim" >&2
+    exit 1
+  }
+  old=$(cat "$LOCK" 2>/dev/null || true)
+  fm_codex_shared_daemon_pid "$old" || {
+    echo "error: session lock does not name a shared Codex app-server daemon" >&2
+    exit 1
+  }
+  recorded=$(fm_session_lock_recorded_session_id "$STATE") || {
+    echo "error: shared-daemon lock has no recorded Codex thread id; inspect it manually" >&2
+    exit 1
+  }
+  case "$recorded" in codex:?*) ;; *)
+    echo "error: shared-daemon lock has no recorded Codex thread id; inspect it manually" >&2
+    exit 1 ;;
+  esac
+  [ "$recorded" != "$current" ] || {
+    echo "error: refusing to reclaim this Codex thread's own session lock" >&2
+    exit 1
+  }
+  lock_age=$(fm_path_age "$LOCK")
+  beat_age=$(fm_path_age "$STATE/.last-watcher-beat")
+  if [ "$lock_age" -lt 1800 ] || [ "$beat_age" -lt 1800 ]; then
+    echo "error: refusing to reclaim a recent lock or fresh watcher beacon" >&2
+    exit 1
+  fi
+  suffix="$(date +%s)-$old"
+  parked="$STATE/.lock.stale-$suffix"
+  [ ! -e "$parked" ] && [ ! -L "$parked" ] \
+    && [ ! -e "$STATE/.lock-session.stale-$suffix" ] \
+    && [ ! -L "$STATE/.lock-session.stale-$suffix" ] || {
+    echo "error: a lock archive with this timestamp already exists" >&2
+    exit 1
+  }
+  mv "$LOCK_SESSION" "$STATE/.lock-session.stale-$suffix" || exit 1
+  if ! mv "$LOCK" "$parked"; then
+    mv "$STATE/.lock-session.stale-$suffix" "$LOCK_SESSION" 2>/dev/null || true
+    echo "error: could not move shared-daemon lock aside" >&2
+    exit 1
+  fi
+  release_claim_lock
+  echo "shared Codex app-server lock moved to $parked; start the new session again"
+  exit 0
+}
+
+if [ "${1:-}" = reclaim-shared-daemon ]; then
+  reclaim_shared_daemon
+fi
+
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   old=$(cat "$LOCK" 2>/dev/null || true)
-  if [ "$old" = "$me" ] || fm_session_lock_owned_by_self "$STATE"; then
+  if current_owns_recorded "$old"; then
     confirm_own_lock "$old"
     old=$(cat "$LOCK" 2>/dev/null || true)
   fi
@@ -219,10 +303,10 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
     echo "error: session lock is unreadable; operate read-only until resolved" >&2
     exit 1
   }
-  if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
-    fm_session_lock_owned_by_self "$STATE" && confirm_own_lock "$old"
+  if fm_harness_pid_alive "$old"; then
+    current_owns_recorded "$old" && confirm_own_lock "$old"
     old=$(cat "$LOCK" 2>/dev/null || true)
-    if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
+    if fm_harness_pid_alive "$old"; then
       refuse_live_owner "$old"
     fi
   fi
