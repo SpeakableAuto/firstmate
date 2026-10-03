@@ -621,7 +621,7 @@ It sets these limits:
 
 The ordinary cleanup of a task whose pull request has landed needs no relocation, because it is the branch's own job in both postures.
 The watcher attempts `bin/fm-auto-retire.sh` through plain guarded teardown before delivering the `check: merge landed:` wake and queues an `auto-retire` outcome.
-`bin/fm-branch-prompt.sh` also names that merge wake, and any later stale or inactive-outcome row on the task, as a boundary for attempting `bin/fm-teardown.sh` without `--force`; the branch reports any refusal instead of forcing cleanup or concluding there is "nothing to recover".
+On that merge wake, `bin/fm-branch-prompt.sh` tells the branch to report an already absent task or delivered `auto-retire-<task>` outcome as already retired; only otherwise does it attempt `bin/fm-teardown.sh` without `--force` and report any refusal instead of forcing cleanup.
 
 ## Verification
 
