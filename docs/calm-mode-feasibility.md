@@ -17,7 +17,7 @@ Pi 0.81.1 was installed when Calm was first built, and Pi 0.82.0 was the later r
 The inspected Pi CHANGELOG shows no relevant presentation API introduced at either version, so those versions remain verification evidence rather than compatibility bounds.
 The exported classes used by the adapters (`AssistantMessageComponent` and `InteractiveMode`) are undocumented internals with no stated version guarantee.
 `tests/fm-calm-pi-extension.test.sh` records the installed Pi version as evidence without gating on it and covers both newer synthetic versions and an unavailable adapter seam.
-This host tracks Pi latest, so the version the evidence is pinned to moves; the [2026-09-07 record](#2026-09-07-pi-0851-renderer-and-export-dom-verification) owns the currently pinned version and the renderer comparison behind it.
+This host tracks Pi latest, so the version the evidence is pinned to moves; the [2026-10-04 record](#2026-10-04-pi-101-html-export-renderer-compatibility) owns the currently pinned version and the HTML export renderer comparison behind it.
 
 ### Built-in tool override constraints
 
@@ -671,6 +671,21 @@ not ok - Pi 0.87.1 lacks the queue-retention capability Calm needs to hide queue
 ```
 
 With the queued-row adapter left uninstalled, the real-Pi Escape case failed on the listed notification, `Pi Calm listed a queued Firstmate notification`.
+
+## 2026-10-04 Pi 1.0.1 HTML export renderer compatibility
+
+Verified on 2026-10-04 AEST with Node v24.18.0 and local npm installs of `@earendil-works/pi-coding-agent` 1.0.0 and 1.0.1.
+The real HTML renderer accepts the fixture's shared tool lookup through `getToolDefinition` on 1.0.0 and `getToolRenderers` on 1.0.1.
+Both versions pass the unchanged assertions that `/export` and `/share` retain tool calls and results while Calm is active, ordinary non-submit input leaves them hidden, and the terminal rows remain hidden afterwards.
+
+```sh
+PATH="$PWD/.no-mistakes/pi100/node_modules/.bin:$PATH" FM_PI_PACKAGE_DIR="$PWD/.no-mistakes/pi100/node_modules/@earendil-works/pi-coding-agent" TMPDIR="$PWD/.no-mistakes/tmp" bash bin/fm-test-run.sh tests/fm-calm-pi-extension.test.sh
+PATH="$PWD/.no-mistakes/pi101/node_modules/.bin:$PATH" FM_PI_PACKAGE_DIR="$PWD/.no-mistakes/pi101/node_modules/@earendil-works/pi-coding-agent" TMPDIR="$PWD/.no-mistakes/tmp" bash bin/fm-test-run.sh tests/fm-calm-pi-extension.test.sh
+```
+
+Both commands printed `ok - Pi calm centralizes transcript visibility, preserves execution/export data, keeps Pi's stock working row visible while no run is active, and persists its choice across session starts` and exited 0.
+The four terminal E2E cases capability-skipped because tmux was absent; this verifies the real renderer and lifecycle fixtures, not the interactive terminal journeys.
+Refresh with the same test against the installed Pi package, with tmux available to include those journeys.
 
 ## 2026-09-15 Claude Code 2.1.272 mods feasibility and the shipped mod
 
