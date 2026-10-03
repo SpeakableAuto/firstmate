@@ -106,9 +106,8 @@
 #                                   idle or busy, before it re-surfaces as a
 #                                   recheck (default 14400, four hours); a
 #                                   declared `until` time replaces this bound
-#                                   unless it lies beyond the honored horizon
-#                                   (FM_PAUSE_UNTIL_HORIZON_SECS, default seven
-#                                   days), and a captain-held transfer is never
+#                                   however far in the future it lies, and a
+#                                   captain-held transfer is never
 #                                   rechecked while an away record exists
 #          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
 #                                   digests; 0 = flush immediately (default 90)
@@ -1189,7 +1188,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs marker_epoch until bounded_until pause_reason
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs marker_epoch until pause_reason
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -1286,16 +1285,12 @@ housekeeping() {  # <state>
     age=$(( now - marker_epoch ))
     due="$state/.subsuper-pause-until-due-$key"
     until=
-    bounded_until=0
     if status_is_captain_held "$last" && fm_afk_contract_away_present "$state"; then
       continue
     fi
     if until=$(status_paused_until "$last"); then
-      if [ "$now" -lt "$until" ] && fm_pause_until_honored "$until" "$now"; then
+      if [ "$now" -lt "$until" ]; then
         continue
-      elif [ "$now" -lt "$until" ]; then
-        [ "$age" -ge "$pause_secs" ] || continue
-        bounded_until=1
       elif [ "$(cat "$due" 2>/dev/null || true)" = "$until" ]; then
         [ "$age" -ge "$pause_secs" ] || continue
       fi
@@ -1318,11 +1313,7 @@ housekeeping() {  # <state>
             _now > "$marker"
           fi
         elif [ -n "$last" ] && status_is_paused "$last"; then
-          if [ "$bounded_until" -eq 1 ]; then
-            pause_reason="paused ${age}s (awaiting external, the declared time is too far ahead to honor, so it keeps the recheck cadence; confirm the wait still holds and the time is right): $win"
-          else
-            pause_reason="paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
-          fi
+          pause_reason="paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
           if escalate_add "$state" "$pause_reason"; then
             _now > "$marker"
             if [ -n "$until" ] && [ "$now" -ge "$until" ]; then

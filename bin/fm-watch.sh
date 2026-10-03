@@ -13,8 +13,7 @@
 # although its initial no-verb status signal still surfaces in normal mode.
 # That cadence is hours long and condition-aware: a paused: line naming
 # `until <UTC ISO 8601>` is not rechecked before that time and is rechecked when
-# it passes, unless the time lies beyond the horizon fm_pause_until_honored
-# (fm-classify-lib.sh) honors, which keeps the ordinary recheck cadence, and
+# it passes, however far in the future that successfully parsed time lies, and
 # while an away record (state/.afk-contract, never quiet mode's) exists an
 # item held for the captain is never rechecked at all, in either posture.
 # While state/.afk exists, the daemon owns triage and this watcher queues and exits
@@ -389,8 +388,7 @@ PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT
 # status_paused_until in fm-classify-lib.sh) is condition-aware: it is not
 # rechecked before that time, even when that time lies beyond the flat cadence,
 # and it is rechecked once as soon as that time passes, then held to the
-# cadence. Only a time beyond fm_pause_until_honored's horizon, read as a
-# mistyped date, keeps the flat cadence instead.
+# cadence. An absent or malformed time keeps the flat cadence instead.
 # Consecutive event-path failures (fm_backend_wait_transition returning 2 -
 # connect/subscribe failure) before the push fast-path is disabled for the rest
 # of this watcher process and the loop reverts to pure polling (report section
@@ -1596,12 +1594,9 @@ handle_paused_stale() {  # <window> <task> <hash>
     detail="captain-held, awaiting the captain"
     reason="captain-held ${age}s, awaiting the captain - verified hold transfer, rechecked on a long cadence not a wedge; answer the held decision or release the hold"
   elif until=$(status_paused_until "$last"); then
-    if [ "$now" -lt "$until" ] && fm_pause_until_honored "$until" "$now"; then
+    if [ "$now" -lt "$until" ]; then
       triage_log "absorbed stale (paused until $(( until - now ))s from now, declared time not reached): $win"
       return 0
-    elif [ "$now" -lt "$until" ]; then
-      detail="paused, declared time beyond the honored horizon"
-      reason="paused ${age}s, awaiting external - the declared time is too far ahead to honor, so it keeps the recheck cadence; confirm the wait still holds and the time is right"
     else
       # The declared time has passed: recheck now, once per declaration, then
       # hold the cadence.
@@ -1898,10 +1893,8 @@ surface_nonterminal_stale() {  # <window> <hash>
     STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
     if until=$(status_paused_until "$last"); then
       now=$(date +%s)
-      if [ "$now" -lt "$until" ] && fm_pause_until_honored "$until" "$now"; then
+      if [ "$now" -lt "$until" ]; then
         throttled=0
-      elif [ "$now" -lt "$until" ]; then
-        stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0
       else
         STALE_WAIT_DECLARATION="$STALE_WAIT_DECLARATION:due"
         stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0

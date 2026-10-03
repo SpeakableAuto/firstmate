@@ -118,18 +118,11 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # name when it clears with `until` (status_paused_until below); such a pause is
 # not rechecked before that time, however far past this cadence it lies, and
 # is rechecked once as soon as it passes. This cadence remains the recheck for
-# a legacy pause that names no time, and for a declared time beyond
-# FM_PAUSE_UNTIL_HORIZON_SECS (fm_pause_until_honored below). Both consumers
+# a legacy pause that names no time or whose time is malformed. Both consumers
 # read FM_PAUSE_RESURFACE_SECS with this default so the cadence has one owner. An item held for the captain is not rechecked at all
 # while the away-posture record exists (bin/fm-watch.sh owns that rule).
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=14400
-
-# How far ahead a declared `until` time is honored as written: seven days by
-# default. A wait named within this horizon silences rechecks until its time; a
-# time further out reads as a mistyped date rather than a real wait, so it keeps
-# the flat recheck cadence and a wrong year cannot park a pane unseen for a year.
-FM_PAUSE_UNTIL_HORIZON_SECS_DEFAULT=604800
 
 # fm_utc_iso_to_epoch <YYYY-MM-DDTHH:MM[:SS]Z>: the one portable UTC ISO 8601
 # reader shared by the declared-wait vocabulary and the away-posture record
@@ -439,17 +432,6 @@ status_paused_until() {  # <status-line> -> epoch on stdout
     | head -1)
   [ -n "$token" ] || return 1
   fm_utc_iso_to_epoch "$token"
-}
-
-# fm_pause_until_honored <until-epoch> <now-epoch>: 0 when a declared `until`
-# time still in the future lies within FM_PAUSE_UNTIL_HORIZON_SECS of now, so
-# no recheck may fire before it; 1 when it lies beyond that horizon and the
-# flat recheck cadence still applies. A time already passed is the caller's
-# due-recheck case, not this one.
-fm_pause_until_honored() {  # <until-epoch> <now-epoch>
-  local horizon=${FM_PAUSE_UNTIL_HORIZON_SECS:-$FM_PAUSE_UNTIL_HORIZON_SECS_DEFAULT}
-  case "$horizon" in ''|*[!0-9]*) horizon=$FM_PAUSE_UNTIL_HORIZON_SECS_DEFAULT ;; esac
-  [ $(( $1 - $2 )) -le "$horizon" ]
 }
 
 # --- optional event emission time -------------------------------------------

@@ -81,6 +81,37 @@ fi
 
 META="$STATE/$ID.meta"
 REFUSED="$STATE/$ID.auto-retire-refused"
+
+refusal_marker_safe_or_absent() {
+  if [ ! -e "$REFUSED" ] && [ ! -L "$REFUSED" ]; then
+    return 0
+  fi
+  [ -f "$REFUSED" ] && [ ! -L "$REFUSED" ] \
+    && [ "$(fm_pr_file_link_count "$REFUSED" 2>/dev/null)" = 1 ]
+}
+
+report_unsafe_refusal_marker() {
+  local reason="unsafe automatic-retirement refusal marker state/$ID.auto-retire-refused"
+  report "refused: $ID: $reason" \
+    "check: auto-retire $ID: automatic cleanup after $CAUSE did not complete and nothing was forced: $reason"
+  exit 1
+}
+
+write_refusal_marker() {
+  local attempt=$1 tmp state_device
+  refusal_marker_safe_or_absent || return 1
+  state_device=$(fm_pr_file_device "$STATE") || return 1
+  tmp=$(umask 077; mktemp "$STATE/.$ID.auto-retire-refused.XXXXXX") || return 1
+  if ! printf '%s\n' "$attempt" > "$tmp" \
+    || ! chmod 600 "$tmp" \
+    || ! fm_pr_private_file_valid "$tmp" 600 "$state_device" \
+    || ! refusal_marker_safe_or_absent \
+    || ! mv -f -- "$tmp" "$REFUSED"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
 if [ ! -e "$META" ]; then
   rm -f "$REFUSED"
   printf 'absent: %s\n' "$ID"
@@ -98,9 +129,17 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
 fi
 
 attempt="$2 $(fm_meta_get "$META" spawn_gen)"
-if [ "$(cat "$REFUSED" 2>/dev/null || true)" = "$attempt" ]; then
-  printf 'already-refused: %s\n' "$ID"
-  exit 0
+if [ -e "$REFUSED" ] || [ -L "$REFUSED" ]; then
+  refusal_marker_safe_or_absent || report_unsafe_refusal_marker
+  refused_identity=$(fm_pr_file_identity "$REFUSED") || report_unsafe_refusal_marker
+  refused_attempt=$(cat "$REFUSED" 2>/dev/null) || report_unsafe_refusal_marker
+  refusal_marker_safe_or_absent || report_unsafe_refusal_marker
+  [ "$(fm_pr_file_identity "$REFUSED" 2>/dev/null)" = "$refused_identity" ] \
+    || report_unsafe_refusal_marker
+  if [ "$refused_attempt" = "$attempt" ]; then
+    printf 'already-refused: %s\n' "$ID"
+    exit 0
+  fi
 fi
 
 out=$(FM_STATE_OVERRIDE="$STATE" "${FM_TEARDOWN_BIN:-$SCRIPT_DIR/fm-teardown.sh}" "$ID" 2>&1)
@@ -122,7 +161,9 @@ reason=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | grep -i 'error\|refus
 [ -n "$reason" ] || reason=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1)
 [ -n "$reason" ] || reason="teardown exited $rc"
 reason=$(printf '%s' "$reason" | fm_wake_clean_field)
-printf '%s\n' "$attempt" > "$REFUSED" || true
+if ! write_refusal_marker "$attempt"; then
+  refusal_marker_safe_or_absent || report_unsafe_refusal_marker
+fi
 report "refused: $ID: $reason" \
   "check: auto-retire $ID: automatic cleanup after $CAUSE did not complete and nothing was forced: $reason"
 exit 1

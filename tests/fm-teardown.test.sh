@@ -4111,7 +4111,7 @@ test_auto_retire_cleans_up_landed_work() {
 }
 
 test_auto_retire_never_touches_unlanded_work() {
-  local case_dir out rc
+  local case_dir out rc marker_mode marker_links
   case_dir=$(make_case auto-retire-dirty)
   write_meta "$case_dir" no-mistakes ship
   wt_commit "$case_dir" "shippable work"
@@ -4130,6 +4130,20 @@ test_auto_retire_never_touches_unlanded_work() {
   cmp -s "$case_dir/meta.before" "$case_dir/state/task-x1.meta" || fail "auto-retire-dirty: the task record changed"
   [ -d "$case_dir/wt" ] || fail "auto-retire-dirty: the worktree was removed"
   [ "$(auto_retire_rows "$case_dir")" = 1 ] || fail "auto-retire-dirty: the refusal was not queued exactly once"
+  if [ "$(uname)" = Darwin ]; then
+    marker_mode=$(/usr/bin/stat -f %Lp "$case_dir/state/task-x1.auto-retire-refused")
+    marker_links=$(/usr/bin/stat -f %l "$case_dir/state/task-x1.auto-retire-refused")
+  else
+    marker_mode=$(stat -c %a "$case_dir/state/task-x1.auto-retire-refused")
+    marker_links=$(stat -c %h "$case_dir/state/task-x1.auto-retire-refused")
+  fi
+  [ "$marker_mode" = 600 ] \
+    || fail "auto-retire-dirty: the refusal marker was not private"
+  [ "$marker_links" = 1 ] \
+    || fail "auto-retire-dirty: the refusal marker was not single-linked"
+  if compgen -G "$case_dir/state/.task-x1.auto-retire-refused.*" >/dev/null; then
+    fail "auto-retire-dirty: refusal publication left a private temporary behind"
+  fi
   assert_grep 'after a captain decision closed it did not complete and nothing was forced' \
     "$case_dir/state/.wake-queue" "auto-retire-dirty: the queued refusal did not name its cause"
 
@@ -4201,6 +4215,60 @@ SH
     || fail "auto-retire-contract: --emit-wake did not print the wake payload: $out"
   [ ! -s "$case_dir/state/.wake-queue" ] || fail "auto-retire-contract: --emit-wake still appended its own row"
   pass "auto-retire calls plain teardown only for a live non-secondmate task and reports each outcome once"
+}
+
+test_auto_retire_refuses_unsafe_refusal_markers() {
+  local case_dir fake marker target alias out rc
+  case_dir=$(make_case auto-retire-unsafe-marker)
+  fake="$case_dir/fake-teardown"
+  cat > "$fake" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_TEARDOWN_LOG"
+echo "error: teardown refused: fixture refusal" >&2
+exit 1
+SH
+  chmod +x "$fake"
+  write_meta "$case_dir" no-mistakes ship
+  marker="$case_dir/state/task-x1.auto-retire-refused"
+  target="$case_dir/external-refusal"
+  alias="$case_dir/external-refusal.alias"
+
+  printf 'decision teardown-test-task-x1\n' > "$target"
+  ln -s "$target" "$marker"
+  set +e
+  out=$(run_auto_retire "$case_dir" decision FM_TEARDOWN_BIN="$fake" FAKE_TEARDOWN_LOG="$case_dir/calls" 2>/dev/null)
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "auto-retire-unsafe-marker: symlink marker"
+  case "$out" in "refused: task-x1: unsafe automatic-retirement refusal marker "*) ;; *) fail "auto-retire-unsafe-marker: symlink was not refused: $out" ;; esac
+  [ "$(cat "$target")" = "decision teardown-test-task-x1" ] || fail "auto-retire-unsafe-marker: symlink target changed"
+  assert_absent "$case_dir/calls" "auto-retire-unsafe-marker: symlink marker was trusted as a prior refusal or followed into teardown"
+  rm -f "$marker"
+
+  mkdir "$marker"
+  set +e
+  out=$(run_auto_retire "$case_dir" merged FM_TEARDOWN_BIN="$fake" FAKE_TEARDOWN_LOG="$case_dir/calls" 2>/dev/null)
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "auto-retire-unsafe-marker: non-regular marker"
+  case "$out" in "refused: task-x1: unsafe automatic-retirement refusal marker "*) ;; *) fail "auto-retire-unsafe-marker: non-regular marker was not refused: $out" ;; esac
+  [ -d "$marker" ] || fail "auto-retire-unsafe-marker: non-regular marker changed"
+  assert_absent "$case_dir/calls" "auto-retire-unsafe-marker: teardown ran through a non-regular marker"
+  rmdir "$marker"
+
+  printf 'foreign refusal\n' > "$target"
+  ln "$target" "$marker"
+  ln "$target" "$alias"
+  set +e
+  out=$(run_auto_retire "$case_dir" merged FM_TEARDOWN_BIN="$fake" FAKE_TEARDOWN_LOG="$case_dir/calls" 2>/dev/null)
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "auto-retire-unsafe-marker: hardlinked marker"
+  case "$out" in "refused: task-x1: unsafe automatic-retirement refusal marker "*) ;; *) fail "auto-retire-unsafe-marker: hardlinked marker was not refused: $out" ;; esac
+  [ "$(cat "$target")" = "foreign refusal" ] || fail "auto-retire-unsafe-marker: hardlink peer changed"
+  [ "$(cat "$alias")" = "foreign refusal" ] || fail "auto-retire-unsafe-marker: second hardlink peer changed"
+  assert_absent "$case_dir/calls" "auto-retire-unsafe-marker: teardown ran through a hardlinked marker"
+  pass "auto-retire ignores and preserves unsafe refusal markers"
 }
 
 prepare_teardown_source_copy() {  # <case-dir>
@@ -4424,6 +4492,7 @@ test_dirty_worktree_refuses
 test_auto_retire_cleans_up_landed_work
 test_auto_retire_never_touches_unlanded_work
 test_auto_retire_contract_without_teardown_side_effects
+test_auto_retire_refuses_unsafe_refusal_markers
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses
 test_windowless_legacy_record_with_gone_worktree_tears_down
