@@ -1370,9 +1370,12 @@ test_checkpoint_handoffs() {
     assert_contains "$text" 'done / next / how to resume' 'missing resume note contract'
     assert_contains "$text" 'exact commit' 'missing commit identity'
     case "$mode" in
-      local-only) assert_contains "$text" 'local-only contract forbids remote publication' 'local mode lost boundary' ;;
+      local-only) assert_contains "$text" 'local-only contract forbids remote publication' 'local mode lost boundary'
+                  assert_not_contains "$text" 'refs/heads/wip/' 'local mode received a checkpoint push' ;;
       *) assert_contains "$text" '## Status and next step' 'missing PR progress section'
-         assert_contains "$text" 'Push your branch at each meaningful checkpoint' 'missing checkpoint push'
+         assert_contains "$text" "git push origin HEAD:refs/heads/wip/$id" 'missing isolated checkpoint push'
+         assert_contains "$text" "Name wip/$id and its exact commit" 'progress note does not name checkpoint ref'
+         assert_contains "$text" 'must not move the ship branch, PR branch or default branch' 'checkpoint push can mutate a delivery branch'
          assert_contains "$text" 'preserving every other section and the no-mistakes attestation' 'missing attestation preservation' ;;
     esac
   done
@@ -1382,12 +1385,13 @@ test_checkpoint_handoffs() {
     text=$(cat "$BRIEF_HOME/data/$id/brief.md")
     assert_contains "$text" 'Publish checkpoints only through the Gerrit publication path' 'Gerrit lost publication boundary'
     assert_contains "$text" 'Status and next step' 'Gerrit missing resume section'
-    assert_not_contains "$text" 'Push your branch at each meaningful checkpoint' 'Gerrit received raw branch push instructions'
+    assert_not_contains "$text" 'refs/heads/wip/' 'Gerrit received a GitHub checkpoint ref'
   done
   FM_HOME="$BRIEF_HOME" bash "$ROOT/bin/fm-brief.sh" checkpoint-scout demo --scout >/dev/null || fail 'scout brief failed'
   text=$(cat "$BRIEF_HOME/data/checkpoint-scout/brief.md")
   assert_contains "$text" 'done / next / how to resume' 'scout lost progress notes'
   assert_contains "$text" 'scout contract forbids pushing a branch' 'scout lost publication boundary'
+  assert_not_contains "$text" 'refs/heads/wip/' 'scout received a checkpoint push'
   pass 'generated checkpoint handoffs preserve each delivery boundary'
 }
 test_checkpoint_handoffs

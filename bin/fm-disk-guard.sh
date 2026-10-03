@@ -55,7 +55,11 @@ alert() {
   if [ "$dry_run" -eq 1 ]; then printf '%s\n' "$*"; return; fi
   # shellcheck source=bin/fm-wake-lib.sh
   . "$SCRIPT_DIR/fm-wake-lib.sh"
-  fm_wake_append check disk-guard "check: disk-guard: $*"
+  local status=0
+  fm_lock_acquire_wait_bounded "$FM_WAKE_QUEUE_LOCK" 2 || return
+  fm_wake_append_locked check disk-guard "check: disk-guard: $*" || status=$?
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK" || status=$?
+  return "$status"
 }
 free_kib() {
   local output available
@@ -82,7 +86,11 @@ if ! mkdir "$lock" 2>/dev/null; then
   exit 1
 fi
 trap 'rmdir "$lock"' EXIT
-alert "low space: $before KiB available, threshold $threshold GiB; starting configured cleanup"
+failures=0
+if ! alert "low space: $before KiB available, threshold $threshold GiB; starting configured cleanup"; then
+  echo 'could not queue the starting alert; continuing configured cleanup' >&2
+  failures=$((failures + 1))
+fi
 
 clear_cache() {
   local relative=$1 path component
@@ -116,7 +124,6 @@ clear_docker() {
    docker --host "$endpoint" image prune --force &&
    docker --host "$endpoint" builder prune --force)
 }
-failures=0
 for cache in "${caches[@]+${caches[@]}}"; do
   case "$cache" in
     xcode-derived-data) clear_cache Library/Developer/Xcode/DerivedData || failures=$((failures + 1)) ;;
@@ -125,5 +132,8 @@ for cache in "${caches[@]+${caches[@]}}"; do
   esac
 done
 if ! after=$(free_kib); then after=unknown; failures=$((failures + 1)); fi
-alert "cleanup complete: before=$before KiB after=$after KiB threshold=$threshold GiB failures=$failures"
+if ! alert "cleanup complete: before=$before KiB after=$after KiB threshold=$threshold GiB failures=$failures"; then
+  echo 'could not queue the cleanup result alert' >&2
+  failures=$((failures + 1))
+fi
 [ "$failures" -eq 0 ]

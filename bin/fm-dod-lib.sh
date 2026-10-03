@@ -341,7 +341,9 @@ EOF
 
 # Shared checkpoint contract for generated ships and promoted scouts.
 # Delivery-specific publication authority remains with fm_dod_block below.
-fm_checkpoint_block() {  # <mode> <forge>
+fm_checkpoint_block() {  # <mode> <task-id> <forge>
+  local mode=$1 id=$2 forge=$3 checkpoint_ref
+  checkpoint_ref="wip/$id"
   cat <<'EOF'
 
 # Progress checkpoints
@@ -350,17 +352,20 @@ Include the branch, exact commit, relevant validation command and result, remain
 Before validation takes custody, commit each meaningful implementation checkpoint with that same concise resume note in the commit body; never commit secrets or private operational context.
 While no-mistakes owns the branch, report its run identifier, current gate and supported reattach command instead of editing or committing its work.
 EOF
-  case "$1:$2" in
+  case "$mode:$forge" in
     local-only:*)
       printf '%s\n' 'Keep checkpoints on the local task branch; the local-only contract forbids remote publication, so report that cross-machine resume requires firstmate to arrange transfer.' ;;
     *:gerrit)
       printf '%s\n' 'Publish checkpoints only through the Gerrit publication path in Definition of done; until that path permits publication, explicitly mark the checkpoint as local and not yet transferable.'
       printf '%s\n' 'Keep a "Status and next step" section in the change description with the latest done / next / how to resume note, preserving existing review metadata.' ;;
     *)
-      printf '%s\n' 'Push your branch at each meaningful checkpoint through the selected delivery path, never to the default branch and never around the no-mistakes gate.'
-      printf '%s\n' 'If no-mistakes publication is pending, explicitly report the checkpoint as local and not yet transferable; its pipeline owns the push under Definition of done.'
+      cat <<EOF
+Publish each committed checkpoint to the separate remote ref $checkpoint_ref with this command: git push origin HEAD:refs/heads/$checkpoint_ref. This must not move the ship branch, PR branch or default branch.
+Name $checkpoint_ref and its exact commit in the progress note, then read that ref back from origin before claiming the checkpoint is transferable.
+While no-mistakes owns the ship branch, never edit, commit or push that branch; keep reporting the run identifier, gate and reattach command, and update only the separate $checkpoint_ref ref when this checkout already has the checkpoint commit being reported.
+EOF
       printf '%s\n' 'As soon as a PR exists, maintain a "## Status and next step" section in its body with the latest done / next / how to resume note and exact pushed commit, preserving every other section and the no-mistakes attestation.'
-      printf '%s\n' 'Read the branch back from the remote before claiming it is pushed; the branch and progress note together must be sufficient for a crew on another machine to resume.' ;;
+      printf '%s\n' 'The checkpoint ref and progress note together must be sufficient for a crew on another machine to resume.' ;;
   esac
 }
 
@@ -470,7 +475,7 @@ EOF
       echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2
       return 1 ;;
   esac
-  fm_checkpoint_block "$mode" "$forge"
+  fm_checkpoint_block "$mode" "$id" "$forge"
 }
 
 # 0 when <sha> is contained in a ref under <namespace> in <repo>.

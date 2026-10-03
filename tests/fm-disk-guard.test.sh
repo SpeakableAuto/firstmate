@@ -83,6 +83,40 @@ run_guard
 grep -q 'cleanup complete:' "$case_home/fm/state/.wake-queue" || fail 'empty allowlist did not alert'
 pass 'missing configuration alerts without implicit cleanup'
 
+new_case blocked_alert
+seed_caches
+echo cache=npm > "$case_home/fm/config/disk-guard"
+mkdir -p "$case_home/fm/state"
+FM_HOME="$case_home/fm" FM_STATE_OVERRIDE="$case_home/fm/state" \
+  FM_WAKE_QUEUE="$case_home/fm/state/.wake-queue" \
+  FM_WAKE_QUEUE_LOCK="$case_home/fm/state/.wake-queue.lock" \
+  bash -c '
+    . "$1"
+    fm_lock_acquire_wait "$2"
+    printf "ready\n" > "$3"
+    sleep 3
+    fm_lock_release "$2"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$case_home/fm/state/.wake-queue.lock" "$case_home/alert-lock-ready" &
+alert_holder=$!
+for _ in {1..100}; do
+  [ -s "$case_home/alert-lock-ready" ] && break
+  sleep 0.05
+done
+if [ ! -s "$case_home/alert-lock-ready" ]; then
+  kill "$alert_holder" 2>/dev/null || true
+  wait "$alert_holder" 2>/dev/null || true
+  fail 'alert lock holder did not start'
+fi
+if run_guard; then
+  wait "$alert_holder" 2>/dev/null || true
+  fail 'missed starting alert reported success'
+fi
+wait "$alert_holder"
+[ ! -e "$case_home/user/.npm/_cacache/cache" ] || fail 'blocked starting alert prevented cleanup'
+grep -q 'cleanup complete:.*failures=1' "$case_home/fm/state/.wake-queue" \
+  || fail 'result alert did not durably report the missed starting alert'
+pass 'a blocked starting alert is bounded and cleanup remains reported'
+
 new_case dry_run
 seed_caches
 echo cache=npm > "$case_home/fm/config/disk-guard"
