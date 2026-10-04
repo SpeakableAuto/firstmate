@@ -173,7 +173,7 @@ fm_claude_pacing_for_row() { # <config> <quota-row-json> <selected-scope> <model
 
 fm_claude_admission_check() {
   local config=$1 state=$2 id=$3 identity=$4 floor_scope=$5 floor_min_percent=$6 model=${7:-}
-  local settings='{}' limits cap floor floors count counted row result pacing pacing_cap pacing_count pacing_counted pacing_snapshot account_key
+  local settings='{}' limits cap floor floors count counted row result pacing pacing_cap
   if [ -e "$config/crew-dispatch.json" ] || [ -L "$config/crew-dispatch.json" ]; then
     settings=$(cat "$config/crew-dispatch.json") || return 1
   fi
@@ -203,20 +203,6 @@ fm_claude_admission_check() {
       return 1
     fi
     pacing_cap=$(printf '%s\n' "$pacing" | jq -r .allowedConcurrency)
-    pacing_snapshot=$(mktemp) || return 1
-    if ! printf '%s\n' "$row" | jq -c '{schemaVersion:(if has("accountKey") then 6 else 5 end),providers:[.]}' > "$pacing_snapshot"; then
-      rm -f "$pacing_snapshot"
-      return 1
-    fi
-    account_key=$(printf '%s\n' "$row" | jq -r '.accountKey // "default"')
-    fm_quota_pacing_count "$state" "$pacing_snapshot" "$id" claude "$account_key"
-    rm -f "$pacing_snapshot"
-    pacing_count=$FM_QUOTA_PACING_COUNT
-    pacing_counted=$FM_QUOTA_PACING_COUNTED
-    if [ "$pacing_count" -ge "$pacing_cap" ]; then
-      echo "error: Claude crew admission refused for account $identity: $pacing_count live or unverified crew, limit $pacing_cap; counted tasks: $pacing_counted; choose Codex or route to a second mate on another account" >&2
-      return 1
-    fi
     [ "$pacing_cap" -lt "$cap" ] && cap=$pacing_cap
   fi
   if [ "$count" -ge "$cap" ]; then

@@ -2615,11 +2615,22 @@ fi
 
 # Every configured pacing account shares one launch lock through metadata
 # publication. Claude retains its stricter admission gate under that boundary.
-if [ "$KIND" != secondmate ] && fm_quota_pacing_config_applies "$CONFIG" "$HARNESS" "$MODEL"; then
-  QUOTA_PACING_APPLIES=1
-  QUOTA_PACING_ADMISSION_LOCK="$STATE/.quota-pacing-admission.lock"
-  fm_lock_acquire_wait "$QUOTA_PACING_ADMISSION_LOCK" || exit 1
-  QUOTA_PACING_ADMISSION_LOCK_HELD=1
+if [ "$KIND" != secondmate ]; then
+  if fm_quota_pacing_config_applies "$CONFIG" "$HARNESS" "$MODEL"; then
+    quota_pacing_status=0
+  else
+    quota_pacing_status=$?
+  fi
+  case "$quota_pacing_status" in
+    0)
+      QUOTA_PACING_APPLIES=1
+      QUOTA_PACING_ADMISSION_LOCK="$STATE/.quota-pacing-admission.lock"
+      fm_lock_acquire_wait "$QUOTA_PACING_ADMISSION_LOCK" || exit 1
+      QUOTA_PACING_ADMISSION_LOCK_HELD=1
+      ;;
+    1) ;;
+    *) exit 1 ;;
+  esac
 fi
 
 # All Claude crew admission paths, including raw launches and relaunches, pass

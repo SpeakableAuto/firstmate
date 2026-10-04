@@ -497,6 +497,11 @@ JSON
   out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_QUOTA")
   assert_equals 1 "$(jq -r .cap <<<"$out")" "near-floor pacing permits one direct Claude crew"
   assert_equals false "$(jq 'has("pacing")' <<<"$out")" "admission state does not duplicate the pacing snapshot"
+  printf 'harness=claude\nkind=ship\nbackend=unknown\nwindow=other\naccount=another\n' \
+    > "$HOME_DIR/state/other-account.meta"
+  out=$(check_admission); rc=$?
+  expect_code 0 "$rc" "another Claude identity must not consume this account's paced slot: $out"
+  rm "$HOME_DIR/state/other-account.meta"
   jq '(.providers[0].windows[] | select(.id == "weekly") | .percentRemaining) = 39' \
     "$FM_TEST_QUOTA" > "$CASE/pacing-below.json"
   cp "$CASE/pacing-below.json" "$FM_TEST_QUOTA"
@@ -844,6 +849,28 @@ SH
   out=$(spawn_ship "$id" --harness codex --model gpt-5.6-sol); rc=$?
   expect_code 1 "$rc" "a live Codex worker must consume its configured pacing slot: $out"
   assert_refused_before_launch "$id" "$out" '1 live or unverified crew, limit 1'
+
+  new_case codex-pacing-unmeasured codex
+  cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
+{"quota_pacing":{"accounts":[{"provider":"codex","scope":"all_models","window_id":"weekly","window_seconds":7200,"floor_percent":20,"max_concurrent":1}]}}
+JSON
+  cat > "$FAKEBIN/quota-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"}}]}}]}'
+SH
+  chmod +x "$FAKEBIN/quota-axi"
+  id=codex-unmeasured
+  out=$(spawn_ship "$id" --harness codex --model gpt-5.6-sol); rc=$?
+  expect_code 1 "$rc" "a configured Codex account without a quota row must refuse: $out"
+  assert_refused_before_launch "$id" "$out" 'configured account cannot be measured'
+
+  new_case codex-pacing-invalid codex
+  printf '%s\n' '{"quota_pacing":{"accounts":[{"provider":"codex","scope":"all_models","window_id":"weekly","window_seconds":7200,"floor_percent":20,"max_concurrent":0}]}}' \
+    > "$HOME_DIR/config/crew-dispatch.json"
+  id=codex-invalid-config
+  out=$(spawn_ship "$id" --harness codex --model gpt-5.6-sol); rc=$?
+  expect_code 1 "$rc" "malformed Codex pacing configuration must refuse: $out"
+  assert_refused_before_launch "$id" "$out" 'invalid quota pacing settings'
   pass 'spawn pacing counts live Codex workers beyond the resolver charge window'
 }
 

@@ -771,12 +771,13 @@ POOL_JQ='
       and ($scopes | index($scope) != null))] as $items |
     if ($items | length) == 0 then null
     else ([$items[].allowedConcurrency | select(. != null)] | min // null) as $allowed |
+      (if any($items[]; .allowedConcurrency == null)
+       then [$items[] | select(.allowedConcurrency == null)]
+       else [$items[] | select(.allowedConcurrency == $allowed)] end) as $binding |
       {allowed: $allowed,
-          nextWindow: ([$items[].nextWindow | select(. != null)] | min // null),
+          nextWindow: ([$binding[].nextWindow | select(. != null)] | min // null),
           unknown: any($items[]; .allowedConcurrency == null),
-          blockingScopes: (if any($items[]; .allowedConcurrency == null)
-            then [$items[] | select(.allowedConcurrency == null) | .scope]
-            else [$items[] | select(.allowedConcurrency == $allowed) | .scope] end),
+          blockingScopes: [$binding[].scope],
           state: (if any($items[]; .state == "below_floor") then "below_floor"
                   elif any($items[]; .state == "at_floor") then "at_floor"
                   elif any($items[]; .state == "behind") then "behind" else "ahead" end)} end;
@@ -790,8 +791,8 @@ POOL_JQ='
     else $recent | length
     end) as $paced_load |
     if $fmap[$c.profile.harness] == "claude" and $h.admission != null and ($h.admission.unknown | not) then
-      ([$paced_load, ($h.admission.count
-        + ([$recent[] | .key as $k | select(($h.admission.counted // []) | index($k) | not)] | length))] | max)
+      ($h.admission.count
+        + ([$recent[] | .key as $k | select(($h.admission.counted // []) | index($k) | not)] | length))
     else $paced_load end;
   # The Claude crew guard for one machine: the same cap and session floor
   # spawn admission enforces there, charged with this call'"'"'s placements.
@@ -804,9 +805,9 @@ POOL_JQ='
     if $pace != null and ($pace.unknown or $pace.allowed == null) then
       $c + {eligible: false, reason: "quota pacing evidence unknown on \(where($h.id))"}
     elif $pace != null and $pace.allowed == 0 then
-      $c + {eligible: false, reason: "quota pacing at or below floor on \(where($h.id))"}
+      $c + {eligible: false, pacingRejection: true, reason: "quota pacing at or below floor on \(where($h.id))"}
     elif $pace != null and worker_load($c; $h; $pace) >= $pace.allowed then
-      $c + {eligible: false, reason: "quota pacing concurrency \(worker_load($c; $h; $pace))/\($pace.allowed) on \(where($h.id))"}
+      $c + {eligible: false, pacingRejection: true, reason: "quota pacing concurrency \(worker_load($c; $h; $pace))/\($pace.allowed) on \(where($h.id))"}
     elif $fmap[$c.profile.harness] != "claude" then $c
     else ($h.admission) as $a | slots($h.id; $a.counted) as $s |
       (if $a == null then "Claude crew guard unverifiable on \(where($h.id)): its quota snapshot carries no crew evidence"
@@ -1005,7 +1006,9 @@ for i in "${!BRIEFS[@]}"; do
       ([$homes[0][] as $h | ($h.pacing.accounts // [])[] | . + {home:$h.id} | del(.liveCount,.countedTaskIds)]
         | unique_by(.home,.provider,.accountKey,.scope)) as $current |
       ($old[0].accounts // []) as $previous |
-      ([$r.candidates[]? | select(.pacing != null and (.reason | startswith("quota pacing")))]
+      (if $r.status == "escalate" and $r.reason == "no rankable eligible candidate" then
+        [$r.candidates[]? | select(.pacingRejection == true and .pacingNextWindow != null)]
+       else [] end
         | sort_by(.pacingNextWindow) | first) as $waiting |
       {schemaVersion:1, generatedAt:($now | todateiso8601),
        accounts: ([$current[] | . as $a |
@@ -1013,7 +1016,7 @@ for i in "${!BRIEFS[@]}"; do
             and .accountKey == $a.accountKey and .scope == $a.scope and .nextWindow == $a.nextWindow)
             | .queuedTaskIds[]?] | unique | map(select(. != $key))) as $kept |
          .observedAt = ($now | todateiso8601) |
-         .queuedTaskIds = (if $waiting != null and $r.status != "clear"
+         .queuedTaskIds = (if $waiting != null
            and .home == $waiting.home and .provider == $waiting.provider
            and .accountKey == (if $waiting.account == "" then "default" else $waiting.account end)
            and (($waiting.pacing.blockingScopes // []) | index($a.scope)) != null

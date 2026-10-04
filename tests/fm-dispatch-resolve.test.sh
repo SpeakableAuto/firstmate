@@ -261,6 +261,7 @@ pass "clear: one rule Choice request, key on the fd header only, spendPriority a
 # --- optional pacing: reset preference, hard floor, and mirror queue ----------
 soon=$(node -e 'process.stdout.write(new Date(Date.now() + 3600000).toISOString())')
 later=$(node -e 'process.stdout.write(new Date(Date.now() + 10800000).toISOString())')
+latest=$(node -e 'process.stdout.write(new Date(Date.now() + 14400000).toISOString())')
 jq '.rules[3].use = [
       {"harness":"claude","model":"sonnet","provider":"claude"},
       {"harness":"codex","model":"gpt-5.6-sol","provider":"codex"}
@@ -287,6 +288,23 @@ assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" "soonest p
 assert_contains "$out" 'pacing=ahead slots=3' "candidate output exposes pacing allowance"
 assert_equals "$soon" "$(jq -r '.accounts[] | select(.provider == "claude") | .nextWindow' "$HOME_DIR/state/quota-pacing.json")" "mirror exposes the next window"
 assert_equals '0' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "placed task is not queued"
+cp "$RULES" "$TMP_ROOT/pacing-base-rules.json"
+cp "$QUOTA" "$TMP_ROOT/pacing-base-quota.json"
+jq '.quota_pacing.accounts += [
+      {"provider":"claude","scope":"model:sonnet","window_id":"model_weekly","window_seconds":14400,"floor_percent":20,"max_concurrent":3}
+    ]' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
+jq --arg later "$later" --arg latest "$latest" '
+    (.providers[] | select(.provider == "claude") | .windows) +=
+      [{"id":"model_weekly","percentRemaining":30,"resetsAt":$latest}] |
+    (.providers[] | select(.provider == "codex") | .windows[0]) |=
+      (.percentRemaining = 90 | .resetsAt = $later)
+  ' "$QUOTA" > "$QUOTA.next" && mv "$QUOTA.next" "$QUOTA"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-5.6-sol'" "the sooner binding reset wins"
+assert_contains "$out" "provider=claude" "the stricter multi-scope candidate remains visible"
+assert_contains "$out" "next=$latest" "the strictest scope supplies the candidate reset"
+cp "$TMP_ROOT/pacing-base-rules.json" "$RULES"
+cp "$TMP_ROOT/pacing-base-quota.json" "$QUOTA"
 for n in 1 2 3 4; do cp "$BRIEF" "$TMP_ROOT/pace-$n.md"; done
 TYPESAFE_API_KEY=$KEY run code out err \
   "$TMP_ROOT/pace-1.md" --project pager "$TMP_ROOT/pace-2.md" --project pager \
@@ -303,6 +321,16 @@ assert_contains "$out" 'status: escalate' "below-floor candidates do not place"
 assert_contains "$out" 'quota pacing at or below floor' "floor refusal is explained"
 assert_equals '1' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "blocked task is queued for one reset"
 assert_equals 'all_models' "$(jq -r '.accounts[] | select(.queuedTaskIds | length > 0) | .scope' "$HOME_DIR/state/quota-pacing.json")" "the task is queued on the scope that blocked it"
+jq '.rules[3].approval = "captain"' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: escalate' "captain approval still escalates"
+assert_equals '0' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "approval-blocked work is not queued as pacing"
+jq 'del(.rules[3].approval)' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
+write_response "$RESPONSE" rule_4 0.4
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: ambiguous' "low-confidence classification remains ambiguous"
+assert_equals '0' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "ambiguous work is not queued as pacing"
+write_response "$RESPONSE" rule_4 0.96
 jq '.quota_pacing.accounts += [
       {"provider":"claude","scope":"model:sonnet","window_id":"weekly","window_seconds":7200,"floor_percent":79,"max_concurrent":3}
     ]' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
