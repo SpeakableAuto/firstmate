@@ -59,7 +59,19 @@ while IFS= read -r -n 1 ch; do
       sleep 1
       report idle
       ;;
-    *) buf="$buf$ch"; printf '%s' "$ch" >> "$directory/typed"; redraw ;;
+    *)
+      if [ -z "$buf" ]; then
+        buf=$ch
+        printf '%s' "$ch" >> "$directory/typed"
+        # Replace the dim queue suggestion once; subsequent characters can
+        # render incrementally like ordinary terminal input.
+        case "$mode" in queue*) redraw ;; *) printf '%s' "$ch" ;; esac
+      else
+        buf="$buf$ch"
+        printf '%s' "$ch" >> "$directory/typed"
+        printf '%s' "$ch"
+      fi
+      ;;
   esac
 done
 STUB
