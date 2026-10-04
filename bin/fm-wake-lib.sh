@@ -2293,6 +2293,34 @@ fm_wake_actor_pending_count() {  # <actor> [<rows-file> <owner-file>]
   printf '%s\n' "$count"
 }
 
+# How many main-owned queue rows have not already been presented by a drain.
+# The handling turn owns rows recorded in .main-eligible-rows until it
+# acknowledges them, so replaying those rows would recursively wake the
+# supervisor instead of supervising that turn.
+fm_wake_main_unpresented_count() {  # [<presented-rows-file>]
+  local presented=${1:-$STATE/.main-eligible-rows}
+  local rows=$STATE/.branch-eligible-rows owner=$STATE/.branch-eligible-owner
+  local grant='' claimed='' count=''
+  [ -f "$FM_WAKE_QUEUE" ] || { printf '0\n'; return 0; }
+  if fm_wake_branch_grant_live "$rows" "$owner"; then
+    grant=$rows
+  fi
+  if fm_wake_grant_rows_valid "$presented"; then
+    claimed=$presented
+  fi
+  count=$(awk -F '\t' -v grant="$grant" -v claimed="$claimed" '
+    BEGIN {
+      if (grant != "") while ((getline line < grant) > 0) reserved[line] = 1
+      if (claimed != "") while ((getline line < claimed) > 0) presented[line] = 1
+    }
+    NF < 5 || $2 !~ /^[0-9]+$/ { n++; next }
+    !($2 in reserved) && !($2 in presented) { n++ }
+    END { print n + 0 }
+  ' "$FM_WAKE_QUEUE") || count=''
+  case "$count" in ''|*[!0-9]*) count=1 ;; esac
+  printf '%s\n' "$count"
+}
+
 # Print which of the given sequence numbers are still queued, one per line.
 # Read without the queue lock, like the count above, so it answers for a
 # caller that asks only after the actor that could consume those rows is done.

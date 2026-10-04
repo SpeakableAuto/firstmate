@@ -2724,7 +2724,7 @@ while :; do
   # already waiting. No new status signature is required for that append, so
   # surface main-owned rows on the next poll without appending a duplicate row.
   if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ] \
-    && [ "$(fm_wake_actor_pending_count main)" -gt 0 ]; then
+    && [ "$(fm_wake_main_unpresented_count)" -gt 0 ]; then
     wake "check: pending durable wakes"
   fi
 
