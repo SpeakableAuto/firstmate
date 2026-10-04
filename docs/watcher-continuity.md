@@ -182,7 +182,7 @@ The next Stop then re-arms as before.
 ### Durable queue and turn-end backstop
 
 The durable wake queue preserves actionable events between a watcher close and the next drain.
-An active watcher also surfaces main-owned rows already in that queue on its next poll, even when their producer did not change a status signature.
+Outside a recovery handling successor, an active watcher also surfaces main-owned rows already in that queue after the downtime-resurface boundary, even when their producer did not change a status signature.
 The bounded turn-end guard enforces recovery at Stop when no watcher is live and no open generation claim is still deciding.
 So a finished, hung, or identity-mismatched claim cannot suppress that recovery ([`turnend-guard.md`](turnend-guard.md#harness-integrations) owns that boundary).
 

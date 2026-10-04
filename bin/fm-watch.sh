@@ -2661,13 +2661,6 @@ while :; do
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
 
-  # A producer may append directly to the durable queue while this watcher is
-  # already waiting. No new status signature is required for that append, so
-  # surface main-owned rows on the next poll without appending a duplicate row.
-  if [ "$(fm_wake_actor_pending_count main)" -gt 0 ]; then
-    wake "check: pending durable wakes"
-  fi
-
   # Opt-in fleet activity ledger (docs/fleet-ledger.md): pick up newly appended
   # status lines before this cycle can exit on a wake. Off costs one file test.
   [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" capture || true
@@ -2726,6 +2719,14 @@ while :; do
   # A process-event result carries richer adapter-owned wake context than the
   # generic recovery reason, so give that owner first refusal.
   resurface_after_downtime
+
+  # A producer may append directly to the durable queue while this watcher is
+  # already waiting. No new status signature is required for that append, so
+  # surface main-owned rows on the next poll without appending a duplicate row.
+  if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ] \
+    && [ "$(fm_wake_actor_pending_count main)" -gt 0 ]; then
+    wake "check: pending durable wakes"
+  fi
 
   # The existing poll loop also owns the bounded inactive-outcome cadence.
   # This is mechanical and silent unless a durable terminal-outcome obligation

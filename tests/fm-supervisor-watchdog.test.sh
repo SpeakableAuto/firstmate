@@ -216,7 +216,6 @@ reset_case
 STATE=$TMP
 FM_WAKE_QUEUE="$DIR/.wake-queue"
 WAKE_AGE=600
-WAKE_ALERT=900
 printf '399\t27\tcheck\tmail\tpending\n' > "$FM_WAKE_QUEUE"
 PANE=$'● Healthy response\n────────────────────\n❯ \033[2mapproved item 27, deploy it now\033[0m\n────────────────────'
 watchdog_tick
@@ -230,8 +229,12 @@ check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'same queued row is rate limited'
 check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 1 'active alert is rate limited too'
 check "$SENT" 0 'real typed draft is not touched'
 TICK=1900; watchdog_tick
-check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 2 'stalled queue re-alerts after the configured interval'
-check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 2 'active alert repeats only after interval'
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'unchanged oldest row alerts only once'
+check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 1 'unchanged oldest row does not repeat active alerts'
+printf '400\t28\tcheck\tmail\tpending next\n' > "$FM_WAKE_QUEUE"
+watchdog_tick
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 2 'a changed oldest row starts a new alert episode'
+check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 2 'a changed oldest row reaches active alerts'
 TICK=1901; IDENTITY=$'claude\tworking'; watchdog_tick
 check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 2 'working supervisor is exempt from queue alarm'
 TICK=1902; IDENTITY=$'claude\tidle'; PANE=$'Usage limit reached · continuing automatically\n❯ '; watchdog_tick

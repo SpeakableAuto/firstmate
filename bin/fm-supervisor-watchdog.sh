@@ -6,7 +6,7 @@
 #   FM_WATCHDOG_CLAUDE_VERSION installed Claude version approved by a live check
 #   FM_WATCHDOG_PROBE_URL      HTTPS provider endpoint (no credentials/query)
 # Optional: FM_WATCHDOG_IDLE_SECS=120, FM_WATCHDOG_BACKOFF_SECS=900,
-# FM_WATCHDOG_WAKE_AGE_SECS=600, FM_WATCHDOG_WAKE_ALERT_SECS=900.
+# FM_WATCHDOG_WAKE_AGE_SECS=600.
 # Schedule tick with launchd StartInterval, independently of the supervisor.
 # State/logs: FM_HOME/state/supervisor-watchdog/{incident.json,events.jsonl}.
 # A stable viewport with a terminal network error, native Claude idle/done,
@@ -148,7 +148,7 @@ watchdog_alert() {
 # native agent is idle. The watcher is responsible for delivery; this path only
 # publishes an alert through the existing check-wake route and never types.
 watchdog_queue_alert() {
-  local grant='' oldest epoch seq previous='' previous_at=0 marker="$DIR/queue-alert" queue=${FM_WAKE_QUEUE:-$DIR/.wake-queue}
+  local grant='' oldest epoch seq previous='' marker="$DIR/queue-alert" queue=${FM_WAKE_QUEUE:-$DIR/.wake-queue}
   case "$VERDICT" in not-idle|busy|usage-limit|unreadable|unsupported-harness) return 0 ;; esac
   [ -f "$queue" ] || { rm -f "$marker"; return 0; }
   if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
@@ -165,12 +165,12 @@ watchdog_queue_alert() {
   epoch=${oldest%% *}; seq=${oldest#* }
   [ "$epoch" -le "$NOW" ] || return 0
   [ "$((NOW-epoch))" -ge "$WAKE_AGE" ] || return 0
-  if [ -f "$marker" ]; then read -r previous previous_at < "$marker" || true; fi
-  case "$previous_at" in ''|*[!0-9]*) previous_at=0 ;; esac
-  if [ "$previous" = "$epoch:$seq" ] && [ "$((NOW-previous_at))" -lt "$WAKE_ALERT" ]; then return 0; fi
+  if [ -f "$marker" ]; then read -r previous < "$marker" || true; fi
+  previous=${previous%% *}
+  [ "$previous" != "$epoch:$seq" ] || return 0
   local summary="Supervisor idle with undelivered wakes for $((NOW-epoch))s (oldest row $seq). Inspect and drain the main wake queue; no input was sent."
   fm_wake_append check supervisor-watchdog "$summary" || return 1
-  printf '%s %s\n' "$epoch:$seq" "$NOW" > "$marker.tmp"
+  printf '%s\n' "$epoch:$seq" > "$marker.tmp"
   mv "$marker.tmp" "$marker"
   watchdog_log alerted wake-queue-stalled
   wedge_alarm_notify "$summary" "$marker"
@@ -319,8 +319,7 @@ watchdog_main() {
   IDLE=${FM_WATCHDOG_IDLE_SECS:-120}
   BACKOFF=${FM_WATCHDOG_BACKOFF_SECS:-900}
   WAKE_AGE=${FM_WATCHDOG_WAKE_AGE_SECS:-600}
-  WAKE_ALERT=${FM_WATCHDOG_WAKE_ALERT_SECS:-900}
-  for n in "$IDLE" "$BACKOFF" "$WAKE_AGE" "$WAKE_ALERT"; do
+  for n in "$IDLE" "$BACKOFF" "$WAKE_AGE"; do
     case "$n" in ''|*[!0-9]*|0*) echo 'watchdog: positive integer intervals required' >&2; return 2 ;; esac
     [ "$n" -ge 10 ] && [ "$n" -le 86400 ] || { echo 'watchdog: intervals must be 10..86400 seconds' >&2; return 2; }
   done

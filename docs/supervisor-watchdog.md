@@ -13,7 +13,7 @@ Herdr cannot atomically check the prompt and send input, so a human keystroke in
 This is a guarded best-effort safeguard; it is not an input lock.
 The watchdog never clears mixed input or retries a submission, and it verifies a new turn before reporting success.
 Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle queues a `check: supervisor-watchdog` row and uses the configured active alert channels in `config/wedge-alarm`.
-That alarm sends no input and repeats only after `FM_WATCHDOG_WAKE_ALERT_SECS` (900 seconds by default) while the oldest row remains undrained.
+That alarm sends no input and fires once for each unchanged oldest-row episode, rearming when the oldest row changes or the queue drains.
 
 ## Local launchd setup
 
