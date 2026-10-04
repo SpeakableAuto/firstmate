@@ -1079,7 +1079,7 @@ At manual intake, this policy follows the [quota-array-dispatch procedure](../.a
 Typed resolution applies the same runway-aware ordering after its documented rankability checks and reports candidates passed over; its `clear` result remains subject to Firstmate's full intake gates as described below under **Firstmate retains the dispatch decision**.
 Neither path allows order to override a gate or treats unknown evidence as healthy.
 A rule-level `select` overrides the file-level value for the whole intake, including a per-machine rule-floor fallback to `default`; only a neutral no-match uses the file's policy directly.
-Omitting `select` everywhere preserves `quota-balanced`: the highest known `spendPriority` among passing candidates wins, and configured order only breaks a near-tie.
+Omitting `select` everywhere preserves `quota-balanced`: the highest known `spendPriority` among passing candidates wins within the earliest configured paced window when one applies, and configured order only breaks a near-tie.
 A near-tie is every rankable passing candidate whose `spendPriority` is at most 0.05 below the highest; the earliest of them in configured order wins, exact ties included, and the result reports them on a `near-tie broken by configured order` line.
 Across the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines), the same configured position on two machines is ordered by the higher `spendPriority`; an exact scalar tie goes to the machine and account with fewer live workers plus recent charges, then a stable hash of the task key spreads a remaining tie across machines, and the result reports the tied candidates and rule used.
 The band is fixed at 0.05 so that only practically equal quota defers to configured order.
@@ -1154,7 +1154,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 
 - When the file exists, bootstrap validates it with `jq`.
 - Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-- Malformed JSON, malformed rules, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
+- Malformed JSON, malformed rules, an empty or malformed profile array, invalid quota-pacing settings, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
 - While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic; without the key those declarations preserve the pre-existing bootstrap behavior; Claude spawn admission separately validates its settings and the selected floor passed to it.
 - Missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 - While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
@@ -1162,6 +1162,63 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 **Inheritance**
 
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
+
+## Quota pacing
+
+Optional `quota_pacing.accounts` in the gitignored `config/crew-dispatch.json` enables pacing for named provider accounts and quota scopes.
+Each entry declares `provider`, optional `account_key` (default `default`), `scope`, `window_id`, `window_seconds`, `floor_percent`, and `max_concurrent`.
+The provider, account key, scope, and window ID must be non-empty strings; the duration and concurrency must be positive integers, and the floor must be a number from 0 through 100.
+An entry must be unique by provider, account key, and scope.
+Match the window ID to quota-axi's snapshot and set its known duration in seconds; the path reads that window's `percentRemaining` and `resetsAt` without changing quota-axi.
+
+```json
+{
+  "quota_pacing": {
+    "accounts": [
+      {
+        "provider": "vendor",
+        "account_key": "default",
+        "scope": "all_models",
+        "window_id": "weekly",
+        "window_seconds": 604800,
+        "floor_percent": 25,
+        "max_concurrent": 2
+      }
+    ]
+  }
+}
+```
+
+At each dispatch, the path is `floor_percent + (100 - floor_percent) * remaining_window_seconds / window_seconds`, with the time fraction limited to 0 through 1.
+An account ahead of the path allows its full configured concurrency.
+An account behind the path but still above the floor allows the ceiling of its configured cap times `(remaining_percent - floor_percent) / (path_percent - floor_percent)`, limited to at least one and at most one less than the cap when the cap exceeds one.
+At or below the floor, its allowance is zero; a missing percentage or reset, an expired reset, or explicitly stale evidence yields `unknown` and cannot authorize a paced placement.
+Applicable scopes on the same account use the strictest allowance.
+The earliest reset among the scopes tied for that strictest allowance supplies the candidate's pacing window.
+The resolver checks live crew and recent placements against that allowance, then prefers the passing paced account whose reset comes soonest.
+Existing runway and selected profile floors still apply.
+Every directly classified crew launch whose harness and model resolve to a configured provider account applies the same pacing allowance against recovery-grade live-worker evidence under a home-wide launch lock.
+Direct Claude launches retain their stricter account-identity and fixed session-floor checks and also apply every configured scope for the selected model.
+A typed profile's explicit `provider` is not yet carried into spawn metadata, so a profile whose declared provider differs from the launch-time harness/model mapping receives resolver pacing but not direct-launch pacing; durable provider/account launch identity is a known follow-up.
+
+The resolver atomically writes `state/quota-pacing.json` as a private, machine-readable mirror input after each paced resolution.
+Its schema version is 1:
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion`, `generatedAt` | Schema number and UTC observation time. |
+| `accounts[]` | One record for each configured account scope in the current dispatch pool. |
+| `home`, `provider`, `accountKey`, `scope`, `windowId` | Machine and quota identity. |
+| `observedAt` | UTC time when the resolver captured this account record, including an `unknown` record. |
+| `state` | `ahead`, `behind`, `at_floor`, `below_floor`, or `unknown`. |
+| `nextWindow` | The reset timestamp, or `null` when unknown. |
+| `remainingPercent`, `pathPercent`, `floorPercent` | Measured headroom, current glide path, and configured floor. |
+| `allowedConcurrency`, `maxConcurrency` | Current allowance and configured ceiling; the allowance is `null` when unknown. |
+| `queuedTaskIds` | Task keys held on the scope or scopes that supplied the blocking allowance until the named next window; any later result that is not the same pacing wait removes its key. |
+
+The file is a dispatch view, refreshed when the resolver runs, rather than a continuously refreshed quota feed.
+An account's queue is cleared when its reset timestamp changes, and accounts absent from the current pool are removed.
+Only a final `no rankable eligible candidate` result caused by pacing with a known reset adds a task to the queue; approval, ambiguity, unknown pacing evidence, and non-pacing refusals do not.
 
 ## Claude crew admission
 

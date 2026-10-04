@@ -840,6 +840,38 @@ test_claude_admission_refuses_before_relaunch_stop() {
   pass "Claude admission refuses a relaunch before the existing agent stops"
 }
 
+test_codex_pacing_refuses_before_relaunch_stop() {
+  local dir out rc id=rl-codex-cap reset
+  dir=$(new_case codex-admission-preflight "$id")
+  add_ship_task "$dir" "$id" codex
+  printf codex > "$dir/fake/command"
+  printf codex > "$dir/fake/becomes"
+  mkdir -p "$dir/home/config"
+  reset=$(node -e 'process.stdout.write(new Date(Date.now()+3600000).toISOString())')
+  cat > "$dir/home/config/crew-dispatch.json" <<'JSON'
+{"quota_pacing":{"accounts":[{"provider":"codex","scope":"all_models","window_id":"weekly","window_seconds":7200,"floor_percent":20,"max_concurrent":1}]}}
+JSON
+  printf '%s\n' "{\"schemaVersion\":5,\"providers\":[{\"provider\":\"codex\",\"state\":{\"stale\":false},\"windows\":[{\"id\":\"weekly\",\"percentRemaining\":80,\"resetsAt\":\"$reset\"}],\"quotaSemantics\":{\"status\":\"known\",\"effectiveAvailability\":[{\"scope\":\"all_models\",\"status\":\"known\",\"effectivePercentRemaining\":80,\"runway\":{\"status\":\"through_reset\"}}]}}]}" \
+    > "$dir/fake/quota.json"
+  printf 'harness=codex\nkind=ship\nmodel=gpt-5.6-sol\nbackend=unknown\nwindow=other\n' \
+    > "$dir/home/state/other-codex.meta"
+  cp "$dir/home/state/$id.meta" "$dir/meta-before"
+
+  out=$(run_control "$dir" "$id" relaunch --model gpt-5.6-sol --note "retry after a slot opens"); rc=$?
+  expect_code 1 "$rc" "a full Codex pacing account must refuse relaunch: $out"
+  assert_contains "$out" '1 live or unverified crew, limit 1' \
+    "the relaunch refusal should report the paced account cap"
+  [ "$(cat "$dir/fake/command")" = codex ] \
+    || fail "full Codex pacing admission stopped the existing agent"
+  [ ! -s "$dir/fake/literal" ] \
+    || fail "full Codex pacing admission delivered lifecycle input"
+  cmp -s "$dir/meta-before" "$dir/home/state/$id.meta" \
+    || fail "full Codex pacing admission rewrote the task record"
+  [ ! -e "$dir/home/state/$id.control-relaunch" ] \
+    || fail "full Codex pacing admission created a relaunch journal"
+  pass "Codex pacing refuses a relaunch before the existing agent stops"
+}
+
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop() {
   local dir out rc id=rl-ultra
   dir=$(new_case native-ultra "$id")
@@ -2511,6 +2543,7 @@ test_same_harness_relaunch_keeps_the_profile_axes
 test_selected_claude_floor_survives_unchanged_relaunch
 test_changed_claude_profile_requires_its_new_floor
 test_claude_admission_refuses_before_relaunch_stop
+test_codex_pacing_refuses_before_relaunch_stop
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch

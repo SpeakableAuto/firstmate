@@ -917,14 +917,19 @@ resolve_relaunch_profile() {
 
 preflight_relaunch_admission() {
   local identity
-  [ "$TARGET_HARNESS" = claude ] && [ "$KIND" != secondmate ] || return 0
-  if [ -n "$TARGET_WORKER_ACCOUNT" ]; then
-    identity=${TARGET_WORKER_ACCOUNT%%$'\t'*}
-  else
-    identity=$(fm_worker_account_claude_ambient_identity) || return 1
+  [ "$KIND" != secondmate ] || return 0
+  if [ "$TARGET_HARNESS" = claude ]; then
+    if [ -n "$TARGET_WORKER_ACCOUNT" ]; then
+      identity=${TARGET_WORKER_ACCOUNT%%$'\t'*}
+    else
+      identity=$(fm_worker_account_claude_ambient_identity) || return 1
+    fi
+    fm_claude_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
+      "$identity" "$TARGET_PROFILE_FLOOR_SCOPE" "$TARGET_PROFILE_FLOOR_MIN_PERCENT" "$TARGET_MODEL"
+    return
   fi
-  fm_claude_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
-    "$identity" "$TARGET_PROFILE_FLOOR_SCOPE" "$TARGET_PROFILE_FLOOR_MIN_PERCENT"
+  fm_quota_pacing_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
+    "$TARGET_HARNESS" "$TARGET_MODEL"
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch

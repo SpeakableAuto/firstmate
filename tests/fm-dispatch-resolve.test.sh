@@ -258,6 +258,96 @@ assert_not_contains "$body" 'spendPriority' "quota never leaves the machine"
 assert_not_contains "$body" 'cursor-grok' "use profiles never leave the machine"
 pass "clear: one rule Choice request, key on the fd header only, spendPriority argmax over every candidate"
 
+# --- optional pacing: reset preference, hard floor, and mirror queue ----------
+soon=$(node -e 'process.stdout.write(new Date(Date.now() + 3600000).toISOString())')
+later=$(node -e 'process.stdout.write(new Date(Date.now() + 10800000).toISOString())')
+latest=$(node -e 'process.stdout.write(new Date(Date.now() + 14400000).toISOString())')
+jq '.rules[3].use = [
+      {"harness":"claude","model":"sonnet","provider":"claude"},
+      {"harness":"codex","model":"gpt-5.6-sol","provider":"codex"}
+    ] |
+    .quota_pacing.accounts = [
+      {"provider":"claude","scope":"all_models","window_id":"weekly","window_seconds":7200,"floor_percent":20,"max_concurrent":3},
+      {"provider":"codex","scope":"all_models","window_id":"weekly","window_seconds":14400,"floor_percent":20,"max_concurrent":3}
+    ]' "$BASE_RULES" > "$RULES"
+jq --arg soon "$soon" --arg later "$later" '
+  .providers |= map(
+    if .provider == "claude" then
+      .windows += [{"id":"weekly","percentRemaining":79,"resetsAt":$soon}] |
+      .quotaSemantics.effectiveAvailability[0].selection.spendPriority = 0.1 |
+      .quotaSemantics.effectiveAvailability[0].runway.status = "through_reset"
+    elif .provider == "codex" then
+      .windows = [{"id":"weekly","percentRemaining":31,"resetsAt":$later}] |
+      .quotaSemantics.effectiveAvailability[0].selection.spendPriority = 0.9 |
+      .quotaSemantics.effectiveAvailability[0].runway.status = "through_reset"
+    else . end
+  )' "$QUOTA" > "$QUOTA.next" && mv "$QUOTA.next" "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" "soonest paced reset wins despite lower spend priority"
+assert_contains "$out" 'pacing=ahead slots=3' "candidate output exposes pacing allowance"
+assert_equals "$soon" "$(jq -r '.accounts[] | select(.provider == "claude") | .nextWindow' "$HOME_DIR/state/quota-pacing.json")" "mirror exposes the next window"
+assert_equals '0' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "placed task is not queued"
+cp "$RULES" "$TMP_ROOT/pacing-base-rules.json"
+cp "$QUOTA" "$TMP_ROOT/pacing-base-quota.json"
+jq '.quota_pacing.accounts += [
+      {"provider":"claude","scope":"model:sonnet","window_id":"model_weekly","window_seconds":14400,"floor_percent":20,"max_concurrent":3}
+    ]' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
+jq --arg later "$later" --arg latest "$latest" '
+    (.providers[] | select(.provider == "claude") | .windows) +=
+      [{"id":"model_weekly","percentRemaining":30,"resetsAt":$latest}] |
+    (.providers[] | select(.provider == "codex") | .windows[0]) |=
+      (.percentRemaining = 90 | .resetsAt = $later)
+  ' "$QUOTA" > "$QUOTA.next" && mv "$QUOTA.next" "$QUOTA"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-5.6-sol'" "the sooner binding reset wins"
+assert_contains "$out" "provider=claude" "the stricter multi-scope candidate remains visible"
+assert_contains "$out" "next=$latest" "the strictest scope supplies the candidate reset"
+cp "$TMP_ROOT/pacing-base-rules.json" "$RULES"
+cp "$TMP_ROOT/pacing-base-quota.json" "$QUOTA"
+for n in 1 2 3 4; do cp "$BRIEF" "$TMP_ROOT/pace-$n.md"; done
+TYPESAFE_API_KEY=$KEY run code out err \
+  "$TMP_ROOT/pace-1.md" --project pager "$TMP_ROOT/pace-2.md" --project pager \
+  "$TMP_ROOT/pace-3.md" --project pager "$TMP_ROOT/pace-4.md" --project pager
+assert_contains "$out" 'local:claude:sonnet=3' "paced account never exceeds three charged crews"
+assert_contains "$out" 'local:codex:gpt-5.6-sol=1' "fourth task moves to another account"
+jq '(.providers[] | select(.provider == "claude" or .provider == "codex") |
+      .quotaSemantics.effectiveAvailability[0].effectivePercentRemaining) = 19 |
+    (.providers[] | select(.provider == "claude" or .provider == "codex") |
+      .windows[] | select(.id == "weekly") | .percentRemaining) = 19' "$QUOTA" > "$QUOTA.next"
+mv "$QUOTA.next" "$QUOTA"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: escalate' "below-floor candidates do not place"
+assert_contains "$out" 'quota pacing at or below floor' "floor refusal is explained"
+assert_equals '1' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "blocked task is queued for one reset"
+assert_equals 'all_models' "$(jq -r '.accounts[] | select(.queuedTaskIds | length > 0) | .scope' "$HOME_DIR/state/quota-pacing.json")" "the task is queued on the scope that blocked it"
+jq '.rules[3].approval = "captain"' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: escalate' "captain approval still escalates"
+assert_equals '0' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "approval-blocked work is not queued as pacing"
+jq 'del(.rules[3].approval)' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
+write_response "$RESPONSE" rule_4 0.4
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: ambiguous' "low-confidence classification remains ambiguous"
+assert_equals '0' "$(jq '[.accounts[].queuedTaskIds[]] | length' "$HOME_DIR/state/quota-pacing.json")" "ambiguous work is not queued as pacing"
+write_response "$RESPONSE" rule_4 0.96
+jq '.quota_pacing.accounts += [
+      {"provider":"claude","scope":"model:sonnet","window_id":"weekly","window_seconds":7200,"floor_percent":79,"max_concurrent":3}
+    ]' "$RULES" > "$RULES.next" && mv "$RULES.next" "$RULES"
+jq '(.providers[] | select(.provider == "claude") |
+      .quotaSemantics.effectiveAvailability[0].effectivePercentRemaining) = 79 |
+    (.providers[] | select(.provider == "claude") |
+      .windows[] | select(.id == "weekly") | .percentRemaining) = 79' "$QUOTA" > "$QUOTA.next"
+mv "$QUOTA.next" "$QUOTA"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" 'status: escalate' "a model-scoped pacing floor can block the selected model"
+assert_equals 'model:sonnet' "$(jq -r '.accounts[] | select(.queuedTaskIds | length > 0) | .scope' "$HOME_DIR/state/quota-pacing.json")" "the task moves to the actual model-scoped blocker"
+cp "$BASE_RULES" "$RULES"
+write_quota "$QUOTA" 0.7597
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_equals '0' "$(jq '.accounts | length' "$HOME_DIR/state/quota-pacing.json")" "accounts absent from the current pool are removed"
+pass "paced dispatch prefers the next reset and publishes a blocked task queue"
+
 # --- never-send list: a match or a bad list withholds the request -------------
 NEVER_SEND="$HOME_DIR/config/dispatch-never-send"
 PRIVATE_BRIEF="$TMP_ROOT/private-brief.md"

@@ -69,6 +69,7 @@
 #     reason: <why the status is not clear>
 #     selection: quota-balanced | candidate-order
 #     candidate: [home=<id>] <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. [feed=..s old] [charged=<n> recent placement(s)] -> eligible | eligible, runway unknown: disclosed uncertainty | eligible, unranked: <reason> | not eligible: <reason>
+#       Opted-in candidates also show pacing=<state> slots=<n> next=<reset>.
 #     passed over: [home=<id>] <harness>:<model>: projected to run out before reset; <later eligible candidate | another eligible candidate in the pool> has runway through_reset
 #     near-tie broken by configured order: [home=<id>] <harness>:<model>=<spendPriority>, ... (within <band>)   (quota-balanced only)
 #     exact cross-home tie: <candidates and worker counts> -> <winner> by <fewer live workers | stable task-key hash>
@@ -99,6 +100,8 @@
 #   Exit 2 only for a usage or configuration error (unreadable brief, an
 #   existing unreadable rules file, malformed rules, or missing jq), which is
 #   actionable, never selected around.
+#   Opted-in account and queue state is published at state/quota-pacing.json;
+#   docs/configuration.md "Quota pacing" owns its schema.
 #
 # Environment:
 #   TYPESAFE_API_KEY is the only resolver-specific environment setting.
@@ -135,6 +138,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-claude-admission-lib.sh
 . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
+# shellcheck source=bin/fm-quota-pacing-lib.sh
+. "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
 
 CONFIDENCE_FLOOR=0.6
 TS_MODEL=jev-latest
@@ -273,6 +278,10 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
   else empty end
 ' "$RULES" 2>/dev/null) || die "malformed rules file: $RULES_PATH (not JSON)"
 [ -z "$rules_err" ] || die "malformed rules file: $RULES_PATH - $rules_err"
+if jq -e 'has("quota_pacing")' "$RULES" >/dev/null 2>&1; then
+  printf '%s\n' '{"providers":[]}' | node "$SCRIPT_DIR/fm-quota-pacing.mjs" "$RULES" - >/dev/null \
+    || die "malformed rules file: $RULES_PATH - invalid quota pacing settings"
+fi
 
 missing_provider=$(jq -r '
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
@@ -513,6 +522,7 @@ pending() {
 }
 
 # ---- quota evidence: one bounded local snapshot read --------------------------
+NOW=$(date +%s)
 if pending; then
   quota_failure=
   if ! command -v quota-axi >/dev/null 2>&1; then
@@ -531,9 +541,16 @@ if pending; then
   if [ -n "$quota_failure" ]; then
     printf 'null\n' > "$QUOTA"
     printf '%s\n' '{"unknown":"local quota unavailable"}' > "$WORK/local-admission.json"
+    printf '%s\n' '{"schemaVersion":1,"accounts":[]}' > "$WORK/local-pacing.json"
   else
     fm_claude_admission_state "$CONFIG" "$STATE" "$QUOTA" > "$WORK/local-admission.json" 2>/dev/null \
       || printf '%s\n' '{"unknown":"Claude crew guard evidence failed"}' > "$WORK/local-admission.json"
+    if [ -f "$RULES_PATH" ]; then
+      fm_quota_pacing_state "$RULES_PATH" "$STATE" "$QUOTA" "$NOW" > "$WORK/local-pacing.json" \
+        || die "invalid quota pacing settings"
+    else
+      printf '%s\n' '{"schemaVersion":1,"accounts":[]}' > "$WORK/local-pacing.json"
+    fi
   fi
 fi
 
@@ -583,6 +600,7 @@ remote_home() { # <id> -> remote.<id>.json, read once per call
   if snap_err=$("$SCRIPT_DIR/fm-quota-snapshot.sh" --secondmate "$id" 2>&1 >"$snap"); then
     jq -c --arg id "$id" '{id: $id, eligible: true, snapshot: .,
       admission: (.firstmateClaudeAdmission // null),
+      pacing: (.firstmatePacing // {schemaVersion:1,accounts:[]}),
       cache_age: (.firstmateRemoteCache.ageSeconds // null)}' "$snap" > "$out"
   else
     snap_err=${snap_err#quota-snapshot: unavailable (}
@@ -606,8 +624,8 @@ homes_for() { # <index> -> homes.<index>.json
       '{id: "local", eligible: true, snapshot: null, reason: $reason}' > "$WORK/home.$i.local.json"
   else
     jq -nc --argjson eligible "$local_eligible" --arg reason "$local_reason" \
-      --slurpfile snapshot "$QUOTA" --slurpfile admission "$WORK/local-admission.json" '
-      {id: "local", eligible: $eligible, snapshot: $snapshot[0], admission: $admission[0]}
+      --slurpfile snapshot "$QUOTA" --slurpfile admission "$WORK/local-admission.json" --slurpfile pacing "$WORK/local-pacing.json" '
+      {id: "local", eligible: $eligible, snapshot: $snapshot[0], admission: $admission[0], pacing: $pacing[0]}
       + (if $reason == "" then {} else {reason: $reason} end)' > "$WORK/home.$i.local.json"
   fi
   files+=("$WORK/home.$i.local.json")
@@ -743,11 +761,54 @@ POOL_JQ='
         end)
       end);
   def where($id): if $id == "local" then "this machine" else $id end;
+  def pacing_for($c; $h):
+    (($c.profile.model // "") | split("/") | last) as $model |
+    ((($c.bounds // []) | map(.scope))
+      + (if $model == "" then [] else ["model:" + $model, "product:" + $model] end)
+      | unique) as $scopes |
+    [($h.pacing.accounts // [])[] | .scope as $scope | select(.provider == $c.provider
+      and .accountKey == (if $c.account == "" then "default" else $c.account end)
+      and ($scopes | index($scope) != null))] as $items |
+    if ($items | length) == 0 then null
+    else ([$items[].allowedConcurrency | select(. != null)] | min // null) as $allowed |
+      (if any($items[]; .allowedConcurrency == null)
+       then [$items[] | select(.allowedConcurrency == null)]
+       else [$items[] | select(.allowedConcurrency == $allowed)] end) as $binding |
+      {allowed: $allowed,
+          nextWindow: ([$binding[].nextWindow | select(. != null)] | min // null),
+          unknown: any($items[]; .allowedConcurrency == null),
+          blockingScopes: [$binding[].scope],
+          state: (if any($items[]; .state == "below_floor") then "below_floor"
+                  elif any($items[]; .state == "at_floor") then "at_floor"
+                  elif any($items[]; .state == "behind") then "behind" else "ahead" end)} end;
+  def worker_load($c; $h; $pace):
+    recent_account($h.id; $c.provider; $c.account) as $recent |
+    (if $pace != null and ($h.pacing.accounts // [] | length) > 0 then
+      ([($h.pacing.accounts // [])[] | select(.provider == $c.provider
+        and .accountKey == (if $c.account == "" then "default" else $c.account end))] | first) as $live |
+      ($live.liveCount // 0)
+      + ([$recent[] | .key as $k | select(($live.countedTaskIds // []) | index($k) | not)] | length)
+    else $recent | length
+    end) as $paced_load |
+    if $fmap[$c.profile.harness] == "claude" and $h.admission != null and ($h.admission.unknown | not) then
+      ($h.admission.count
+        + ([$recent[] | .key as $k | select(($h.admission.counted // []) | index($k) | not)] | length))
+    else $paced_load end;
   # The Claude crew guard for one machine: the same cap and session floor
   # spawn admission enforces there, charged with this call'"'"'s placements.
   # An unranked candidate keeps its quota uncertainty; it is never selected.
   def guard($c; $h):
-    if $fmap[$c.profile.harness] != "claude" or ($c.eligible | not) or ($c.unranked // false) then $c
+    pacing_for($c; $h) as $pace |
+    (if $pace == null then $c else $c + {pacing: $pace, pacingNextWindow: $pace.nextWindow} end) as $c |
+    if ($c.eligible | not) or ($c.unranked // false) then $c
+    else
+    if $pace != null and ($pace.unknown or $pace.allowed == null) then
+      $c + {eligible: false, reason: "quota pacing evidence unknown on \(where($h.id))"}
+    elif $pace != null and $pace.allowed == 0 then
+      $c + {eligible: false, pacingRejection: true, reason: "quota pacing at or below floor on \(where($h.id))"}
+    elif $pace != null and worker_load($c; $h; $pace) >= $pace.allowed then
+      $c + {eligible: false, pacingRejection: true, reason: "quota pacing concurrency \(worker_load($c; $h; $pace))/\($pace.allowed) on \(where($h.id))"}
+    elif $fmap[$c.profile.harness] != "claude" then $c
     else ($h.admission) as $a | slots($h.id; $a.counted) as $s |
       (if $a == null then "Claude crew guard unverifiable on \(where($h.id)): its quota snapshot carries no crew evidence"
        elif $a.unknown then "Claude crew guard unverifiable on \(where($h.id)): \($a.unknown)"
@@ -761,14 +822,7 @@ POOL_JQ='
        else null end) as $refusal |
       if $refusal == null then $c
       else $c + {eligible: false, unranked: false, reason: $refusal} end
-    end;
-  def worker_load($c; $h):
-    recent_account($h.id; $c.provider; $c.account) as $recent |
-    if $fmap[$c.profile.harness] == "claude" and $h.admission != null and ($h.admission.unknown | not) then
-      $h.admission.count
-      + ([$recent[] | .key as $k | select(($h.admission.counted // []) | index($k) | not)] | length)
-    else $recent | length
-    end;
+    end end;
   def rank_key: [.order, -(.spendPriority), .home, .profile.harness, (.profile.model // ""), (.profile.effort // "")];
   def task_hash: reduce ($key | explode[]) as $cp (5381; ((. * 33 + $cp) % 2147483647));
   def exact_tie_pick($xs):
@@ -784,22 +838,27 @@ POOL_JQ='
       end
     end;
   def pool_pick($elig; $mode):
+    (any($elig[]; .runway == "through_reset")) as $safe |
+    (if $safe then [$elig[] | select(.runway != "projected_exhaustion")] else $elig end) as $safe_eligible |
+    ([$safe_eligible[] | select(.pacingNextWindow != null)] | sort_by(.pacingNextWindow)) as $paced |
+    (if ($paced | length) > 0 then
+       [$paced[] | select(.pacingNextWindow == $paced[0].pacingNextWindow)]
+     else $safe_eligible end) as $eligible |
     if $mode == "candidate-order" then
-      ($elig | sort_by(rank_key)) as $o |
-      ([$o | to_entries[] | select(.value.runway == "through_reset") | .key] | first) as $safe |
+      ($eligible | sort_by(rank_key)) as $o |
+      ([$o | to_entries[] | select(.value.runway == "through_reset") | .key] | first) as $local_safe |
       ([$o | to_entries[] | select(
-        .value.runway != "projected_exhaustion" or $safe == null or .key >= $safe
+        .value.runway != "projected_exhaustion" or $local_safe == null or .key >= $local_safe
       )]) as $viable |
       ($viable[0]) as $first |
       ([$viable[].value | select(
         .order == $first.value.order and .spendPriority == $first.value.spendPriority and
-        ($safe == null or .runway != "projected_exhaustion")
+        ($local_safe == null or .runway != "projected_exhaustion")
       )]) as $exact |
       exact_tie_pick($exact) as $tie |
-      $tie + {passed_over: $o[:$first.key], passed_kind: "later"}
+      $tie + {passed_over: (if $safe then [$elig[] | select(.runway == "projected_exhaustion")] else $o[:$first.key] end), passed_kind: "later"}
     else
-      (any($elig[]; .runway == "through_reset")) as $safe |
-      (if $safe then [$elig[] | select(.runway != "projected_exhaustion")] else $elig end) as $kept |
+      ($eligible) as $kept |
       ($kept | max_by(.spendPriority).spendPriority) as $top |
       ([$kept[] | select($top - .spendPriority <= near_tie_band + 1e-9)] | sort_by(rank_key)) as $near |
       ([$near[] | select(.order == $near[0].order and .spendPriority == $near[0].spendPriority)]) as $exact |
@@ -827,7 +886,7 @@ POOL_JQ='
       $h + {index: $hi, sel: $sel, slots: slots($h.id; $h.admission.counted),
         candidates: [($sel.use // []) | to_entries[] | . as $e |
           (evaluate($e.value) + {home: $h.id, order: [$sel.rank, $e.key]}) | guard(.; $h) |
-          . + {workers: worker_load(.; $h)}]}
+          . + {workers: worker_load(.; $h; .pacing)}]}
     end] as $evald |
   ([$evald[] | select(.sel)]) as $usable |
   ([$evald[].candidates[]]) as $cands |
@@ -867,7 +926,8 @@ POOL_JQ='
             {placement: {home: $best.home,
               reason: ((if $best.home == "local" then "local" else $best.home end) + " "
                 + "\($best.profile.harness):\($best.profile.model // "-") "
-                + (if $pick.exact_tie then "wins an exact cross-home tie at spendPriority \($best.spendPriority) by \($pick.exact_tie.rule)"
+                + (if $best.pacingNextWindow then "has headroom in the soonest paced window \($best.pacingNextWindow)"
+                   elif $pick.exact_tie then "wins an exact cross-home tie at spendPriority \($best.spendPriority) by \($pick.exact_tie.rule)"
                    elif $mode == "candidate-order" then "is the first passing candidate in configured order across the pool"
                    elif $pick.near_tie then "wins a near-tie at spendPriority \($best.spendPriority) by configured order"
                    else "has the pool'"'"'s highest spendPriority \($best.spendPriority)" end)
@@ -890,7 +950,6 @@ POOL_JQ='
 # by the brief path, so resolving the same task again replaces its charge.
 CHARGE_WINDOW=900
 LEDGER_FILE="$STATE/dispatch-charges.jsonl"
-NOW=$(date +%s)
 if [ -f "$LEDGER_FILE" ] && [ ! -L "$LEDGER_FILE" ]; then
   jq -cs --argjson now "$NOW" --argjson window "$CHARGE_WINDOW" '
     {entries: ([.[] | select(type == "object" and (.at | type) == "number" and (.key | type) == "string"
@@ -927,6 +986,52 @@ for i in "${!BRIEFS[@]}"; do
     jq -c .ledger "$WORK/pool.$i.json" > "$WORK/ledger.next" && mv "$WORK/ledger.next" "$WORK/ledger.json"
   else
     brief_error "$i" "resolution failed"
+  fi
+done
+
+# Publish the opt-in account view after each placement. A task blocked by a
+# paced account is queued against the earliest matching reset window.
+PACING_FILE="$STATE/quota-pacing.json"
+for i in "${!BRIEFS[@]}"; do
+  [ -f "$WORK/homes.$i.json" ] || continue
+  if [ -f "$PACING_FILE" ] && [ ! -L "$PACING_FILE" ]; then
+    cp "$PACING_FILE" "$WORK/pacing-prev.json"
+  else
+    printf '%s\n' '{"accounts":[]}' > "$WORK/pacing-prev.json"
+  fi
+  if ! jq -n --arg key "$(brief_key "$i")" --argjson now "$NOW" \
+      --slurpfile homes "$WORK/homes.$i.json" --slurpfile result "$WORK/result.$i.json" \
+      --slurpfile old "$WORK/pacing-prev.json" '
+      ($result[0]) as $r |
+      ([$homes[0][] as $h | ($h.pacing.accounts // [])[] | . + {home:$h.id} | del(.liveCount,.countedTaskIds)]
+        | unique_by(.home,.provider,.accountKey,.scope)) as $current |
+      ($old[0].accounts // []) as $previous |
+      (if $r.status == "escalate" and $r.reason == "no rankable eligible candidate" then
+        [$r.candidates[]? | select(.pacingRejection == true and .pacingNextWindow != null)]
+       else [] end
+        | sort_by(.pacingNextWindow) | first) as $waiting |
+      {schemaVersion:1, generatedAt:($now | todateiso8601),
+       accounts: ([$current[] | . as $a |
+         ([$previous[] | select(.home == $a.home and .provider == $a.provider
+            and .accountKey == $a.accountKey and .scope == $a.scope and .nextWindow == $a.nextWindow)
+            | .queuedTaskIds[]?] | unique | map(select(. != $key))) as $kept |
+         .observedAt = ($now | todateiso8601) |
+         .queuedTaskIds = (if $waiting != null
+           and .home == $waiting.home and .provider == $waiting.provider
+           and .accountKey == (if $waiting.account == "" then "default" else $waiting.account end)
+           and (($waiting.pacing.blockingScopes // []) | index($a.scope)) != null
+           then ($kept + [$key] | unique) else $kept end)]
+       )}' > "$WORK/pacing-next.json"; then
+    die "could not render quota pacing state"
+  fi
+  if jq -e '.accounts | length > 0' "$WORK/pacing-next.json" >/dev/null 2>&1 \
+     || [ -f "$PACING_FILE" ]; then
+    mkdir -p "$STATE" || die "could not create quota pacing state directory"
+    tmp=$(mktemp "$STATE/.quota-pacing.XXXXXX") || die "could not stage quota pacing state"
+    if ! { cp "$WORK/pacing-next.json" "$tmp" && mv -f "$tmp" "$PACING_FILE"; }; then
+      rm -f "$tmp"
+      die "could not publish quota pacing state"
+    fi
   fi
 done
 
@@ -969,6 +1074,7 @@ RENDER_JQ='
         + (if .cache then "  cached=\(.cache.ageSeconds)s old" else "" end)
         + (if .feed then "  feed=\(.feed.ageSeconds)s old" else "" end)
         + (if (.charged // 0) > 0 then "  charged=\(.charged) recent placement(s)" else "" end)
+        + (if .pacing then "  pacing=\(.pacing.state) slots=\(show(.pacing.allowed)) next=\(show(.pacingNextWindow))" else "" end)
         + "  -> " + (if .unranked then "eligible, unranked: \(.reason | flat): disclosed uncertainty"
                      elif .eligible and ((.runway // "unknown") == "unknown") then "eligible, runway unknown: disclosed uncertainty"
                      elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
