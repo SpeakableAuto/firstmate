@@ -75,3 +75,42 @@ out=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2> "$home/drain.err") \
   || fail "later queued row could not be drained: $(cat "$home/drain.err")"
 assert_contains "$out" "$(printf '\tcheck\tlater\t')" 'later queued row was not presented to the supervisor'
 pass 'handling successor replays a row appended after its inherited delivery'
+
+home="$tmp/branch-release-home"
+mkdir -p "$home/state" "$home/config" "$home/data"
+printf '%s\t1\tcheck\tbranch-held\tcheck: branch-held row\n' "$now" > "$home/state/.wake-queue"
+printf '%s\t2\tcheck\tmain-owned\tcheck: main-owned row\n' "$now" >> "$home/state/.wake-queue"
+printf '2\n' > "$home/state/.wake-queue.seq"
+FM_HOME="$home" "$ROOT/bin/fm-wake-grant.sh" activate "$$" branch-release \
+  || fail 'branch owner could not activate for released-row replay'
+FM_HOME="$home" "$ROOT/bin/fm-wake-grant.sh" publish branch-release 1 \
+  || fail 'branch-held row could not be granted'
+out=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2> "$home/initial-drain.err") \
+  || fail "main-owned row could not be presented: $(cat "$home/initial-drain.err")"
+assert_contains "$out" "$(printf '\tcheck\tmain-owned\t')" 'initial main drain did not present its owned row'
+assert_not_contains "$out" "$(printf '\tcheck\tbranch-held\t')" 'initial main drain presented the branch-held row'
+
+out_file="$home/released-row.out"
+FM_HOME="$home" FM_WATCH_HANDLING_SUCCESSOR=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
+  FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+  "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 5 > "$out_file" 2>&1 &
+watch_pid=$!
+i=0
+while [ ! -e "$home/state/.last-watcher-beat" ] && [ "$i" -lt 30 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+[ -e "$home/state/.last-watcher-beat" ] || fail 'handling successor did not start for released-row replay'
+FM_HOME="$home" "$ROOT/bin/fm-wake-grant.sh" release branch-release \
+  || fail 'branch-held row could not be released to main'
+set +e
+wait "$watch_pid"
+status=$?
+set -e
+out=$(cat "$out_file")
+[ "$status" -eq 0 ] || fail "handling successor did not replay the released branch row: $out"
+assert_contains "$out" 'check: pending durable wakes' 'released branch row did not wake the supervisor'
+out=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2> "$home/released-drain.err") \
+  || fail "released branch row could not be drained: $(cat "$home/released-drain.err")"
+assert_contains "$out" "$(printf '\tcheck\tbranch-held\t')" 'released branch row was not presented to the supervisor'
+pass 'handling successor replays a branch-held row after its grant releases'
