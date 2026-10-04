@@ -24,6 +24,12 @@ export NODE_NO_WARNINGS=1
 # tests are sized against this number.
 ARM_READY_TIMEOUT_MS=2000
 
+install_supervision_libs_fixture() {
+  local repo=$1
+  mkdir -p "$repo/bin"
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+}
+
 install_pi_watch_extension_fixture() {
   local repo=$1
   mkdir -p \
@@ -37,8 +43,7 @@ install_pi_watch_extension_fixture() {
   cp "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$repo/.pi/extensions/lib/fm-async-exec.ts"
   cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$repo/.pi/extensions/lib/fm-calm-visibility.ts"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
-  mkdir -p "$repo/bin"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
   chmod +x "$repo/bin/fm-operational-input.sh"
   cat > "$repo/node_modules/@earendil-works/pi-coding-agent/package.json" <<'JSON'
@@ -3369,7 +3374,7 @@ test_opencode_primary_watch_plugin_uses_effective_state_home() {
   home="$TMP_ROOT/opencode-effective-state-home"
   log="$TMP_ROOT/opencode-effective-state.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   mkdir -p "$home/data"
@@ -3421,7 +3426,7 @@ test_opencode_primary_watch_plugin_sources_effective_config() {
   home="$TMP_ROOT/opencode-effective-config-home"
   log="$TMP_ROOT/opencode-effective-config.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   printf 'export FM_POLL=7\n' > "$home/config/x-mode.env"
@@ -3471,7 +3476,7 @@ test_opencode_primary_watch_plugin_requires_session_lock() {
   home="$TMP_ROOT/opencode-lock-home"
   log="$TMP_ROOT/opencode-lock.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -3535,7 +3540,7 @@ test_opencode_watch_arm_coordinator_respects_primary_scope() {
   log="$TMP_ROOT/opencode-coordinator.log"
   fm_git_worktree "$base" "$repo" fm/opencode-coordinator
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3582,7 +3587,7 @@ test_opencode_primary_watch_plugin_rearms_after_wake() {
   log="$TMP_ROOT/opencode-rearm.log"
   stop="$TMP_ROOT/opencode-rearm.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -3769,7 +3774,7 @@ test_opencode_pre_ready_actionable_close_preserves_its_successor() {
   retired="$TMP_ROOT/opencode-pre-ready-actionable.retired"
   stop="$TMP_ROOT/opencode-pre-ready-actionable.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -3850,7 +3855,7 @@ test_opencode_hung_successor_falls_back_to_typed_wake() {
   home="$TMP_ROOT/opencode-hung-successor-home"
   log="$TMP_ROOT/opencode-hung-successor.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -3922,7 +3927,7 @@ test_opencode_unretired_successor_falls_back_without_retry() {
   log="$TMP_ROOT/opencode-unretired-successor.log"
   release="$TMP_ROOT/opencode-unretired-successor.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -4000,7 +4005,7 @@ test_opencode_late_unretired_close_resumes_supervision() {
     release="$TMP_ROOT/opencode-late-$kind.release"
     stop="$TMP_ROOT/opencode-late-$kind.stop"
     mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
     git init -q "$repo"
     : > "$repo/AGENTS.md"
     : > "$home/state/task.meta"
@@ -4096,7 +4101,7 @@ test_opencode_empty_close_retries_instead_of_disappearing() {
   log="$TMP_ROOT/opencode-empty-close.log"
   stop="$TMP_ROOT/opencode-empty-close.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -4156,7 +4161,7 @@ test_opencode_established_empty_close_honors_retry_limit() {
   home="$TMP_ROOT/opencode-established-empty-close-home"
   log="$TMP_ROOT/opencode-established-empty-close.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -4211,7 +4216,7 @@ test_opencode_actionable_close_rechecks_session_lock() {
   log="$TMP_ROOT/opencode-close-lock.log"
   release="$TMP_ROOT/opencode-close-lock.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -4278,7 +4283,7 @@ test_opencode_watch_arm_coordinates_with_turnend_guard() {
   log="$TMP_ROOT/opencode-coordinate-arm.log"
   guard_log="$TMP_ROOT/opencode-coordinate-guard.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
@@ -4352,7 +4357,7 @@ test_opencode_healthy_arm_output_does_not_suppress_guard() {
   log="$TMP_ROOT/opencode-external-healthy-arm.log"
   guard_log="$TMP_ROOT/opencode-external-healthy-guard.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
-  cp "$ROOT/bin/fm-supervision-lib.sh" "$ROOT/bin/fm-programs-lib.sh" "$ROOT/bin/fm-backlog-lib.sh" "$repo/bin/"
+  install_supervision_libs_fixture "$repo"
   git init -q "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
