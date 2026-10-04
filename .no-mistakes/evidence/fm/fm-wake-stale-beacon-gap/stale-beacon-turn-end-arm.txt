@@ -1,0 +1,12 @@
+scenario=stale-beacon-live-holder
+watcher_pid=41097
+lock_pid=41097
+beacon_age_seconds=11
+eviction_bound_seconds=60
+holder_alive_after_arm=yes
+queued_rows_after_arm=1
+arm_exit=0
+arm_output_begin
+watcher: holder pid=41097 has a stale beacon (11s); not attached
+check: pending durable wakes
+arm_output_end

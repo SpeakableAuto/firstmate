@@ -1,0 +1,66 @@
+scenario=watchdog-real-claude
+session=fm-lab-watchdog-real-46623-18809
+claude_version=2.1.280 (Claude Code)
+herdr_version=herdr 0.9.3
+first_tick_last_event=["observed","queue-idle"]
+second_tick_last_event=["submitted","queue-nudge"]
+token_occurrences_in_real_claude_transcript=1
+queue_rows_after_delivery=0
+presented_rows_after_delivery=
+delivery_pass=1
+token_lines_begin
+⏺ WATCHDOG_LIVE_DELIVERY_OK
+token_lines_end
+draft_before=HUMAN_DRAFT_MUST_REMAIN
+draft_after=HUMAN_DRAFT_MUST_REMAIN
+queue_nudge_action_count_before_draft=1
+queue_nudge_action_count_after_draft=1
+draft_pass=1
+watchdog_events_tail_begin
+{"at":1791132583,"event":"alerted","detail":"wake-queue-stalled"}
+{"at":1791132583,"event":"observed","detail":"queue-idle"}
+{"at":1791132594,"event":"action-claimed","detail":"queue-nudge"}
+{"at":1791132594,"event":"submitted","detail":"queue-nudge"}
+watchdog_events_tail_end
+real_claude_transcript_tail_begin
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Opus 5.5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/.no-mistakes/worktrees/02f7ed18429b/01M43WCC5EZK7G20R5X3Q89898
+
+
+❯ Watchdog: undelivered wakes queued; run bin/fm-wake-drain.sh
+
+  Ran 3 shell commands
+
+⏺ WATCHDOG_LIVE_DELIVERY_OK
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✳ Perambulating… (running Stop hooks… 1/3 · 15s · ↓ 922 tokens)
+                                                                Update available! Run: brew upgrade claude-code@latest
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents
+real_claude_transcript_tail_end
