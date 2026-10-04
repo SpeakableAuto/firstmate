@@ -1,0 +1,40 @@
+{
+  "scenario": "Codex relaunch preflight refuses at the paced cap without stopping either live process",
+  "liveProcesses": {
+    "session": "fm-lab-relaunch-cap-43204-21567",
+    "target": {
+      "pane": "w1:p1",
+      "statusBefore": "unknown",
+      "statusAfter": "unknown",
+      "startExitCode": 1,
+      "startOutput": "{\"error\":{\"code\":\"timeout\",\"message\":\"timed out waiting for agent startup\"},\"id\":\"cli:agent:start\"}"
+    },
+    "capHolder": {
+      "pane": "w2:p1",
+      "statusAfter": "unknown",
+      "startExitCode": 1,
+      "startOutput": "{\"error\":{\"code\":\"timeout\",\"message\":\"timed out waiting for agent startup\"},\"id\":\"cli:agent:start\"}"
+    }
+  },
+  "configuredPacing": {
+    "provider": "codex",
+    "scope": "all_models",
+    "maxConcurrency": 1,
+    "resetsAt": "2026-10-09T21:46:35.000Z"
+  },
+  "relaunchAttempt": {
+    "exitCode": 1,
+    "output": "fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.033MMy\nerror: quota pacing admission refused for provider codex account default: 1 live or unverified crew, limit 1; counted tasks: cap-holder"
+  },
+  "durableRecord": {
+    "sha256Before": "ab90724afe637da6ea0db26bfbe6c0e4f93e55718a40d388556d9b0eef796db7",
+    "sha256After": "ab90724afe637da6ea0db26bfbe6c0e4f93e55718a40d388556d9b0eef796db7",
+    "journalCreated": false
+  },
+  "assertions": {
+    "preflightRefused": true,
+    "targetAgentStillRunning": true,
+    "capHolderStillRunning": true,
+    "metadataUnchanged": true
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "scenario": "Quota pacing tapers above the floor and stops at the floor",
+  "source": "live quota-axi authenticated snapshot",
+  "measured": {
+    "provider": "codex",
+    "window": "weekly",
+    "remainingPercent": 65,
+    "resetsAt": "2026-10-09T21:46:35.000Z"
+  },
+  "behindAboveFloor": {
+    "provider": "codex",
+    "accountKey": "default",
+    "scope": "all_models",
+    "windowId": "weekly",
+    "nextWindow": "2026-10-09T21:46:35.000Z",
+    "floorPercent": 64,
+    "maxConcurrency": 3,
+    "remainingPercent": 65,
+    "pathPercent": 94.2076,
+    "allowedConcurrency": 1,
+    "state": "behind",
+    "queuedTaskIds": []
+  },
+  "atFloor": {
+    "provider": "codex",
+    "accountKey": "default",
+    "scope": "all_models",
+    "windowId": "weekly",
+    "nextWindow": "2026-10-09T21:46:35.000Z",
+    "floorPercent": 65,
+    "maxConcurrency": 3,
+    "remainingPercent": 65,
+    "pathPercent": 94.3685,
+    "allowedConcurrency": 0,
+    "state": "at_floor",
+    "queuedTaskIds": []
+  },
+  "assertions": {
+    "behindStillAllowsCrew": true,
+    "behindReducedBelowConfiguredCap": true,
+    "atFloorAllowsZero": true
+  }
+}

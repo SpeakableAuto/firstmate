@@ -1,0 +1,10 @@
+{
+  "scenario": "Direct Codex launch at the configured quota floor",
+  "exitCode": 1,
+  "observableOutput": "fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.JVZdkp\nerror: quota pacing admission refused for provider codex account default: 0 live or unverified crew, limit 0; counted tasks: ",
+  "metadataPublished": false,
+  "assertions": {
+    "launchRefusedBeforePublication": true,
+    "zeroAllowanceEnforced": true
+  }
+}

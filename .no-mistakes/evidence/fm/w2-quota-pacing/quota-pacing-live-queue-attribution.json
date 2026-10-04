@@ -1,0 +1,139 @@
+{
+  "scenario": "Only a known-window pacing rejection enters the private queue, under its actual blocking scope",
+  "liveModelWindow": {
+    "provider": "claude",
+    "scope": "model:fable",
+    "remainingPercent": 84
+  },
+  "pacingRefusal": {
+    "output": "dispatch-resolve:\n  status: escalate\n  model: jev-1.13.0   latency_ms: 0   tokens: 425/35\n  rule: rule_1 (Any model-scoped quota pacing queue validation task.)   confidence: 0.98\n  probabilities: default=0.01 rule_1=0.99\n  reason: no rankable eligible candidate\n  selection: quota-balanced\n  candidate: claude:fable  provider=claude  scope=all_models  remaining=72%  spendPriority=0.3938  runway=through_reset  bounds=all_models:72%/through_reset,model:fable:72%/through_reset  cached=25s old  pacing=at_floor slots=0 next=2026-10-08T11:00:00.282Z  -> not eligible: quota pacing at or below floor on this machine",
+    "mirror": {
+      "schemaVersion": 1,
+      "generatedAt": "2026-10-04T00:55:42Z",
+      "accounts": [
+        {
+          "provider": "claude",
+          "accountKey": "default",
+          "scope": "all_models",
+          "windowId": "seven_day",
+          "nextWindow": "2026-10-08T11:00:00.281Z",
+          "floorPercent": 0,
+          "maxConcurrency": 3,
+          "remainingPercent": 72,
+          "pathPercent": 63.1379,
+          "allowedConcurrency": 3,
+          "state": "ahead",
+          "queuedTaskIds": [],
+          "home": "local",
+          "observedAt": "2026-10-04T00:55:42Z"
+        },
+        {
+          "provider": "claude",
+          "accountKey": "default",
+          "scope": "model:fable",
+          "windowId": "model:fable",
+          "nextWindow": "2026-10-08T11:00:00.282Z",
+          "floorPercent": 84,
+          "maxConcurrency": 3,
+          "remainingPercent": 84,
+          "pathPercent": 94.1021,
+          "allowedConcurrency": 0,
+          "state": "at_floor",
+          "queuedTaskIds": [
+            "live-queue"
+          ],
+          "home": "local",
+          "observedAt": "2026-10-04T00:55:42Z"
+        }
+      ]
+    }
+  },
+  "approvalRefusal": {
+    "output": "dispatch-resolve:\n  status: escalate\n  model: jev-1.13.0   latency_ms: 0   tokens: 425/35\n  rule: rule_1 (Any model-scoped quota pacing queue validation task.)   confidence: 0.96\n  probabilities: default=0.02 rule_1=0.98\n  reason: rule requires the captain's explicit approval before dispatch\n  candidate: claude:fable  provider=claude  scope=all_models  remaining=72%  spendPriority=0.3938  runway=through_reset  bounds=all_models:72%/through_reset,model:fable:72%/through_reset  cached=27s old  pacing=at_floor slots=0 next=2026-10-08T11:00:00.282Z  -> not eligible: quota pacing at or below floor on this machine",
+    "mirror": {
+      "schemaVersion": 1,
+      "generatedAt": "2026-10-04T00:55:43Z",
+      "accounts": [
+        {
+          "provider": "claude",
+          "accountKey": "default",
+          "scope": "all_models",
+          "windowId": "seven_day",
+          "nextWindow": "2026-10-08T11:00:00.281Z",
+          "floorPercent": 0,
+          "maxConcurrency": 3,
+          "remainingPercent": 72,
+          "pathPercent": 63.1378,
+          "allowedConcurrency": 3,
+          "state": "ahead",
+          "queuedTaskIds": [],
+          "home": "local",
+          "observedAt": "2026-10-04T00:55:43Z"
+        },
+        {
+          "provider": "claude",
+          "accountKey": "default",
+          "scope": "model:fable",
+          "windowId": "model:fable",
+          "nextWindow": "2026-10-08T11:00:00.282Z",
+          "floorPercent": 84,
+          "maxConcurrency": 3,
+          "remainingPercent": 84,
+          "pathPercent": 94.102,
+          "allowedConcurrency": 0,
+          "state": "at_floor",
+          "queuedTaskIds": [],
+          "home": "local",
+          "observedAt": "2026-10-04T00:55:43Z"
+        }
+      ]
+    }
+  },
+  "unknownWindowRefusal": {
+    "output": "dispatch-resolve:\n  status: escalate\n  model: jev-1.13.0   latency_ms: 0   tokens: 425/35\n  rule: rule_1 (Any model-scoped quota pacing queue validation task.)   confidence: 0.97\n  probabilities: default=0.02 rule_1=0.98\n  reason: no rankable eligible candidate\n  selection: quota-balanced\n  candidate: claude:fable  provider=claude  scope=all_models  remaining=72%  spendPriority=0.3938  runway=through_reset  bounds=all_models:72%/through_reset,model:fable:72%/through_reset  cached=28s old  pacing=ahead slots=3 next=-  -> not eligible: quota pacing evidence unknown on this machine",
+    "mirror": {
+      "schemaVersion": 1,
+      "generatedAt": "2026-10-04T00:55:44Z",
+      "accounts": [
+        {
+          "provider": "claude",
+          "accountKey": "default",
+          "scope": "all_models",
+          "windowId": "seven_day",
+          "nextWindow": "2026-10-08T11:00:00.281Z",
+          "floorPercent": 0,
+          "maxConcurrency": 3,
+          "remainingPercent": 72,
+          "pathPercent": 63.1376,
+          "allowedConcurrency": 3,
+          "state": "ahead",
+          "queuedTaskIds": [],
+          "home": "local",
+          "observedAt": "2026-10-04T00:55:44Z"
+        },
+        {
+          "provider": "claude",
+          "accountKey": "default",
+          "scope": "model:fable",
+          "windowId": "missing-model-window",
+          "nextWindow": null,
+          "floorPercent": 84,
+          "maxConcurrency": 3,
+          "remainingPercent": null,
+          "pathPercent": null,
+          "allowedConcurrency": null,
+          "state": "unknown",
+          "queuedTaskIds": [],
+          "home": "local",
+          "observedAt": "2026-10-04T00:55:44Z"
+        }
+      ]
+    }
+  },
+  "assertions": {
+    "pacingTaskQueuedOnce": true,
+    "queueAttributedToModelScope": true,
+    "approvalNotQueued": true,
+    "unknownWindowNotQueued": true
+  }
+}

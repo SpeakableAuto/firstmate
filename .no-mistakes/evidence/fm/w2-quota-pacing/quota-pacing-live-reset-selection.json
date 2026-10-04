@@ -1,0 +1,52 @@
+{
+  "scenario": "Live dispatch with headroom on two paced accounts",
+  "resolverOutput": "dispatch-resolve:\n  status: clear\n  model: jev-1.13.0   latency_ms: 1000   tokens: 424/35\n  rule: rule_1 (Any quota pacing selection validation task.)   confidence: 0.95\n  probabilities: rule_1=0.98 default=0.02\n  selection: quota-balanced\n  note: rule matched\n  candidate: claude:fable  provider=claude  scope=all_models  remaining=72%  spendPriority=0.3934  runway=through_reset  bounds=all_models:72%/through_reset,model:fable:72%/through_reset  cached=1s old  pacing=ahead slots=3 next=2026-10-08T11:00:00.437Z  -> eligible\n  candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=65%  spendPriority=-1.3913  runway=projected_exhaustion  pacing=behind slots=2 next=2026-10-09T21:46:35.000Z  -> eligible\n  profile: --harness 'claude' --model 'fable'",
+  "resolverStderr": "",
+  "liveResets": {
+    "claude": "2026-10-08T11:00:00.437197+00:00",
+    "codex": "2026-10-09T21:46:35.000Z"
+  },
+  "publishedMirror": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-10-04T00:55:01Z",
+    "accounts": [
+      {
+        "provider": "claude",
+        "accountKey": "default",
+        "scope": "all_models",
+        "windowId": "seven_day",
+        "nextWindow": "2026-10-08T11:00:00.437Z",
+        "floorPercent": 0,
+        "maxConcurrency": 3,
+        "remainingPercent": 72,
+        "pathPercent": 63.1447,
+        "allowedConcurrency": 3,
+        "state": "ahead",
+        "queuedTaskIds": [],
+        "home": "local",
+        "observedAt": "2026-10-04T00:55:01Z"
+      },
+      {
+        "provider": "codex",
+        "accountKey": "default",
+        "scope": "all_models",
+        "windowId": "weekly",
+        "nextWindow": "2026-10-09T21:46:35.000Z",
+        "floorPercent": 0,
+        "maxConcurrency": 3,
+        "remainingPercent": 65,
+        "pathPercent": 83.8449,
+        "allowedConcurrency": 2,
+        "state": "behind",
+        "queuedTaskIds": [],
+        "home": "local",
+        "observedAt": "2026-10-04T00:55:01Z"
+      }
+    ]
+  },
+  "assertions": {
+    "bothAccountsHaveHeadroom": true,
+    "claudeResetsSooner": true,
+    "selectedClaude": true
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "scenario": "A real live Codex process consumes the only paced account slot",
+  "liveWorker": {
+    "session": "fm-lab-quota-cap-3279-12895",
+    "pane": "w1:p1",
+    "kindBefore": "codex",
+    "statusBefore": "unknown",
+    "kindAfter": "codex",
+    "statusAfter": "unknown",
+    "startExitCode": 1,
+    "startOutput": "{\"error\":{\"code\":\"timeout\",\"message\":\"timed out waiting for agent startup\"},\"id\":\"cli:agent:start\"}",
+    "note": "Codex reached its existing hook-review gate, so no consent was supplied; process-level liveness remained available."
+  },
+  "configuredPacing": {
+    "provider": "codex",
+    "scope": "all_models",
+    "maxConcurrency": 1,
+    "resetsAt": "2026-10-09T21:46:35.000Z"
+  },
+  "attemptedLaunch": {
+    "exitCode": 1,
+    "output": "fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.z2fO0q\n●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n●  WATCHER DOWN - SUPERVISION IS OFF\n●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).\n●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.\n●  This is a supervision warning only; the guarded operation WILL still run.\n●  repair missing watcher supervision with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds 180.\n●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nerror: quota pacing admission refused for provider codex account default: 1 live or unverified crew, limit 1; counted tasks: live-worker",
+    "metadataPublished": false
+  },
+  "assertions": {
+    "liveWorkerCounted": true,
+    "secondLaunchRefused": true,
+    "existingWorkerStillRunning": true
+  }
+}
