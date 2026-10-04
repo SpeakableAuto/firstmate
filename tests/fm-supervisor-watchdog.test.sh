@@ -246,7 +246,6 @@ pass 'queue alarm resets after drain'
 
 # An aged queue on an idle or done supervisor with an empty prompt is rung:
 # nothing else wakes a supervisor whose turn ended without the Stop hook.
-QPAYLOAD='Supervisor watchdog: wakes are queued undelivered. Run bin/fm-wake-drain.sh now.'
 queue_case() {
   reset_case
   rm -f "$DIR/queue-alert" "$DIR/queue-nudge.json"
