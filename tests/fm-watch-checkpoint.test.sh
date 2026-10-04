@@ -506,3 +506,25 @@ test_program_hold_rechecks_after_ack_without_spinning() {
   pass "external hold remains quiet between acknowledged due checks and wakes later without dummy worker"
 }
 test_program_hold_rechecks_after_ack_without_spinning
+
+test_programs_json_documented_keys_match_output() {
+  local home json top_keys program_keys
+  home=$(make_home contract-keys)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] product-a - First accepted product (repo: alpha) (kind: program)
+  children: child-a
+  agreement: data/product-a/agreement.md
+## Done
+- [x] child-a - Source ready (repo: alpha) (kind: ship)
+EOF
+  json=$(FM_HOME="$home" "$ROOT/bin/fm-programs.sh" --json) || fail "contract-keys projection failed"
+  top_keys=$(printf '%s' "$json" | jq -cS '. | keys')
+  [ "$top_keys" = '["errors","observed_unfinished_program_ids","path","present","programs","receipt_sync_needed","schema","supervision_needed"]' ]     || fail "fm-programs.v1 top-level keys drifted from the documented contract: $top_keys"
+  program_keys=$(printf '%s' "$json" | jq -cS '.programs[0] | keys')
+  [ "$program_keys" = '["agreement","children","continuation","due","errors","hold_kind","hold_reason","id","recheck_at","repo","supervision_needed","title","unresolved_blocker_ids"]' ]     || fail "fm-programs.v1 per-program keys drifted from the documented contract: $program_keys"
+  printf '%s' "$json" | jq -e '.schema == "fm-programs.v1"' >/dev/null     || fail "fm-programs.v1 schema value drifted"
+  printf '%s' "$json" | jq -e '.programs[0].children[0] | keys == ["id","state"]' >/dev/null     || fail "documented child {id,state} shape drifted"
+  pass "fm-programs.v1 JSON output keys match the documented contract in bin/fm-programs-lib.sh"
+}
+test_programs_json_documented_keys_match_output

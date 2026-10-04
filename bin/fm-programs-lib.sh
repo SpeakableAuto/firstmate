@@ -21,6 +21,71 @@
 # Current valid programs remain discoverable after receipt loss, but missing or
 # retagged historical program identities cannot be reconstructed after deletion.
 # FM_PROGRAM_NOW_EPOCH is an optional deterministic clock for isolated fixtures.
+#
+# fm-programs.v1 JSON output contract (fm_programs_json / bin/fm-programs.sh --json)
+# ------------------------------------------------------------------------------
+# Top level:
+#   schema                        string, always "fm-programs.v1"
+#   path                           string, the backlog file path passed in
+#   present                        bool, whether that backlog file exists
+#   programs                       array, one entry per accepted in_flight kind=program row
+#   observed_unfinished_program_ids
+#                                  array of string ids, see "Per-program fields" below
+#   receipt_sync_needed            bool, true when observed_unfinished_program_ids
+#                                  differs from the receipt this call was given
+#   errors                         array, see "Errors" below
+#   supervision_needed             bool, true when the watcher should wake: a
+#                                  receipt-sync mismatch, a parse/continuity error,
+#                                  or any program's own supervision_needed is true
+#
+# Per-program fields (one object per element of "programs"):
+#   id                             string, the backlog record id
+#   repo                           string or null, the row's `repo:` metadata
+#   title                          string or null, the row's parsed title
+#   hold_kind                      string or null, the row's `hold-kind:` metadata
+#   hold_reason                    string or null, the row's hold reason text
+#   unresolved_blocker_ids         array of string ids this row is blocked-by
+#                                  that are not yet resolved
+#   agreement                      string or null, the body's `agreement:` line
+#                                  (an evidence pointer only, never read/executed here)
+#   children                       array of {id, state}; state is "unknown" when
+#                                  the referenced id does not resolve to exactly
+#                                  one record, otherwise the child record's own
+#                                  backlog state (e.g. "in_flight", "done")
+#   continuation                   string, "active" or "paused" (defaults to
+#                                  "active" when the body omits `continuation:`)
+#   recheck_at                     string or null, the body's `recheck-at:` value
+#                                  verbatim (UTC ISO-8601) when present and valid
+#   errors                         array of strings, this program's own field
+#                                  validation problems; see "Errors" below
+#   supervision_needed             bool, true when this program is not a clean
+#                                  paused program with recheck-at in the future:
+#                                  i.e. continuation != "paused", or errors is non-empty
+#   due                            bool, true when this program needs engineering
+#                                  reconciliation now: errors is non-empty, or
+#                                  continuation != "paused" and recheck_at is
+#                                  null or has already passed
+#
+# Errors (elements of the top-level "errors" array):
+#   Each element is {id, errors} where errors is a non-empty array of short
+#   machine strings. Sources, concatenated in this order:
+#     1. malformed backlog rows: id "unparseable-program", for any
+#        non-structured in_flight row whose raw text matches kind:program
+#     2. continuity errors: id is a previously-observed unfinished program id
+#        that no longer resolves to exactly one current record that is either
+#        a done or in_flight kind=program row
+#     3. per-program field errors: id is the program's own id, surfaced here
+#        whenever that program's own "errors" array (above) is non-empty
+#   Known error strings: "invalid continuation", "invalid recheck-at",
+#   "duplicate program field", "duplicate program id",
+#   "malformed program backlog row", "previously observed unfinished program
+#   no longer has one valid current or completed kind=program record"
+#
+# Absence/null rules: a field documented as "or null" is JSON null, never an
+# absent key; every documented field is always present in its object. An
+# empty backlog or a backlog with no in_flight kind=program rows still
+# returns the full top-level shape with programs: [] and
+# observed_unfinished_program_ids reflecting only what the receipt carried in.
 
 # shellcheck source=bin/fm-backlog-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-backlog-lib.sh"
