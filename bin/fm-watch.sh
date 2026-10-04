@@ -2684,6 +2684,14 @@ while :; do
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
 
+  # A row queued after the handling turn's drain must reach the next Stop-owned
+  # watcher before slower fleet checks can hold this cycle for minutes.
+  # Recovery takes precedence when the arm reopened an acknowledged episode.
+  resurface_after_downtime
+  if [ "$(fm_wake_main_unpresented_count "$STATE/.main-eligible-rows" "$HANDLING_QUEUE_BASELINE")" -gt 0 ]; then
+    wake "check: pending durable wakes"
+  fi
+
   # Opt-in fleet activity ledger (docs/fleet-ledger.md): pick up newly appended
   # status lines before this cycle can exit on a wake. Off costs one file test.
   [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" capture || true
@@ -2738,17 +2746,6 @@ while :; do
   # Then deliver any queued-but-unsurfaced result, including one a runner
   # published while this watcher was between cycles.
   procevent_surface_queued
-
-  # A process-event result carries richer adapter-owned wake context than the
-  # generic recovery reason, so give that owner first refusal.
-  resurface_after_downtime
-
-  # A producer may append directly to the durable queue while this watcher is
-  # already waiting. No new status signature is required for that append, so
-  # surface main-owned rows on the next poll without appending a duplicate row.
-  if [ "$(fm_wake_main_unpresented_count "$STATE/.main-eligible-rows" "$HANDLING_QUEUE_BASELINE")" -gt 0 ]; then
-    wake "check: pending durable wakes"
-  fi
 
   # The existing poll loop also owns the bounded inactive-outcome cadence.
   # This is mechanical and silent unless a durable terminal-outcome obligation
