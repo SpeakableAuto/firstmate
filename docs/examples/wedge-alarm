@@ -1,11 +1,13 @@
-# config/wedge-alarm - active alert channels for the away-mode injection wedge
-# alarm (bin/fm-supervise-daemon.sh's inject_wedge_alarm). Copy this into a
-# local, gitignored config/wedge-alarm and edit. One channel directive per
-# non-empty, non-comment line; every listed non-off channel fires, best-effort.
+# config/wedge-alarm - shared active-alert channels for serious supervision
+# failures, including an away-mode injection wedge and the supervisor
+# watchdog's aged durable-wake alarm. Copy this into a local, gitignored
+# config/wedge-alarm and edit. One channel directive per non-empty, non-comment
+# line; every listed non-off channel fires, best-effort.
 #
 # Directives:
 #   off              position-independent kill switch: disable every active
-#                    alert (the durable marker and tmux status-line flash remain)
+#                    notification (caller-owned durable markers and any
+#                    caller-specific visual signal remain)
 #   auto | default   platform default: macOS -> osascript; other platforms have
 #                    no built-in OS channel (configure a command: line instead)
 #   osascript        macOS Notification Center banner (backend-independent)
@@ -14,9 +16,9 @@
 #                    on stdin, so it can reach a phone/pager while you are away
 #
 # An ABSENT config/wedge-alarm behaves as `auto` (default-on on macOS): the
-# alarm exists precisely so a wedged away-mode primary is never silent.
+# alert exists so a serious supervision failure is never silent.
 #
-# Example: a macOS banner plus a push to a phone via ntfy.sh, so a wedge that
-# happens overnight reaches you even away from the machine.
+# Example: a macOS banner plus a push to a phone via ntfy.sh, so a supervision
+# failure reaches you even away from the machine.
 osascript
-command: curl -fsS -H "Title: firstmate wedge alarm" -d "$1" https://ntfy.sh/replace-with-your-topic
+command: curl -fsS -H "Title: firstmate supervision alert" -d "$1" https://ntfy.sh/replace-with-your-topic
