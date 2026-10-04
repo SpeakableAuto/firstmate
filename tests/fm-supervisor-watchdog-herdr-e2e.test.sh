@@ -168,8 +168,8 @@ for mode in queue queue-draft; do
   sleep 10
   watchdog_tick
   if [ "$mode" = queue ]; then
-    [ "$(cat "$CASE_DIR/submissions" 2>/dev/null)" = 'Supervisor watchdog: wakes are queued undelivered. Run bin/fm-wake-drain.sh now.' ] \
-      || fail "queue ring did not land as its own turn on a ${identity#*$'\t'} supervisor"
+    [ "$(cat "$CASE_DIR/submissions" 2>/dev/null)" = 'Watchdog: undelivered wakes queued; run bin/fm-wake-drain.sh' ] \
+      || fail "queue ring did not land as its own turn on a ${identity#*$'\t'} supervisor (last event: $(tail -1 "$DIR/events.jsonl" | jq -c '[.event,.detail]'))"
     [ "$(tail -1 "$DIR/events.jsonl" | jq -c '[.event,.detail]')" = '["submitted","queue-nudge"]' ] || fail 'queue ring was not confirmed'
     pass "real Herdr transport rings an aged queue on a ${identity#*$'\t'} supervisor with a dim suggestion"
   else

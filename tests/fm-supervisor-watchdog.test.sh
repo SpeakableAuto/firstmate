@@ -342,3 +342,21 @@ eval "${real_watchdog_observe}"
 TICK=1030; watchdog_tick
 TICK=1041; watchdog_tick
 check "$SENT" 1 'the next stable idle window rings normally'
+
+# A narrow pane wraps the ring across composer rows; the reader joins them with
+# a space, which must not read as foreign input.
+queue_case
+watchdog_send() {
+  SENT=$((SENT+1))
+  PANE=$'● Done\n────────────────────\n❯ '"${1:0:20}"$'\n'"${1:20}"
+}
+watchdog_tick; TICK=1011; watchdog_tick
+check "$ENTERED" 1 'a ring wrapped across composer rows is still submitted'
+check "$(tail -1 "$DIR/events.jsonl" | jq -c '[.event,.detail]')" '["submitted","queue-nudge"]' 'wrapped ring confirms the new turn'
+queue_case
+watchdog_send() {
+  SENT=$((SENT+1))
+  PANE=$'● Done\n────────────────────\n❯ '"${1:0:20}"$'\n'"${1:20}x"
+}
+watchdog_tick; TICK=1011; watchdog_tick
+check "$ENTERED" 0 'wrapped ring with one extra character is never submitted'

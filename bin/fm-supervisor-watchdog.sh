@@ -18,6 +18,8 @@
 # A successful TLS HTTP response below 500 (except 429) proves reachability;
 # failed probes use exponential backoff, capped at BACKOFF_SECS.
 # Before typing, re-read every guard; before Enter, require exactly our payload.
+# A narrow pane wraps the payload and the composer reader joins its rows with a
+# space, so that comparison ignores whitespace only.
 # Never clear input, retry Enter, kill an agent, or execute shell commands there.
 # Claim the incident durably BEFORE the nudge; ambiguous delivery is not retried.
 # A changed screen or draft holds the incident and queues a firstmate check.
@@ -256,7 +258,7 @@ watchdog_queue_recover() {
   fi
   [ "$((NOW-$(printf '%s' "$QREC" | jq -r .since)))" -ge "$IDLE" ] || return 0
   [ "$((NOW-$(printf '%s' "$QREC" | jq -r .last)))" -ge "$BACKOFF" ] || return 0
-  payload='Supervisor watchdog: wakes are queued undelivered. Run bin/fm-wake-drain.sh now.'
+  payload='Watchdog: undelivered wakes queued; run bin/fm-wake-drain.sh'
   # Nothing is typed yet, so a change here only restarts the idle window.
   watchdog_observe
   if [ "$VERDICT" != clear ] || [ "$HASH" != "$(printf '%s' "$QREC" | jq -r .hash)" ]; then
@@ -272,13 +274,18 @@ watchdog_queue_recover() {
   after=$(watchdog_read) || { watchdog_queue_hold capture-failed; return; }
   case "$(watchdog_screen "$after")" in usage-limit|busy) watchdog_queue_hold unsafe-before-submit; return ;; esac
   content=$(fm_composer_extract_selected_content "$CAPS" "$after") || { watchdog_queue_hold composer-unreadable; return; }
-  [ "$content" = "$payload" ] || { watchdog_queue_hold input-changed; return; }
+  watchdog_is_payload "$content" "$payload" || { watchdog_queue_hold input-changed; return; }
   watchdog_enter || { watchdog_queue_hold enter-failed; return; }
   if watchdog_confirm "$payload"; then
     watchdog_log submitted queue-nudge
   else
     watchdog_queue_hold submit-not-confirmed
   fi
+}
+# True when the composer holds exactly our payload, ignoring only whitespace a
+# wrapped composer row adds or moves.
+watchdog_is_payload() {
+  [ "$(printf '%s' "$1" | tr -d '[:space:]')" = "$(printf '%s' "$2" | tr -d '[:space:]')" ]
 }
 watchdog_send() { fm_backend_herdr_cli "$SESSION" pane send-text "$PANE_ID" "$1" >/dev/null; }
 watchdog_enter() { fm_backend_herdr_cli "$SESSION" pane send-keys "$PANE_ID" enter >/dev/null; }
@@ -397,7 +404,7 @@ watchdog_tick() {
   after=$(watchdog_read) || { watchdog_hold capture-failed; return; }
   case "$(watchdog_screen "$after")" in usage-limit|busy) watchdog_hold unsafe-before-submit; return ;; esac
   content=$(fm_composer_extract_selected_content "$CAPS" "$after") || { watchdog_hold composer-unreadable; return; }
-  [ "$content" = "$payload" ] || { watchdog_hold input-changed; return; }
+  watchdog_is_payload "$content" "$payload" || { watchdog_hold input-changed; return; }
   watchdog_enter || { watchdog_hold enter-failed; return; }
   if watchdog_confirm "$payload"; then
     watchdog_log submitted nudge
