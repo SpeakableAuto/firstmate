@@ -1,0 +1,9 @@
+scenario=watchdog-real-claude-draft-guard
+claude_version=2.1.280 (Claude Code)
+herdr_version=herdr 0.9.3
+native_state=idle
+draft_preserved=1
+watchdog_action_or_submit_events=0
+watchdog_events=["alerted","wake-queue-stalled"]
+remaining_queue_rows=2
+result=PASS watchdog did not type or submit over a real Claude draft

@@ -1,0 +1,14 @@
+scenario=watchdog-real-claude-aged-queue
+claude_version=2.1.280 (Claude Code)
+herdr_version=herdr 0.9.3
+initial_native_state=idle
+watchdog_ticks=2
+watchdog_events=["alerted","wake-queue-stalled"]
+["observed","queue-idle"]
+["action-claimed","queue-nudge"]
+["submitted","queue-nudge"]
+queue_nudge_submitted=submitted
+literal_queued_payload_echo_seen=0 (Claude paraphrased the item instead)
+remaining_queue_rows=0
+direct_live_observation=Claude stated it emptied two queued items in the temporary test home and the queue was empty
+result=PASS watchdog opened a real Claude turn; submitted event recorded and durable queue drained to zero

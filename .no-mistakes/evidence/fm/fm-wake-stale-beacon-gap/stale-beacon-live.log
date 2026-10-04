@@ -1,0 +1,8 @@
+scenario=stale-beacon-live-lock
+watcher_pid=14788 lock_pid=14788 watcher_state=TN
+beacon_age_seconds=120
+arm_exit=0
+watcher: holder pid=14788 has a stale beacon (120s); not attached
+check: pending durable wakes
+queue_rows=1
+result=PASS queued row surfaced while stale live watcher remained non-evictable
