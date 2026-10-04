@@ -18,6 +18,8 @@ watchdog_read() { [ "$READ_FAIL" = 0 ] || return 1; printf '%s\n' "$PANE"; }
 watchdog_identity() { [ "$IDENTITY_FAIL" = 0 ] || return 1; printf '%s\n' "$IDENTITY"; }
 curl() { printf '%s\n' probe >> "$DIR/probes"; printf '%s' "$HTTP_CODE"; return "$CURL_RC"; }
 fm_wake_append() { printf '%s\n' "$*" >> "$DIR/alerts"; }
+fm_wake_branch_grant_live() { return 1; }
+wedge_alarm_notify() { printf '%s\n' "$1" >> "$DIR/notifications"; }
 watchdog_send() {
   SENT=$((SENT+1))
   [ "$SEND_FAIL" = 0 ] || return 1
@@ -35,7 +37,7 @@ watchdog_enter() {
 }
 check() { [ "$1" = "$2" ] || fail "$3 (got $1, expected $2)"; pass "$3"; }
 reset_case() {
-  rm -f "$DIR/incident.json" "$DIR/events.jsonl" "$DIR/alerts" "$DIR/probes"
+  rm -f "$DIR/incident.json" "$DIR/events.jsonl" "$DIR/alerts" "$DIR/probes" "$DIR/notifications"
   TICK=1000; IDENTITY=$'claude\tidle'; PANE=$ERROR
   SENT=0; ENTERED=0; HTTP_CODE=200; CURL_RC=0
   CONFIRM_NATIVE=0
@@ -207,3 +209,37 @@ for interval in 0 9 010 garbage 86401; do
     bash "$ROOT/bin/fm-supervisor-watchdog.sh" tick >/dev/null 2>&1; then fail "unsafe interval $interval accepted"; fi
 done
 pass 'executable enforces minimum ten-second observation interval'
+
+# An aged durable wake is an alert-only condition, independent of network
+# recovery. A dim suggestion is empty input; a real draft stays untouched.
+reset_case
+STATE=$TMP
+FM_WAKE_QUEUE="$DIR/.wake-queue"
+WAKE_AGE=600
+printf '399\t27\tcheck\tmail\tpending\n' > "$FM_WAKE_QUEUE"
+PANE=$'● Healthy response\n────────────────────\n❯ \033[2mapproved item 27, deploy it now\033[0m\n────────────────────'
+watchdog_tick
+check "$VERDICT" clear 'dim suggestion leaves the Claude composer empty'
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'idle supervisor alerts on aged wake'
+check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 1 'aged wake reaches active alert channel'
+check "$SENT" 0 'queue alarm never types into the supervisor'
+TICK=1010; PANE=$'● Healthy response\n❯ human draft'; watchdog_tick
+check "$VERDICT" composer-pending 'real typed draft remains pending'
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'same queued row is rate limited'
+check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 1 'active alert is rate limited too'
+check "$SENT" 0 'real typed draft is not touched'
+TICK=1900; watchdog_tick
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'unchanged oldest row alerts only once'
+check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 1 'unchanged oldest row does not repeat active alerts'
+printf '400\t28\tcheck\tmail\tpending next\n' > "$FM_WAKE_QUEUE"
+watchdog_tick
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 2 'a changed oldest row starts a new alert episode'
+check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 2 'a changed oldest row reaches active alerts'
+TICK=1901; IDENTITY=$'claude\tworking'; watchdog_tick
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 2 'working supervisor is exempt from queue alarm'
+TICK=1902; IDENTITY=$'claude\tidle'; PANE=$'Usage limit reached · continuing automatically\n❯ '; watchdog_tick
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 2 'usage-limit guard remains active'
+rm "$FM_WAKE_QUEUE"
+PANE=$CLEAR; watchdog_tick
+[ ! -e "$DIR/queue-alert" ] || fail 'drained queue did not reset alert episode'
+pass 'queue alarm resets after drain'

@@ -2720,6 +2720,14 @@ while :; do
   # generic recovery reason, so give that owner first refusal.
   resurface_after_downtime
 
+  # A producer may append directly to the durable queue while this watcher is
+  # already waiting. No new status signature is required for that append, so
+  # surface main-owned rows on the next poll without appending a duplicate row.
+  if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ] \
+    && [ "$(fm_wake_actor_pending_count main)" -gt 0 ]; then
+    wake "check: pending durable wakes"
+  fi
+
   # The existing poll loop also owns the bounded inactive-outcome cadence.
   # This is mechanical and silent unless a durable terminal-outcome obligation
   # was created, so quiet cycles never wake firstmate or consume model tokens.
