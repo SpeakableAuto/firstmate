@@ -1,0 +1,14 @@
+SCENARIO 1: stale note while older ship branch coexists with newer wip branch
+checkpoint_sha=63a02425bbab2cf2ef57ada2eb8d1a5baba5bc12
+newer_pushed_sha=8b1faff59afa80278492ae5a4e95e2328b749cd2
+note lags branch by 1 commits (origin/wip/takeover 8b1faff59afa80278492ae5a4e95e2328b749cd2)
+- 8b1faff step three and PR pushed
+exit_code=1
+
+SCENARIO 2: note updated immediately after the newer push
+checkpoint note fresh at 8b1faff59afa80278492ae5a4e95e2328b749cd2 across origin/fm/takeover, origin/wip/takeover
+exit_code=0
+
+SCENARIO 3: pushed checkpoint note omits its SHA
+checkpoint note missing SHA
+exit_code=1
