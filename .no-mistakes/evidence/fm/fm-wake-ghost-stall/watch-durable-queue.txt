@@ -1,0 +1,8 @@
+FM_TEST_BEGIN 2026-10-04T02:21:08Z tests/fm-watch-durable-queue.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - already queued main wake ends the watcher cycle without a duplicate
+ok - downtime recovery precedes generic queue replay
+ok - handling successor supervises without recursively replaying its queued row
+FM_TEST_END 2026-10-04T02:21:12Z tests/fm-watch-durable-queue.test.sh exit=0 duration_ms=4360 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=4481
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=4360 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-watch-durable-queue.test.sh duration_ms=4360

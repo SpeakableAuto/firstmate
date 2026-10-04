@@ -1,0 +1,13 @@
+lab=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.NRTKSX
+session=fm-lab-watchdog-real-80488-21077
+claude=2.1.280 (Claude Code)
+herdr=herdr 0.9.3
+initial_idle_composer_verdict=clear
+post_alert_composer_verdict=clear
+aged_queue_rows_after_alert=2
+active_alert_count=1
+active_alert_summary=Supervisor idle with undelivered wakes for 11s (oldest row 1). Inspect and drain the main wake queue; no input was sent.
+typed_draft_verdict=composer-pending
+typed_draft_preserved=yes
+alert_count_after_same_row_and_draft=1
+watchdog_typed_into_claude=no

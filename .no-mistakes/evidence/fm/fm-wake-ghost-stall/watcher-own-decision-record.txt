@@ -1,0 +1,3 @@
+checkpoint_output=check: pending durable wakes
+queue_rows_after_delivery=1
+watcher_delivery_record=20343	Sun Oct  4 12:36:43 2026     bash /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M42A1834G19C01H6WE8N3BW7/bin/fm-watch.sh	check: pending durable wakes

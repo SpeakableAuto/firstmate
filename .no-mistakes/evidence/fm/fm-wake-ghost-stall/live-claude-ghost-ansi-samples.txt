@@ -1,0 +1,6 @@
+sample=1 status=idle row=❯ \r$
+sample=11 status=idle row=❯ \r$
+sample=21 status=idle row=❯ \r$
+sample=31 status=idle row=❯ \r$
+sample=41 status=idle row=❯ \r$
+sample=51 status=idle row=❯ \r$

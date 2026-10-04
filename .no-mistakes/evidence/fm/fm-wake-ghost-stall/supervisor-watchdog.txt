@@ -1,0 +1,84 @@
+FM_TEST_BEGIN 2026-10-04T02:21:08Z tests/fm-supervisor-watchdog.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - terminal ENOTFOUND detected
+ok - independent connection failure detected
+ok - connection banner detected without API Error prefix
+ok - historic error followed by output ignored
+ok - real Claude effort row does not hide terminal network error
+ok - automatic usage-limit continuation vetoes recovery
+ok - auth failure is not network recovery
+ok - rendered busy footer overrides native idle
+ok - first observation never acts
+ok - less than ten seconds cannot authorize input
+ok - provider failure blocks action
+ok - probe backoff persists across ticks
+ok - unchanged idle error nudged once after connectivity returns
+ok - exact watchdog payload submitted once
+ok - new turn in transcript confirms submission
+ok - same incident never replays
+ok - transient clear frame does not release incident claim
+ok - different error cannot reuse time before a clear frame
+ok - different error starts a fresh observation window
+ok - different error after clear is a new incident
+ok - different error waits the entire new idle interval
+ok - different stable error recovers after a full fresh interval
+ok - historical busy text does not veto terminal network error
+ok - idle network error recovers despite historical busy text
+ok - historical busy text does not veto terminal network error
+ok - idle network error recovers despite historical busy text
+ok - current spinner above composer still vetoes recovery
+ok - current spinner never receives a nudge
+ok - current footer never receives a nudge
+ok - rotating empty-composer suggestion does not break error stability
+ok - first incident nudged before cross-incident backoff starts
+ok - new incident remains throttled until action backoff elapses
+ok - stable recovery rearms before backoff for a later incident
+ok - screen change blocks nudge
+ok - screen change holds incident
+ok - screen change alerts firstmate
+ok - same hold does not flood wake queue
+ok - existing draft never receives watchdog input
+ok - draft holds incident
+ok - removing draft does not silently release hold
+ok - working native status vetoes stale error
+ok - unsupported harness refused
+ok - usage notice receives no input
+ok - unreadable pane receives no input
+ok - unreadable native state receives no input
+ok - native working plus empty composer confirms new turn
+ok - healthy drafting does not create a recovery alert
+ok - mixed input never submitted or cleared
+ok - mixed input alerts firstmate
+ok - ambiguous attempt consumes incident
+ok - usage notice before Enter blocks submission
+ok - transport send failure alerts without retry
+ok - Enter failure alerts without retry
+ok - Enter attempted only once
+ok - capture failure after typing withholds Enter
+ok - missing new turn alerts instead of claiming success
+ok - provider probe distinguishes transport response, throttling, outage, and connection failure
+ok - healthy clear panes and drafts do not create redundant state files
+ok - rearming clears completed clean window
+ok - healthy ticks after rearming preserve the existing state file
+ok - draft appearing during network check blocks typing
+ok - last-window change alerts firstmate
+ok - corrupt state fails closed
+ok - executable enforces minimum ten-second observation interval
+ok - dim suggestion leaves the Claude composer empty
+ok - idle supervisor alerts on aged wake
+ok - aged wake reaches active alert channel
+ok - queue alarm never types into the supervisor
+ok - real typed draft remains pending
+ok - same queued row is rate limited
+ok - active alert is rate limited too
+ok - real typed draft is not touched
+ok - unchanged oldest row alerts only once
+ok - unchanged oldest row does not repeat active alerts
+ok - a changed oldest row starts a new alert episode
+ok - a changed oldest row reaches active alerts
+ok - working supervisor is exempt from queue alarm
+ok - usage-limit guard remains active
+ok - queue alarm resets after drain
+FM_TEST_END 2026-10-04T02:21:26Z tests/fm-supervisor-watchdog.test.sh exit=0 duration_ms=18361 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=18503
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=1 duration_ms=18361 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-supervisor-watchdog.test.sh duration_ms=18361
