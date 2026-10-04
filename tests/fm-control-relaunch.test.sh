@@ -597,7 +597,7 @@ test_disabled_relaunch_clears_prior_trace_context() {
 }
 
 test_relaunch_appends_the_progress_note_to_the_instructions() {
-  local dir out rc brief launch_brief first_line role_line task_line
+  local dir out rc brief launch_brief first_line role_line task_line scout_dir scout_brief
   dir=$(new_case note rl2)
   add_ship_task "$dir" rl2 claude
   cp "$ROOT/AGENTS.md" "$dir/wt/AGENTS.md"
@@ -607,7 +607,8 @@ test_relaunch_appends_the_progress_note_to_the_instructions() {
   assert_grep "Exercise relaunch behavior for rl2." "$brief" "the original instructions must survive"
   assert_grep "## Progress note" "$brief" "the note should be a dated section in the instructions"
   assert_grep "reproduced the crash in parser.go" "$brief" "the note text should reach the replacement"
-  assert_grep 'fm-checkpoint-freshness.sh' "$brief" "the replacement should verify the checkpoint before relying on it"
+  assert_grep "$ROOT/bin/fm-checkpoint-freshness.sh" "$brief" "the replacement should use the absolute Firstmate checker path"
+  assert_grep "'fm/rl2' 'wip/rl2'" "$brief" "the replacement should compare the ship and checkpoint refs"
   assert_grep "reproduced the crash in parser.go" "$dir/home/state/rl2.control-relaunch.note" \
     "the note should also be preserved beside the transaction record"
   launch_brief="$dir/home/data/rl2/launch-brief.md"
@@ -621,6 +622,16 @@ test_relaunch_appends_the_progress_note_to_the_instructions() {
     "the Firstmate-worktree relaunch omitted the worker's exact steering inbox"
   assert_grep 'do not reject it as another home' "$launch_brief" \
     "the Firstmate-worktree relaunch did not distinguish its inbox from cross-home state"
+  scout_dir=$(new_case note-scout rl2-scout)
+  add_ship_task "$scout_dir" rl2-scout claude
+  sed 's/^kind=ship$/kind=scout/' "$scout_dir/home/state/rl2-scout.meta" \
+    > "$scout_dir/home/state/rl2-scout.meta.tmp"
+  mv "$scout_dir/home/state/rl2-scout.meta.tmp" "$scout_dir/home/state/rl2-scout.meta"
+  out=$(run_control "$scout_dir" rl2-scout relaunch --note "continue the investigation"); rc=$?
+  expect_code 0 "$rc" "scout relaunch should succeed"$'\n'"$out"
+  scout_brief=$(cat "$scout_dir/home/data/rl2-scout/brief.md")
+  assert_not_contains "$scout_brief" 'fm-checkpoint-freshness.sh' \
+    "a scout relaunch must not receive a branch freshness command"
   pass "fm-control relaunch: progress and the Firstmate-worktree worker identity reach the replacement"
 }
 

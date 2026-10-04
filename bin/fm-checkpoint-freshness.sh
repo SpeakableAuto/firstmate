@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# Compare the latest status checkpoint with a branch on origin.
-# Usage: fm-checkpoint-freshness.sh <worktree> <status-file> <branch>
-# A checkpoint line records checkpoint_sha=<full SHA>. The caller chooses the
-# remote branch: the ship branch after publication, or wip/<task-id> before it.
+# Compare the latest status checkpoint with the relevant branches on origin.
+# Usage: fm-checkpoint-freshness.sh <worktree> <status-file> <branch> [branch...]
+# A checkpoint line records checkpoint_sha=<full SHA>. Missing branches are
+# ignored, but every branch that exists on origin is checked.
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-  echo 'usage: fm-checkpoint-freshness.sh <worktree> <status-file> <branch>' >&2
+if [ "$#" -lt 3 ]; then
+  echo 'usage: fm-checkpoint-freshness.sh <worktree> <status-file> <branch> [branch...]' >&2
   exit 2
 fi
-worktree=$1 status_file=$2 branch=$3
-[[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo 'invalid branch' >&2; exit 2; }
+worktree=$1 status_file=$2
+shift 2
+branches=("$@")
+refs=()
+for branch in "${branches[@]}"; do
+  [[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo 'invalid branch' >&2; exit 2; }
+  refs+=("refs/heads/$branch")
+done
 [ -f "$status_file" ] || { echo 'checkpoint note missing' >&2; exit 1; }
 
 line=$(grep 'checkpoint_sha=' "$status_file" | tail -n 1 || true)
@@ -24,24 +30,49 @@ if [ -z "$sha" ]; then
   exit 1
 fi
 
-if ! git -C "$worktree" fetch --no-tags origin "refs/heads/$branch" >/dev/null 2>&1; then
-  echo "cannot read origin/$branch" >&2
+if ! remote_heads=$(git -C "$worktree" ls-remote --heads origin "${refs[@]}" 2>/dev/null); then
+  echo 'cannot read origin' >&2
   exit 2
 fi
-head=$(git -C "$worktree" rev-parse --verify FETCH_HEAD^{commit})
-if [ "$sha" = "$head" ]; then
-  echo "checkpoint note fresh at $head"
-  exit 0
+fetch_refs=()
+for branch in "${branches[@]}"; do
+  head=$(printf '%s\n' "$remote_heads" | awk -v ref="refs/heads/$branch" '$2 == ref { print $1; exit }')
+  [ -z "$head" ] || fetch_refs+=("refs/heads/$branch")
+done
+[ "${#fetch_refs[@]}" -gt 0 ] || { echo 'no checked branch exists on origin' >&2; exit 2; }
+if ! git -C "$worktree" fetch --no-tags origin "${fetch_refs[@]}" >/dev/null 2>&1; then
+  echo 'cannot fetch checked branches from origin' >&2
+  exit 2
 fi
 if ! git -C "$worktree" cat-file -e "$sha^{commit}" 2>/dev/null; then
   echo "checkpoint SHA $sha is unavailable; cannot determine lag"
   exit 1
 fi
-if ! git -C "$worktree" merge-base --is-ancestor "$sha" "$head"; then
-  echo "checkpoint SHA $sha is not an ancestor of origin/$branch ($head)"
+
+stale=0
+contained=0
+checked=
+for branch in "${branches[@]}"; do
+  head=$(printf '%s\n' "$remote_heads" | awk -v ref="refs/heads/$branch" '$2 == ref { print $1; exit }')
+  [ -n "$head" ] || continue
+  checked="${checked:+$checked, }origin/$branch"
+  if git -C "$worktree" merge-base --is-ancestor "$sha" "$head"; then
+    contained=1
+    if [ "$sha" != "$head" ]; then
+      count=$(git -C "$worktree" rev-list --count "$sha..$head")
+      echo "note lags branch by $count commits (origin/$branch $head)"
+      git -C "$worktree" log --format='- %h %s' --reverse "$sha..$head"
+      stale=1
+    fi
+  elif ! git -C "$worktree" merge-base --is-ancestor "$head" "$sha"; then
+    echo "checkpoint SHA $sha diverges from origin/$branch ($head)"
+    git -C "$worktree" log --format='- %h %s' --reverse "$sha..$head"
+    stale=1
+  fi
+done
+[ "$stale" -eq 0 ] || exit 1
+if [ "$contained" -eq 0 ]; then
+  echo "checkpoint SHA $sha is not present on any checked remote branch ($checked)"
   exit 1
 fi
-count=$(git -C "$worktree" rev-list --count "$sha..$head")
-echo "note lags branch by $count commits (origin/$branch $head)"
-git -C "$worktree" log --format='- %h %s' --reverse "$sha..$head"
-exit 1
+echo "checkpoint note fresh at $sha across $checked"

@@ -368,6 +368,11 @@ RECORDED_HARNESS=$(fm_meta_get "$META" harness)
 KIND=$(fm_meta_get "$META" kind)
 WT=$(fm_meta_get "$META" worktree)
 [ -n "$KIND" ] || KIND=ship
+SHIP_BRANCH=
+if [ "$KIND" = ship ]; then
+  SHIP_BRANCH=$(fm_meta_get "$META" branch)
+  [ -n "$SHIP_BRANCH" ] || SHIP_BRANCH="fm/$ID"
+fi
 
 HARNESS=$(fm_control_harness_family "$RECORDED_HARNESS") \
   || die "task $ID records harness '${RECORDED_HARNESS:-none}', which has no verified control mechanics; fm-control refuses to guess an interrupt key or exit command"
@@ -1018,9 +1023,11 @@ record_note() {
         echo "First, check your instruction inbox: list $STATE/$ID.inbox/*.msg, act on"
         echo "each message in numeric order, then mv each handled file into"
         echo "$STATE/$ID.inbox/handled/. A steer sent before the relaunch survives there."
-        echo "Check checkpoint freshness before relying on the progress note:"
-        echo "bin/fm-checkpoint-freshness.sh '$WT' '$STATE/$ID.status' '<remote-branch>'."
-        echo "Use the ship branch when it exists on origin; otherwise use wip/$ID."
+        if [ "$KIND" = ship ]; then
+          echo "Check checkpoint freshness before relying on the progress note:"
+          echo "'$SCRIPT_DIR/fm-checkpoint-freshness.sh' '$WT' '$STATE/$ID.status' '$SHIP_BRANCH' 'wip/$ID'."
+          echo "The checker compares every named branch that exists on origin."
+        fi
         echo
         printf '%s\n' "$NOTE"
       } >> "$RELAUNCH_BRIEF" \
