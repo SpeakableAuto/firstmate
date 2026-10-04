@@ -184,7 +184,9 @@ The next Stop then re-arms as before.
 The durable wake queue preserves actionable events between a watcher close and the next drain.
 After the downtime-resurface boundary gets first refusal, an active watcher surfaces unpresented main-owned rows in that queue, even when their producer did not change a status signature.
 The handling successor checks those rows at the start of each cycle, before slower fleet reconciliation can delay a row queued during the previous handling turn.
-When the next turn-end arm finds an identity-matched watcher still healthy, it surfaces an unpresented main-owned row immediately instead of following that cycle, so an in-progress slower check cannot delay the row.
+When the next turn-end arm finds any live identity-matched watcher holding the lock, it surfaces an unpresented main-owned row immediately instead of following that cycle, so an in-progress slower check cannot delay the row.
+This includes a holder whose beacon is stale but below its eviction bound, which no replacement may take over; the arm then reports that holder as stale rather than attached.
+The handling-successor handoff reaches only the arm or watcher it is addressed to: neither exports it onward, and the Claude Stop hook discards any copy inherited from its session, so an ordinary turn-end arm never runs as a successor that pins already queued rows as delivered.
 The bounded turn-end guard enforces recovery at Stop when no watcher is live and no open generation claim is still deciding.
 So a finished, hung, or identity-mismatched claim cannot suppress that recovery ([`turnend-guard.md`](turnend-guard.md#harness-integrations) owns that boundary).
 
@@ -433,7 +435,7 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 ### Arm, recovery, triage, and lock suites
 
 `tests/fm-watch-durable-queue.test.sh` covers queue replay without duplication, recovery precedence, later rows and released branch rows during a handling successor, and a row appended after the handling watcher entered slow synchronous reconciliation.
-That blocked-watcher regression proves the turn-end arm returns the pending-row reason while the healthy watcher remains live.
+That blocked-watcher regression proves the turn-end arm returns the pending-row reason while the watcher remains live, both with a fresh beacon and with one aged past grace but below the eviction bound.
 
 `tests/fm-watch-arm.test.sh` covers:
 

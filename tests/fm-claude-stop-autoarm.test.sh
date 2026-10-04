@@ -537,6 +537,29 @@ test_attached_cycle_end_starts_handling_successor() {
   pass "auto-arm: an attached cycle's end starts a handling successor named after the closed arm before the rewake"
 }
 
+# A session can inherit the handling-successor handoff from whatever started
+# its terminal server. A Stop firing is never a successor itself: its foreground
+# arm must run as an ordinary turn-end arm, and only the one successor it starts
+# carries the closed arm's pid.
+test_inherited_successor_handoff_never_reaches_the_foreground_arm() {
+  local dir out status foreground predecessor
+  dir=$(make_primary_dir "$TMP_ROOT/inherited-successor-env")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" attached-delivered
+  out=$(FM_WATCH_PREDECESSOR_ARM_PID=55104 FM_WATCH_HANDLING_SUCCESSOR=1 run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "the delivered wake must still rewake"
+  [ "$(wc -l < "$dir/state/arm-ran" 2>/dev/null | tr -d ' ')" = 1 ] \
+    || fail "the foreground arm ran as a handling successor from inherited session state: $(cat "$dir/state/successor-ran" 2>/dev/null)"
+  foreground=$(cat "$dir/state/arm-ran")
+  [ "$(wc -l < "$dir/state/successor-ran" | tr -d ' ')" -eq 1 ] \
+    || fail "exactly one handling successor must start: $(cat "$dir/state/successor-ran")"
+  predecessor=$(sed -n 's/^arm=[0-9]* predecessor=\([0-9]*\)$/\1/p' "$dir/state/successor-ran")
+  [ "$predecessor" = "$foreground" ] \
+    || fail "the successor must name the closed foreground arm $foreground, not inherited state: $(cat "$dir/state/successor-ran")"
+  assert_contains "$out" "signal: task.status done: fixture peer cycle ended" "rewake must carry the delivered reason"
+  pass "auto-arm: an inherited successor handoff never turns the turn-end arm into a successor"
+}
+
 test_unconfirmed_handling_successor_still_rewakes() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/successor-unconfirmed")
@@ -1628,6 +1651,7 @@ test_inert_when_fleet_idle
 test_actionable_close_rewakes_with_reason
 test_actionable_close_with_live_successor_rewakes_once
 test_attached_cycle_end_starts_handling_successor
+test_inherited_successor_handoff_never_reaches_the_foreground_arm
 test_unconfirmed_handling_successor_still_rewakes
 test_failed_close_rewakes_with_failure_banner
 test_failed_cycles_notify_once_and_keep_retrying

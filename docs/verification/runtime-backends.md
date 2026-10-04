@@ -2377,8 +2377,14 @@ ok - real Herdr transport submits and confirms one resume turn
 ok - durable incident prevents a duplicate resume
 ok - real Herdr transport preserves draft screen
 ok - real Herdr transport preserves usage screen
+ok - real Herdr transport rings an aged queue on a done supervisor with a dim suggestion
+ok - real Herdr transport never rings over a draft
 verification: Herdr 0.9.3; stub supervisor only, real Claude/operator check remains required
 ```
+
+In that run Herdr itself reported the finished stub as `done`, and the queue ring landed as its own confirmed turn over a dim suggestion.
+On 2026-10-05 AEST the same test also passed three consecutive times against the CI-pinned Herdr 0.7.4 (installed by `bin/fm-install-herdr.sh`) in a disposable Ubuntu 24.04 amd64 container with its own default session.
+That narrower pane wraps the ring across composer rows, which is why the pre-Enter check ignores whitespace only.
 
 `bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh` covers the portable pane-text and incident-state branches, including rotating empty-composer suggestions, later-incident rearming under backoff, changed input before submission, and an unconfirmed turn.
 On 2026-10-04 AEST, `bash bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh` also verified clear-frame observation resets, historical busy text with a live idle composer, current spinner/footer vetoes, and unchanged healthy state files:

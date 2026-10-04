@@ -37,9 +37,12 @@
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
 # returns the FAILED line. On started it waits the child and propagates the wake
-# reason. On attached it stays live across identity-matched successors unless a
-# turn-end arm finds an unpresented main-owned row, which it surfaces immediately
-# without starting a second watcher. A cycle that ends with no reason line and no
+# reason. On attached it stays live across identity-matched successors. A
+# turn-end arm that finds an unpresented main-owned row while any live
+# identity-matched watcher holds the lock surfaces it immediately without
+# starting a second watcher; a stale-beacon holder is then reported as
+#   watcher: holder pid=<N> has a stale beacon (<age>s); not attached
+# never as attached. A cycle that ends with no reason line and no
 # healthy successor is resolved against the watcher's identity-bound delivery
 # record: a matching record reports that wake and exits 0, and only a cycle that
 # delivered nothing is the typed nonzero failure. Neither is ever a clean empty
@@ -102,6 +105,11 @@ if [ "${FM_GATE_REFUSE_BYPASS:-}" != 1 ]; then
 fi
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# The handling-successor handoff is addressed to this arm only. Keep the values
+# but stop exporting them, so no watcher or other descendant (including a
+# backend server it may start, whose panes would then inherit them) mistakes an
+# ordinary later arm or watcher for a handling successor.
+export -n FM_WATCH_PREDECESSOR_ARM_PID FM_WATCH_HANDLING_SUCCESSOR 2>/dev/null || true
 
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 WATCH_LOCK="$STATE/.watch.lock"
@@ -487,17 +495,30 @@ if [ "$mode" = stop ]; then
   exit 0
 fi
 
-# If a genuinely live+fresh watcher already holds the lock, do not start a second
-# one. A turn-end arm surfaces an unpresented durable row immediately; otherwise
-# it attaches and waits so the harness notify fires when that cycle ends.
-# --restart skips this because it just stopped this home's watcher.
-if [ "$mode" = arm ] && healthy_watcher; then
-  if [ -z "${FM_WATCH_PREDECESSOR_ARM_PID:-}" ] \
+# A turn-end arm surfaces an unpresented durable row immediately whenever a live
+# identity-matched watcher holds the lock, even one whose beacon is stale but
+# below its eviction bound: that holder may be blocked in slow work, and no
+# replacement can take its live lock, so waiting on either would strand the row.
+# The status line never calls a stale-beacon holder attached or healthy.
+if [ "$mode" = arm ] && [ -z "${FM_WATCH_PREDECESSOR_ARM_PID:-}" ]; then
+  holder_pid=$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)
+  if fm_pid_alive "$holder_pid" \
+    && fm_watcher_lock_matches_pid "$STATE" "$WATCH" "$holder_pid" "$FM_HOME" \
     && [ "$(fm_wake_main_unpresented_count)" -gt 0 ]; then
-    report_attached
+    if healthy_watcher; then
+      report_attached
+    else
+      echo "watcher: holder pid=$holder_pid has a stale beacon ($(fm_path_age "$BEAT")s); not attached"
+    fi
     echo "check: pending durable wakes"
     exit 0
   fi
+fi
+
+# If a genuinely live+fresh watcher already holds the lock, do not start a second
+# one; attach and wait so the harness notify fires when that cycle ends.
+# --restart skips this because it just stopped this home's watcher.
+if [ "$mode" = arm ] && healthy_watcher; then
   cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
   cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
   report_attached
