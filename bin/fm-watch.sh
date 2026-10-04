@@ -2505,8 +2505,10 @@ pr_poll_publish_release() {
   PR_POLL_PUBLISH_LOCK=
 }
 
+HANDLING_QUEUE_BASELINE=
 watcher_cleanup() {
   local cleanup_status=0 owns_lock=0 transition=release-lock
+  [ -z "$HANDLING_QUEUE_BASELINE" ] || rm -f "$HANDLING_QUEUE_BASELINE" || cleanup_status=1
   pr_poll_publish_release || cleanup_status=1
   pr_poll_control_release || cleanup_status=1
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
@@ -2541,6 +2543,27 @@ FM_WATCH_DELIVERY_IDENTITY=$(fm_pid_identity "$WATCHER_PID" 2>/dev/null || true)
 printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
+
+# A handling successor inherits the predecessor's main-owned queued delivery
+# before the handling turn can drain it. Pin that inherited set once; rows
+# added after this watcher starts are new obligations while handling stays active.
+if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
+  HANDLING_QUEUE_BASELINE=$(mktemp "$STATE/.watch-handling-rows.XXXXXX") || exit 1
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || exit 1
+  handling_branch_rows=
+  if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
+    handling_branch_rows=$STATE/.branch-eligible-rows
+  fi
+  handling_baseline_status=0
+  if [ -f "$FM_WAKE_QUEUE" ]; then
+    awk -F '\t' -v branch="$handling_branch_rows" '
+      BEGIN { if (branch != "") while ((getline line < branch) > 0) reserved[line] = 1 }
+      NF >= 5 && $2 ~ /^[0-9]+$/ && !($2 in reserved) { print $2 }
+    ' "$FM_WAKE_QUEUE" > "$HANDLING_QUEUE_BASELINE" || handling_baseline_status=1
+  fi
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK" || handling_baseline_status=1
+  [ "$handling_baseline_status" -eq 0 ] || exit 1
+fi
 
 # A merged poll may have queued its terminal wake and then lost the process
 # between receipt publication and fixed-path removal.
@@ -2723,8 +2746,7 @@ while :; do
   # A producer may append directly to the durable queue while this watcher is
   # already waiting. No new status signature is required for that append, so
   # surface main-owned rows on the next poll without appending a duplicate row.
-  if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ] \
-    && [ "$(fm_wake_main_unpresented_count)" -gt 0 ]; then
+  if [ "$(fm_wake_main_unpresented_count "$STATE/.main-eligible-rows" "$HANDLING_QUEUE_BASELINE")" -gt 0 ]; then
     wake "check: pending durable wakes"
   fi
 

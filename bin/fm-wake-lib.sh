@@ -2293,12 +2293,12 @@ fm_wake_actor_pending_count() {  # <actor> [<rows-file> <owner-file>]
   printf '%s\n' "$count"
 }
 
-# How many main-owned queue rows have not already been presented by a drain.
-# The handling turn owns rows recorded in .main-eligible-rows until it
-# acknowledges them, so replaying those rows would recursively wake the
-# supervisor instead of supervising that turn.
-fm_wake_main_unpresented_count() {  # [<presented-rows-file>]
+# How many main-owned queue rows have not already been presented by a drain
+# or inherited by a handling successor at launch.
+# Those rows belong to the current handling turn until it acknowledges them.
+fm_wake_main_unpresented_count() {  # [<presented-rows-file> [<successor-baseline-file>]]
   local presented=${1:-$STATE/.main-eligible-rows}
+  local baseline=${2:-}
   local rows=$STATE/.branch-eligible-rows owner=$STATE/.branch-eligible-owner
   local grant='' claimed='' count=''
   [ -f "$FM_WAKE_QUEUE" ] || { printf '0\n'; return 0; }
@@ -2308,10 +2308,14 @@ fm_wake_main_unpresented_count() {  # [<presented-rows-file>]
   if fm_wake_grant_rows_valid "$presented"; then
     claimed=$presented
   fi
-  count=$(awk -F '\t' -v grant="$grant" -v claimed="$claimed" '
+  if [ -n "$baseline" ] && ! fm_wake_grant_rows_valid "$baseline"; then
+    baseline=
+  fi
+  count=$(awk -F '\t' -v grant="$grant" -v claimed="$claimed" -v baseline="$baseline" '
     BEGIN {
       if (grant != "") while ((getline line < grant) > 0) reserved[line] = 1
       if (claimed != "") while ((getline line < claimed) > 0) presented[line] = 1
+      if (baseline != "") while ((getline line < baseline) > 0) presented[line] = 1
     }
     NF < 5 || $2 !~ /^[0-9]+$/ { n++; next }
     !($2 in reserved) && !($2 in presented) { n++ }

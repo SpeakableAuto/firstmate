@@ -1122,8 +1122,11 @@ cmd_start() {
       fi
       CLAIM_REG_IDENTITY=$current
     fi
+    exec 7<"$registration" || {
+      fm_procevent_source_lock_release "$id"
+      return 1
+    }
     fm_procevent_source_lock_release "$id" || return 1
-    exec 7<"$registration" || return 1
     return 0
   }
   # The inherited marker keeps the runner and its ordinary children from
