@@ -5,7 +5,8 @@
 #   FM_SUPERVISOR_TARGET       exact session:pane-id
 #   FM_WATCHDOG_CLAUDE_VERSION installed Claude version approved by a live check
 #   FM_WATCHDOG_PROBE_URL      HTTPS provider endpoint (no credentials/query)
-# Optional: FM_WATCHDOG_IDLE_SECS=120, FM_WATCHDOG_BACKOFF_SECS=900.
+# Optional: FM_WATCHDOG_IDLE_SECS=120, FM_WATCHDOG_BACKOFF_SECS=900,
+# FM_WATCHDOG_WAKE_AGE_SECS=600, FM_WATCHDOG_WAKE_ALERT_SECS=900.
 # Schedule tick with launchd StartInterval, independently of the supervisor.
 # State/logs: FM_HOME/state/supervisor-watchdog/{incident.json,events.jsonl}.
 # A stable viewport with a terminal network error, native Claude idle/done,
@@ -36,11 +37,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-composer-lib.sh
 . "$SCRIPT_DIR/fm-composer-lib.sh"
+# shellcheck source=bin/fm-active-alert-lib.sh
+. "$SCRIPT_DIR/fm-active-alert-lib.sh"
 
 watchdog_log() {
   jq -cn --arg event "$1" --arg detail "${2:-}" --argjson at "$NOW" \
     '{at:$at,event:$event,detail:$detail}' >> "$DIR/events.jsonl"
 }
+log() { watchdog_log notifier "$*"; }
 watchdog_save() {
   printf '%s\n' "$RECORD" > "$DIR/incident.json.tmp"
   mv "$DIR/incident.json.tmp" "$DIR/incident.json"
@@ -139,6 +143,38 @@ watchdog_alert() {
     "Supervisor recovery withheld: $reason. Inspect state/supervisor-watchdog/events.jsonl; input preserved, no automatic retry." || return 1
   watchdog_update --arg reason "$reason" '.alerted=$reason'
 }
+
+# Alert on a main-owned row that has waited past the configured age while the
+# native agent is idle. The watcher is responsible for delivery; this path only
+# publishes an alert through the existing check-wake route and never types.
+watchdog_queue_alert() {
+  local grant='' oldest epoch seq previous='' previous_at=0 marker="$DIR/queue-alert" queue=${FM_WAKE_QUEUE:-$DIR/.wake-queue}
+  case "$VERDICT" in not-idle|busy|usage-limit|unreadable|unsupported-harness) return 0 ;; esac
+  [ -f "$queue" ] || { rm -f "$marker"; return 0; }
+  if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
+    grant="$STATE/.branch-eligible-rows"
+  fi
+  oldest=$(awk -F '\t' -v grant="$grant" '
+    BEGIN { if (grant != "") while ((getline line < grant) > 0) reserved[line] = 1 }
+    NF >= 5 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && !($2 in reserved) {
+      if (!found || $1 < epoch) { epoch=$1; seq=$2; found=1 }
+    }
+    END { if (found) print epoch " " seq }
+  ' "$queue") || return 1
+  [ -n "$oldest" ] || { rm -f "$marker"; return 0; }
+  epoch=${oldest%% *}; seq=${oldest#* }
+  [ "$epoch" -le "$NOW" ] || return 0
+  [ "$((NOW-epoch))" -ge "$WAKE_AGE" ] || return 0
+  if [ -f "$marker" ]; then read -r previous previous_at < "$marker" || true; fi
+  case "$previous_at" in ''|*[!0-9]*) previous_at=0 ;; esac
+  if [ "$previous" = "$epoch:$seq" ] && [ "$((NOW-previous_at))" -lt "$WAKE_ALERT" ]; then return 0; fi
+  local summary="Supervisor idle with undelivered wakes for $((NOW-epoch))s (oldest row $seq). Inspect and drain the main wake queue; no input was sent."
+  fm_wake_append check supervisor-watchdog "$summary" || return 1
+  printf '%s %s\n' "$epoch:$seq" "$NOW" > "$marker.tmp"
+  mv "$marker.tmp" "$marker"
+  watchdog_log alerted wake-queue-stalled
+  wedge_alarm_notify "$summary" "$marker"
+}
 watchdog_send() { fm_backend_herdr_cli "$SESSION" pane send-text "$PANE_ID" "$1" >/dev/null; }
 watchdog_enter() { fm_backend_herdr_cli "$SESSION" pane send-keys "$PANE_ID" enter >/dev/null; }
 watchdog_confirm() {
@@ -176,6 +212,7 @@ watchdog_tick() {
       || { watchdog_log refused corrupt-state; return 1; }
   fi
   watchdog_observe
+  watchdog_queue_alert || return 1
   oldhash=$(printf '%s' "$RECORD" | jq -r .hash)
   acted=$(printf '%s' "$RECORD" | jq -r .acted)
   last_action=$(printf '%s' "$RECORD" | jq -r .last_action)
@@ -281,7 +318,9 @@ watchdog_main() {
   [ -n "$SESSION" ] && [ -n "$PANE_ID" ] || return 2
   IDLE=${FM_WATCHDOG_IDLE_SECS:-120}
   BACKOFF=${FM_WATCHDOG_BACKOFF_SECS:-900}
-  for n in "$IDLE" "$BACKOFF"; do
+  WAKE_AGE=${FM_WATCHDOG_WAKE_AGE_SECS:-600}
+  WAKE_ALERT=${FM_WATCHDOG_WAKE_ALERT_SECS:-900}
+  for n in "$IDLE" "$BACKOFF" "$WAKE_AGE" "$WAKE_ALERT"; do
     case "$n" in ''|*[!0-9]*|0*) echo 'watchdog: positive integer intervals required' >&2; return 2 ;; esac
     [ "$n" -ge 10 ] && [ "$n" -le 86400 ] || { echo 'watchdog: intervals must be 10..86400 seconds' >&2; return 2; }
   done

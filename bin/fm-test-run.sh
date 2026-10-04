@@ -315,7 +315,7 @@ family_for_basename() {
     fm-tool-update-check.test.sh|\
     fm-mail.test.sh|fm-mail-check.test.sh|fm-disk-guard.test.sh|\
     fm-turnend-foreign-owner-arm-fix.test.sh|\
-    fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
+    fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-durable-queue.test.sh|fm-watch-recovery-loop.test.sh|\
     fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh)
       printf '%s\n' watcher-wake-lock
@@ -1625,6 +1625,9 @@ families_for_changed_path() {
       ;;
     bin/fm-supervisor-watchdog.sh)
       printf '%s\n' "__script__:fm-supervisor-watchdog.test.sh" "__script__:fm-supervisor-watchdog-herdr-e2e.test.sh"
+      ;;
+    bin/fm-active-alert-lib.sh)
+      printf '%s\n' "__script__:fm-daemon.test.sh" "__script__:fm-supervisor-watchdog.test.sh"
       ;;
     bin/fm-composer-lib.sh)
       # The shared shape catalogue is vendor-rendered signal; a change to it
