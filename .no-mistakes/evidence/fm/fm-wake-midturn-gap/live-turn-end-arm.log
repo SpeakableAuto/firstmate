@@ -1,0 +1,7 @@
+live lab home: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-live-wake.D9guMm
+watcher acquired singleton lock and completed its empty-queue check: pid=72482
+watcher deliberately paused after that check with no queue lock held: process_state=T
+durable wake appended while watcher remained paused: 1791103512	1	check	live-midturn	check: live row queued mid-turn
+watcher: attached pid=72482 (beacon 0s)
+check: pending durable wakes
+turn-end arm surfaced the wake in 0.049s while original watcher stayed paused (T); durable row remains queued for drain

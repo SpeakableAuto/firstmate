@@ -1,0 +1,7 @@
+live lab home: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-live-successor.RpwG5N
+handling successor is supervising after its inherited-delivery baseline: pid=98126
+later durable row appended after successor startup: epoch=1791103554
+check: pending durable wakes
+1791103554	1	check	live-later	check: later live row
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 99271.1791103554.WlVAGC
+handling successor surfaced the later append on its next poll, and the real drain presented that exact durable row
