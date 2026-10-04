@@ -24,9 +24,13 @@
 # Held/acted incidents rearm after a stable, readable, error-free viewport for
 # IDLE_SECS; the retained action timestamp enforces cross-incident backoff.
 # Independently, a main-owned durable wake older than
-# FM_WATCHDOG_WAKE_AGE_SECS while Claude is idle queues one check and fires the
-# configured active-alert channels once for that unchanged oldest row without
-# typing into the supervisor pane.
+# FM_WATCHDOG_WAKE_AGE_SECS while Claude is idle or done queues one check and
+# fires the configured active-alert channels once for that unchanged oldest row.
+# If the empty composer then stays semantically unchanged for IDLE_SECS, the
+# watchdog rings the supervisor with one drain line under the same guards as
+# the nudge, re-rings after BACKOFF_SECS while that row stays undelivered, and
+# holds an ambiguous ring until the oldest row changes or the queue drains.
+# State: FM_HOME/state/supervisor-watchdog/{queue-alert,queue-nudge.json}.
 # Only hashes/classifications are logged, never pane text or prompt contents.
 # Unsupported harnesses/backends fail closed; this does not repair dead shells.
 # Residual race: reads and sends are not atomic. A human keystroke in the final
@@ -148,36 +152,133 @@ watchdog_alert() {
   watchdog_update --arg reason "$reason" '.alerted=$reason'
 }
 
-# Alert on a main-owned row that has waited past the configured age while the
-# native agent is idle. The watcher is responsible for delivery; this path only
-# publishes an alert through the existing check-wake route and never types.
-watchdog_queue_alert() {
-  local grant='' oldest epoch seq previous='' marker="$DIR/queue-alert" queue=${FM_WAKE_QUEUE:-$DIR/.wake-queue}
-  case "$VERDICT" in not-idle|busy|usage-limit|unreadable|unsupported-harness) return 0 ;; esac
-  [ -f "$queue" ] || { rm -f "$marker"; return 0; }
+# Print "<epoch> <seq>" for the oldest main-owned durable wake row, excluding
+# rows a live branch grant reserves; print nothing for an empty queue.
+watchdog_oldest_row() {
+  local grant='' queue=${FM_WAKE_QUEUE:-$DIR/.wake-queue}
+  [ -f "$queue" ] || return 0
   if fm_wake_branch_grant_live "$STATE/.branch-eligible-rows" "$STATE/.branch-eligible-owner"; then
     grant="$STATE/.branch-eligible-rows"
   fi
-  oldest=$(awk -F '\t' -v grant="$grant" '
+  awk -F '\t' -v grant="$grant" '
     BEGIN { if (grant != "") while ((getline line < grant) > 0) reserved[line] = 1 }
     NF >= 5 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && !($2 in reserved) {
       if (!found || $1 < epoch) { epoch=$1; seq=$2; found=1 }
     }
     END { if (found) print epoch " " seq }
-  ' "$queue") || return 1
+  ' "$queue"
+}
+
+# Alert on a main-owned row that has waited past the configured age while the
+# native agent is idle or done. Alerting is a separate, once-per-row episode
+# published through the existing check-wake route; delivery recovery for an
+# idle supervisor is watchdog_queue_recover below.
+watchdog_queue_alert() {
+  local oldest epoch seq previous='' marker="$DIR/queue-alert"
+  QUEUE_AGED=
+  case "$VERDICT" in not-idle|busy|usage-limit|unreadable|unsupported-harness) return 0 ;; esac
+  oldest=$(watchdog_oldest_row) || return 1
   [ -n "$oldest" ] || { rm -f "$marker"; return 0; }
   epoch=${oldest%% *}; seq=${oldest#* }
   [ "$epoch" -le "$NOW" ] || return 0
   [ "$((NOW-epoch))" -ge "$WAKE_AGE" ] || return 0
+  QUEUE_AGED="$epoch:$seq"
   if [ -f "$marker" ]; then read -r previous < "$marker" || true; fi
   previous=${previous%% *}
   [ "$previous" != "$epoch:$seq" ] || return 0
-  local summary="Supervisor idle with undelivered wakes for $((NOW-epoch))s (oldest row $seq). Inspect and drain the main wake queue; no input was sent."
+  local summary="Supervisor idle with undelivered wakes for $((NOW-epoch))s (oldest row $seq). Inspect and drain the main wake queue; the watchdog rings the supervisor once it stays idle with an empty prompt."
   fm_wake_append check supervisor-watchdog "$summary" || return 1
   printf '%s\n' "$epoch:$seq" > "$marker.tmp"
   mv "$marker.tmp" "$marker"
   watchdog_log alerted wake-queue-stalled
   wedge_alarm_notify "$summary" "$marker"
+}
+
+# Deliver an aged queue to an idle supervisor that nothing else will wake: a
+# turn that ended without the Stop hook leaves no watcher to deliver rows.
+# The ring types one short drain line under the same guards as the network
+# nudge: native idle or done, no busy footer or usage-limit notice, a proven
+# empty composer (a dim suggestion is empty) that stays semantically unchanged
+# for IDLE_SECS, fresh checks before typing, and exactly our payload before
+# Enter, with no clear or Enter retry. A confirmed ring re-rings after
+# BACKOFF_SECS while the same row stays undelivered; an ambiguous ring holds
+# until the oldest row changes or the queue drains.
+watchdog_queue_save() {
+  printf '%s\n' "$QREC" > "$DIR/queue-nudge.json.tmp"
+  mv "$DIR/queue-nudge.json.tmp" "$DIR/queue-nudge.json"
+}
+watchdog_queue_update() {
+  local updated
+  updated=$(printf '%s\n' "$QREC" | jq -c "$@")
+  [ "$updated" != "$QREC" ] || return 0
+  QREC=$updated
+  watchdog_queue_save
+}
+watchdog_queue_hold() {
+  watchdog_queue_update --arg reason "$1" '.held=$reason | .since=0'
+  watchdog_log held "queue-$1"
+  fm_wake_append check supervisor-watchdog \
+    "Supervisor wake-queue ring withheld: $1. Inspect state/supervisor-watchdog/events.jsonl; input preserved, no automatic retry." || return 1
+}
+watchdog_queue_recover() {
+  local payload after content
+  QUEUE_ACTED=0
+  QREC='{"row":"","hash":"","since":0,"last":0,"held":""}'
+  if [ -e "$DIR/queue-nudge.json" ]; then
+    QREC=$(cat "$DIR/queue-nudge.json")
+    printf '%s\n' "$QREC" | jq -e '
+      type == "object" and ([.row,.hash,.held]|all(type=="string")) and
+      ([.since,.last] | all(type=="number" and .>=0 and floor==.))' >/dev/null \
+      || { watchdog_log refused corrupt-queue-state; return 1; }
+  fi
+  if [ -z "$QUEUE_AGED" ]; then
+    # A drained queue ends the episode; a busy or unsafe observation only
+    # breaks the continuous idle window, keeping any hold and the re-ring time.
+    if [ -z "$(watchdog_oldest_row)" ]; then
+      rm -f "$DIR/queue-nudge.json"
+    elif [ -e "$DIR/queue-nudge.json" ]; then
+      watchdog_queue_update '.hash="" | .since=0'
+    fi
+    return 0
+  fi
+  if [ "$(printf '%s' "$QREC" | jq -r .row)" != "$QUEUE_AGED" ]; then
+    watchdog_queue_update --arg row "$QUEUE_AGED" '.row=$row | .hash="" | .since=0 | .held=""'
+  fi
+  [ -z "$(printf '%s' "$QREC" | jq -r .held)" ] || return 0
+  if [ "$VERDICT" != clear ]; then
+    watchdog_queue_update '.hash="" | .since=0'
+    return 0
+  fi
+  if [ "$(printf '%s' "$QREC" | jq -r .since)" -eq 0 ] || [ "$HASH" != "$(printf '%s' "$QREC" | jq -r .hash)" ]; then
+    watchdog_queue_update --arg hash "$HASH" --argjson now "$NOW" '.hash=$hash | .since=$now'
+    watchdog_log observed queue-idle
+    return 0
+  fi
+  [ "$((NOW-$(printf '%s' "$QREC" | jq -r .since)))" -ge "$IDLE" ] || return 0
+  [ "$((NOW-$(printf '%s' "$QREC" | jq -r .last)))" -ge "$BACKOFF" ] || return 0
+  payload='Supervisor watchdog: wakes are queued undelivered. Run bin/fm-wake-drain.sh now.'
+  # Nothing is typed yet, so a change here only restarts the idle window.
+  watchdog_observe
+  if [ "$VERDICT" != clear ] || [ "$HASH" != "$(printf '%s' "$QREC" | jq -r .hash)" ]; then
+    watchdog_queue_update '.hash="" | .since=0'
+    watchdog_log deferred queue-changed-before-action
+    return 0
+  fi
+  QUEUE_ACTED=1
+  watchdog_queue_update --argjson now "$NOW" '.last=$now | .since=0'
+  watchdog_log action-claimed queue-nudge
+  watchdog_send "$payload" || { watchdog_queue_hold send-failed; return; }
+  sleep 0.2
+  after=$(watchdog_read) || { watchdog_queue_hold capture-failed; return; }
+  case "$(watchdog_screen "$after")" in usage-limit|busy) watchdog_queue_hold unsafe-before-submit; return ;; esac
+  content=$(fm_composer_extract_selected_content "$CAPS" "$after") || { watchdog_queue_hold composer-unreadable; return; }
+  [ "$content" = "$payload" ] || { watchdog_queue_hold input-changed; return; }
+  watchdog_enter || { watchdog_queue_hold enter-failed; return; }
+  if watchdog_confirm "$payload"; then
+    watchdog_log submitted queue-nudge
+  else
+    watchdog_queue_hold submit-not-confirmed
+  fi
 }
 watchdog_send() { fm_backend_herdr_cli "$SESSION" pane send-text "$PANE_ID" "$1" >/dev/null; }
 watchdog_enter() { fm_backend_herdr_cli "$SESSION" pane send-keys "$PANE_ID" enter >/dev/null; }
@@ -217,6 +318,8 @@ watchdog_tick() {
   fi
   watchdog_observe
   watchdog_queue_alert || return 1
+  watchdog_queue_recover || return 1
+  [ "$QUEUE_ACTED" -eq 0 ] || return 0
   oldhash=$(printf '%s' "$RECORD" | jq -r .hash)
   acted=$(printf '%s' "$RECORD" | jq -r .acted)
   last_action=$(printf '%s' "$RECORD" | jq -r .last_action)

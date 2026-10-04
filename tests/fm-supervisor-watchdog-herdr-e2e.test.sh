@@ -30,15 +30,22 @@ buf= transcript=
 report() { "$helper" run "$session" pane report-agent "$pane" --source watchdog-fixture --agent claude --state "$1" >/dev/null; }
 redraw() {
   printf '\033[2J\033[H'
-  printf 'API Error: ENOTFOUND\n'
+  case "$mode" in
+    queue*) printf '● Fixture turn finished\n' ;;
+    *) printf 'API Error: ENOTFOUND\n' ;;
+  esac
   [ "$mode" != usage ] || printf 'Usage limit reached · continuing automatically\n'
   [ -z "$transcript" ] || printf '❯ %s\nRecovered fixture turn\n' "$transcript"
   printf '\n────────────────────────────────────────\n❯ %s' "$buf"
+  # Claude's dim rotating suggestion occupies an otherwise empty composer.
+  case "$mode:$buf" in queue*:) printf '\033[2myes, continue with the next step\033[0m' ;; esac
 }
-case "$mode" in draft) buf='human draft' ;; esac
+case "$mode" in draft|queue-draft) buf='human draft' ;; esac
 old_stty=$(stty -g)
 trap 'stty "$old_stty"' EXIT
 stty -echo -icanon min 1 time 0
+# A finished turn leaves a queue-mode supervisor done rather than freshly idle.
+case "$mode" in queue*) report working ;; esac
 report idle
 redraw
 while IFS= read -r -n 1 ch; do
@@ -124,4 +131,39 @@ for mode in draft usage; do
   [ ! -e "$CASE_DIR/typed" ] && [ ! -e "$CASE_DIR/submissions" ] || fail "$mode received input"
   pass "real Herdr transport preserves $mode screen"
 done
+# An aged durable wake on a finished supervisor with an empty prompt is rung.
+WAKE_AGE=600
+for mode in queue queue-draft; do
+  CASE_DIR="$LAB/$mode"
+  mkdir -p "$CASE_DIR"
+  printf '%s\n' "$mode" > "$CASE_DIR/mode"
+  h workspace create --cwd "$CASE_DIR" --label "watchdog-$mode" > "$CASE_DIR/workspace.json"
+  PANE_ID=$(h pane list | jq -er '.result.panes[-1].pane_id')
+  printf -v command_line 'bash %q %q %q %q %q' "$LAB/stub.sh" "$HERDR_LAB_HELPER" "$HERDR_LAB_SESSION" "$PANE_ID" "$CASE_DIR"
+  h pane run "$PANE_ID" "$command_line" >/dev/null
+  DIR="$CASE_DIR/state"
+  mkdir -p "$DIR"
+  FM_WAKE_QUEUE="$DIR/.wake-queue"
+  printf '%s\t41\tcheck\tfixture\tcheck: fixture row\n' "$(( $(date +%s) - 700 ))" > "$FM_WAKE_QUEUE"
+  for _ in {1..40}; do
+    watchdog_observe 2>/dev/null
+    case "$VERDICT" in clear|composer-pending) break ;; esac
+    sleep 0.2
+  done
+  case "$mode:$VERDICT" in queue:clear|queue-draft:composer-pending) ;; *) fail "$mode stub not ready: $VERDICT" ;; esac
+  identity=$(watchdog_identity)
+  watchdog_tick
+  sleep 10
+  watchdog_tick
+  if [ "$mode" = queue ]; then
+    [ "$(cat "$CASE_DIR/submissions" 2>/dev/null)" = 'Supervisor watchdog: wakes are queued undelivered. Run bin/fm-wake-drain.sh now.' ] \
+      || fail "queue ring did not land as its own turn on a ${identity#*$'\t'} supervisor"
+    [ "$(tail -1 "$DIR/events.jsonl" | jq -c '[.event,.detail]')" = '["submitted","queue-nudge"]' ] || fail 'queue ring was not confirmed'
+    pass "real Herdr transport rings an aged queue on a ${identity#*$'\t'} supervisor with a dim suggestion"
+  else
+    [ ! -e "$CASE_DIR/typed" ] && [ ! -e "$CASE_DIR/submissions" ] || fail 'queue ring typed over a draft'
+    pass 'real Herdr transport never rings over a draft'
+  fi
+done
+unset FM_WAKE_QUEUE
 printf 'verification: Herdr %s; stub supervisor only, real Claude/operator check remains required\n' "$(h status --json | jq -r .server.version)"

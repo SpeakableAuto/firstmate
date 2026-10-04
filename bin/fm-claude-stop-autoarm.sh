@@ -132,6 +132,11 @@ if [ "$#" -gt 0 ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A Stop firing is never itself a handling successor: this hook passes the
+# handoff explicitly to the one successor it starts. Values inherited from the
+# session environment would turn every turn-end arm into a successor that skips
+# pending-row delivery and pins already queued rows as delivered.
+unset FM_WATCH_PREDECESSOR_ARM_PID FM_WATCH_HANDLING_SUCCESSOR
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"

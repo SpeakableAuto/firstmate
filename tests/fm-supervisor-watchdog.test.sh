@@ -222,7 +222,7 @@ watchdog_tick
 check "$VERDICT" clear 'dim suggestion leaves the Claude composer empty'
 check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'idle supervisor alerts on aged wake'
 check "$(wc -l < "$DIR/notifications" | tr -d ' ')" 1 'aged wake reaches active alert channel'
-check "$SENT" 0 'queue alarm never types into the supervisor'
+check "$SENT" 0 'first aged-queue observation never types into the supervisor'
 TICK=1010; PANE=$'● Healthy response\n❯ human draft'; watchdog_tick
 check "$VERDICT" composer-pending 'real typed draft remains pending'
 check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'same queued row is rate limited'
@@ -243,3 +243,103 @@ rm "$FM_WAKE_QUEUE"
 PANE=$CLEAR; watchdog_tick
 [ ! -e "$DIR/queue-alert" ] || fail 'drained queue did not reset alert episode'
 pass 'queue alarm resets after drain'
+
+# An aged queue on an idle or done supervisor with an empty prompt is rung:
+# nothing else wakes a supervisor whose turn ended without the Stop hook.
+QPAYLOAD='Supervisor watchdog: wakes are queued undelivered. Run bin/fm-wake-drain.sh now.'
+queue_case() {
+  reset_case
+  rm -f "$DIR/queue-alert" "$DIR/queue-nudge.json"
+  printf '300\t31\tcheck\tmail\tpending\n' > "$FM_WAKE_QUEUE"
+  IDENTITY=$'claude\tdone'
+  CONFIRM_NATIVE=1
+  PANE=$'● Done\n────────────────────\n❯ \033[2myes, give firstmate read-only access\033[0m\n────────────────────'
+}
+watchdog_send() {
+  SENT=$((SENT+1))
+  [ "$SEND_FAIL" = 0 ] || return 1
+  PANE=$'● Done\n────────────────────\n❯ '"$1"
+  [ "$CHANGE_DURING_SEND" = 0 ] || PANE="$PANE human draft"
+  [ "$LIMIT_DURING_SEND" = 0 ] || PANE="$PANE"$'\nUsage limit reached · continuing automatically'
+  [ "$READ_FAIL_AFTER_SEND" = 0 ] || READ_FAIL=1
+}
+queue_case
+watchdog_tick
+check "$VERDICT" clear 'done supervisor with a dim suggestion is an empty idle prompt'
+check "$(wc -l < "$DIR/alerts" | tr -d ' ')" 1 'done supervisor alerts on aged wake'
+check "$SENT" 0 'first idle observation never rings'
+TICK=1011
+PANE=$'● Done\n────────────────────\n❯ \033[2mrun the next wave\033[0m\n────────────────────'
+watchdog_tick
+check "$SENT" 1 'stable idle done supervisor is rung once for the aged queue'
+check "$ENTERED" 1 'queue ring submitted exactly once'
+check "$(tail -1 "$DIR/events.jsonl" | jq -c '[.event,.detail]')" '["submitted","queue-nudge"]' 'queue ring confirms the new turn'
+IDENTITY=$'claude\tdone'
+PANE=$'● Done\n────────────────────\n❯ \033[2mrun the next wave\033[0m\n────────────────────'
+TICK=1050; watchdog_tick
+TICK=1065; watchdog_tick
+check "$SENT" 1 'undelivered queue is not re-rung before the backoff'
+TICK=1080; watchdog_tick
+check "$SENT" 2 'still undelivered queue is re-rung after the backoff'
+rm "$FM_WAKE_QUEUE"
+TICK=1090; watchdog_tick
+[ ! -e "$DIR/queue-nudge.json" ] || fail 'drained queue kept its ring episode'
+pass 'drained queue ends the ring episode'
+
+queue_case
+IDENTITY=$'claude\tidle'
+watchdog_tick; TICK=1011; watchdog_tick
+check "$SENT" 1 'idle supervisor is rung for the aged queue too'
+
+queue_case
+watchdog_tick
+TICK=1011; PANE=$'● Done\n❯ human draft'; watchdog_tick
+TICK=1030; watchdog_tick
+check "$SENT" 0 'queue ring never types over a draft'
+
+queue_case
+watchdog_tick
+TICK=1011; PANE=$'Usage limit reached · continuing automatically\n❯ '; watchdog_tick
+TICK=1030; watchdog_tick
+check "$SENT" 0 'queue ring never acts during a usage-limit pause'
+
+queue_case
+watchdog_tick
+TICK=1011; PANE=$'● Done\n✻ Thinking… (2s · live turn)\n❯ \nesc to interrupt'; watchdog_tick
+TICK=1030; watchdog_tick
+check "$SENT" 0 'queue ring never interrupts a busy supervisor'
+
+queue_case
+watchdog_tick
+TICK=1011; CHANGE_DURING_SEND=1; watchdog_tick
+check "$ENTERED" 0 'mixed input after the ring is never submitted'
+check "$(jq -r .held "$DIR/queue-nudge.json")" input-changed 'mixed input holds the queue ring'
+CHANGE_DURING_SEND=0
+PANE=$'● Done\n────────────────────\n❯ \033[2mrun the next wave\033[0m\n────────────────────'
+TICK=1200; watchdog_tick; TICK=1300; watchdog_tick
+check "$SENT" 1 'held queue ring is not retried for the same row'
+printf '301\t32\tcheck\tmail\tlater\n' > "$FM_WAKE_QUEUE"
+TICK=1400; watchdog_tick; TICK=1411; watchdog_tick
+check "$SENT" 2 'a changed oldest row releases the held ring'
+
+# A change seen in the final read before typing restarts the idle window
+# without typing or holding, so a later stable idle prompt is still rung.
+queue_case
+watchdog_tick
+TICK=1011
+real_watchdog_observe=$(declare -f watchdog_observe)
+OBSERVED=0
+eval "${real_watchdog_observe/watchdog_observe/real_observe}"
+watchdog_observe() {
+  OBSERVED=$((OBSERVED+1))
+  [ "$OBSERVED" -lt 2 ] || PANE=$'● Done\n● New output arrived\n────────────────────\n❯ \n────────────────────'
+  real_observe
+}
+watchdog_tick
+check "$SENT" 0 'a change in the final pre-typing read never types'
+check "$(jq -r .held "$DIR/queue-nudge.json")" '' 'a pre-typing change does not hold the ring'
+OBSERVED=0
+eval "${real_watchdog_observe}"
+TICK=1030; watchdog_tick
+TICK=1041; watchdog_tick
+check "$SENT" 1 'the next stable idle window rings normally'

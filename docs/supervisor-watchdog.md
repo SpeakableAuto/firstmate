@@ -1,6 +1,6 @@
 # Supervisor watchdog
 
-The optional watchdog runs outside the supervisor session and nudges an idle Claude supervisor on Herdr after a network error and restored provider connectivity.
+The optional watchdog runs outside the supervisor session and nudges an idle Claude supervisor on Herdr after a network error and restored provider connectivity, or when queued wakes sit undelivered.
 Its state machine, guards, supported configuration, and residual input race are owned by [`bin/fm-supervisor-watchdog.sh`](../bin/fm-supervisor-watchdog.sh), whose `--help` prints the operator contract.
 It does not restart a process, repair a dead shell, or manage workers.
 Other primary harnesses and tmux, Zellij, Orca, cmux, and Codex App are unsupported and must not be configured as targets.
@@ -12,8 +12,11 @@ Claude's dim rotating empty-composer suggestion is also ignored by the stability
 Herdr cannot atomically check the prompt and send input, so a human keystroke in the final read/send window can still mix with the nudge.
 This is a guarded best-effort safeguard; it is not an input lock.
 The watchdog never clears mixed input or retries a submission, and it verifies a new turn before reporting success.
-Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle queues a `check: supervisor-watchdog` row and uses the [configured active-alert channels](wedge-alarm.md).
-That alarm sends no input and fires once for each unchanged oldest-row episode, rearming when the oldest row changes or the queue drains.
+Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle or done queues a `check: supervisor-watchdog` row and uses the [configured active-alert channels](wedge-alarm.md).
+That alarm fires once for each unchanged oldest-row episode, rearming when the oldest row changes or the queue drains.
+Because an idle supervisor wakes only on new input, the watchdog then rings it with one short drain line when the prompt stays empty and unchanged for the idle interval, which covers a turn that ended without its Stop hook and so left no watcher running.
+The ring uses the network nudge's guards: native idle or done, no busy footer or usage-limit notice, a dim suggestion counted as empty, fresh checks before typing, and exactly its own line before Enter.
+A confirmed ring repeats after the backoff while the same row stays undelivered; an ambiguous ring holds and alerts until the oldest row changes or the queue drains.
 
 ## Local launchd setup
 
@@ -68,7 +71,7 @@ Stop it before changing its target or investigating an input hold:
 launchctl bootout "gui/$(id -u)/local.firstmate.supervisor-watchdog"
 ```
 
-Inspect `state/supervisor-watchdog/events.jsonl` and the launchd error log to distinguish a refused configuration, an aged-wake alert, a network wait, a held incident, and a confirmed submission.
+Inspect `state/supervisor-watchdog/events.jsonl` and the launchd error log to distinguish a refused configuration, an aged-wake alert, a queue ring, a network wait, a held incident, and a confirmed submission.
 These records contain timestamps and classifications, not prompt contents or pane captures.
 Treat `held` as requiring inspection; it does not mean the original error recovered.
 A continuously stable, error-free idle screen releases the incident after the idle interval, while the retained action timestamp still delays another nudge until the configured backoff elapses.

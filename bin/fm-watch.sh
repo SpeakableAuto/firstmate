@@ -169,6 +169,10 @@
 # deleted stops itself instead of running on as an orphan. That check is scoped
 # to this process alone and never signals another watcher.
 set -u
+# The handling-successor flag describes this process only. Stop exporting it so
+# a child (for example a backend server this cycle starts, whose panes would
+# inherit it) never makes a later ordinary watcher pin queued rows as delivered.
+export -n FM_WATCH_HANDLING_SUCCESSOR FM_WATCH_PREDECESSOR_ARM_PID 2>/dev/null || true
 
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
