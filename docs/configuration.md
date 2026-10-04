@@ -1154,7 +1154,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 
 - When the file exists, bootstrap validates it with `jq`.
 - Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-- Malformed JSON, malformed rules, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
+- Malformed JSON, malformed rules, an empty or malformed profile array, invalid quota-pacing settings, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
 - While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic; without the key those declarations preserve the pre-existing bootstrap behavior; Claude spawn admission separately validates its settings and the selected floor passed to it.
 - Missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 - While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
@@ -1192,12 +1192,14 @@ Match the window ID to quota-axi's snapshot and set its known duration in second
 At each dispatch, the path is `floor_percent + (100 - floor_percent) * remaining_window_seconds / window_seconds`, with the time fraction limited to 0 through 1.
 An account ahead of the path allows its full configured concurrency.
 An account behind the path but still above the floor allows the ceiling of its configured cap times `(remaining_percent - floor_percent) / (path_percent - floor_percent)`, limited to at least one and at most one less than the cap when the cap exceeds one.
-At or below the floor, its allowance is zero; missing or stale evidence yields `unknown` and cannot authorize a paced placement.
+At or below the floor, its allowance is zero; a missing percentage or reset, an expired reset, or explicitly stale evidence yields `unknown` and cannot authorize a paced placement.
 Applicable scopes on the same account use the strictest allowance.
+The earliest reset among the scopes tied for that strictest allowance supplies the candidate's pacing window.
 The resolver checks live crew and recent placements against that allowance, then prefers the passing paced account whose reset comes soonest.
 Existing runway and selected profile floors still apply.
-Every directly classified crew launch applies the same pacing allowance against recovery-grade live-worker evidence under a home-wide launch lock.
+Every directly classified crew launch whose harness and model resolve to a configured provider account applies the same pacing allowance against recovery-grade live-worker evidence under a home-wide launch lock.
 Direct Claude launches retain their stricter account-identity and fixed session-floor checks and also apply every configured scope for the selected model.
+A typed profile's explicit `provider` is not yet carried into spawn metadata, so a profile whose declared provider differs from the launch-time harness/model mapping receives resolver pacing but not direct-launch pacing; durable provider/account launch identity is a known follow-up.
 
 The resolver atomically writes `state/quota-pacing.json` as a private, machine-readable mirror input after each paced resolution.
 Its schema version is 1:
@@ -1207,15 +1209,16 @@ Its schema version is 1:
 | `schemaVersion`, `generatedAt` | Schema number and UTC observation time. |
 | `accounts[]` | One record for each configured account scope in the current dispatch pool. |
 | `home`, `provider`, `accountKey`, `scope`, `windowId` | Machine and quota identity. |
-| `observedAt` | Last successful account observation in UTC. |
+| `observedAt` | UTC time when the resolver captured this account record, including an `unknown` record. |
 | `state` | `ahead`, `behind`, `at_floor`, `below_floor`, or `unknown`. |
 | `nextWindow` | The reset timestamp, or `null` when unknown. |
 | `remainingPercent`, `pathPercent`, `floorPercent` | Measured headroom, current glide path, and configured floor. |
 | `allowedConcurrency`, `maxConcurrency` | Current allowance and configured ceiling; the allowance is `null` when unknown. |
-| `queuedTaskIds` | Task keys held by this paced account until its named next window; a successful placement removes its key. |
+| `queuedTaskIds` | Task keys held on the scope or scopes that supplied the blocking allowance until the named next window; any later result that is not the same pacing wait removes its key. |
 
 The file is a dispatch view, refreshed when the resolver runs, rather than a continuously refreshed quota feed.
 An account's queue is cleared when its reset timestamp changes, and accounts absent from the current pool are removed.
+Only a final `no rankable eligible candidate` result caused by pacing with a known reset adds a task to the queue; approval, ambiguity, unknown pacing evidence, and non-pacing refusals do not.
 
 ## Claude crew admission
 
