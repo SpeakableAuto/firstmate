@@ -183,6 +183,8 @@ The next Stop then re-arms as before.
 
 The durable wake queue preserves actionable events between a watcher close and the next drain.
 After the downtime-resurface boundary gets first refusal, an active watcher surfaces unpresented main-owned rows in that queue, even when their producer did not change a status signature.
+The handling successor checks those rows at the start of each cycle, before slower fleet reconciliation can delay a row queued during the previous handling turn.
+When the next turn-end arm finds an identity-matched watcher still healthy, it surfaces an unpresented main-owned row immediately instead of following that cycle, so an in-progress slower check cannot delay the row.
 The bounded turn-end guard enforces recovery at Stop when no watcher is live and no open generation claim is still deciding.
 So a finished, hung, or identity-mismatched claim cannot suppress that recovery ([`turnend-guard.md`](turnend-guard.md#harness-integrations) owns that boundary).
 
@@ -429,6 +431,9 @@ The guard and session-start suites prove that active generation evidence tolerat
 They also prove that a legacy or handoff-phase watcher marker from an absent replacement extension still raises the outage diagnostic.
 
 ### Arm, recovery, triage, and lock suites
+
+`tests/fm-watch-durable-queue.test.sh` covers queue replay without duplication, recovery precedence, later rows and released branch rows during a handling successor, and a row appended after the handling watcher entered slow synchronous reconciliation.
+That blocked-watcher regression proves the turn-end arm returns the pending-row reason while the healthy watcher remains live.
 
 `tests/fm-watch-arm.test.sh` covers:
 
