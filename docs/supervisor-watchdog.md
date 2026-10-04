@@ -12,7 +12,7 @@ Claude's dim rotating empty-composer suggestion is also ignored by the stability
 Herdr cannot atomically check the prompt and send input, so a human keystroke in the final read/send window can still mix with the nudge.
 This is a guarded best-effort safeguard; it is not an input lock.
 The watchdog never clears mixed input or retries a submission, and it verifies a new turn before reporting success.
-Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle queues a `check: supervisor-watchdog` row and uses the configured active alert channels in `config/wedge-alarm`.
+Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle queues a `check: supervisor-watchdog` row and uses the [configured active-alert channels](wedge-alarm.md).
 That alarm sends no input and fires once for each unchanged oldest-row episode, rearming when the oldest row changes or the queue drains.
 
 ## Local launchd setup

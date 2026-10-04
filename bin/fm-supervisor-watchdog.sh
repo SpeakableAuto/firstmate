@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# External, one-shot network-error recovery for a Claude supervisor on Herdr.
+# External, one-shot supervision watchdog for Claude on Herdr.
 # Usage: FM_HOME=/absolute/home fm-supervisor-watchdog.sh tick
 # Required environment (no endpoint discovery or default-session fallback):
 #   FM_SUPERVISOR_TARGET       exact session:pane-id
@@ -23,6 +23,10 @@
 # A changed screen or draft holds the incident and queues a firstmate check.
 # Held/acted incidents rearm after a stable, readable, error-free viewport for
 # IDLE_SECS; the retained action timestamp enforces cross-incident backoff.
+# Independently, a main-owned durable wake older than
+# FM_WATCHDOG_WAKE_AGE_SECS while Claude is idle queues one check and fires the
+# configured active-alert channels once for that unchanged oldest row without
+# typing into the supervisor pane.
 # Only hashes/classifications are logged, never pane text or prompt contents.
 # Unsupported harnesses/backends fail closed; this does not repair dead shells.
 # Residual race: reads and sends are not atomic. A human keystroke in the final
