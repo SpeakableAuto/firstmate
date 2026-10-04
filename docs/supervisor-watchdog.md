@@ -11,12 +11,12 @@ Only the latest output row and current composer/footer region can veto recovery 
 Claude's dim rotating empty-composer suggestion is also ignored by the stability check, while a draft or substantive change during an error holds recovery and queues a `check: supervisor-watchdog` alert for Firstmate.
 Herdr cannot atomically check the prompt and send input, so a human keystroke in the final read/send window can still mix with the nudge.
 This is a guarded best-effort safeguard; it is not an input lock.
-The watchdog never clears mixed input or retries a submission, and it verifies a new turn before reporting success.
+The watchdog never clears mixed input or retries an ambiguous submission, and it verifies a new turn before reporting success.
 Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle or done queues a `check: supervisor-watchdog` row and uses the [configured active-alert channels](wedge-alarm.md).
 That alarm fires once for each unchanged oldest-row episode, rearming when the oldest row changes or the queue drains.
 Because an idle supervisor wakes only on new input, the watchdog then rings it with one short drain line when the prompt stays empty and unchanged for the idle interval, which covers a turn that ended without its Stop hook and so left no watcher running.
 The ring uses the network nudge's guards: native idle or done, no busy footer or usage-limit notice, a dim suggestion counted as empty, fresh checks before typing, and exactly its own line before Enter.
-A confirmed ring repeats after the backoff while the same row stays undelivered; an ambiguous ring holds and alerts until the oldest row changes or the queue drains.
+A confirmed ring repeats after another stable idle interval and the backoff while the same row stays undelivered; an ambiguous ring holds and alerts until the oldest row changes or the queue drains.
 
 ## Local launchd setup
 

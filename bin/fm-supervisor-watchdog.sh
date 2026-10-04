@@ -30,8 +30,9 @@
 # fires the configured active-alert channels once for that unchanged oldest row.
 # If the empty composer then stays semantically unchanged for IDLE_SECS, the
 # watchdog rings the supervisor with one drain line under the same guards as
-# the nudge, re-rings after BACKOFF_SECS while that row stays undelivered, and
-# holds an ambiguous ring until the oldest row changes or the queue drains.
+# the nudge, re-rings after both a new stable idle window and BACKOFF_SECS while
+# that row stays undelivered, and holds an ambiguous ring until the oldest row
+# changes or the queue drains.
 # State: FM_HOME/state/supervisor-watchdog/{queue-alert,queue-nudge.json}.
 # Only hashes/classifications are logged, never pane text or prompt contents.
 # Unsupported harnesses/backends fail closed; this does not repair dead shells.
@@ -202,9 +203,9 @@ watchdog_queue_alert() {
 # nudge: native idle or done, no busy footer or usage-limit notice, a proven
 # empty composer (a dim suggestion is empty) that stays semantically unchanged
 # for IDLE_SECS, fresh checks before typing, and exactly our payload before
-# Enter, with no clear or Enter retry. A confirmed ring re-rings after
-# BACKOFF_SECS while the same row stays undelivered; an ambiguous ring holds
-# until the oldest row changes or the queue drains.
+# Enter, with no clear or Enter retry. A confirmed ring re-rings after another
+# stable idle window and BACKOFF_SECS while the same row stays undelivered; an
+# ambiguous ring holds until the oldest row changes or the queue drains.
 watchdog_queue_save() {
   printf '%s\n' "$QREC" > "$DIR/queue-nudge.json.tmp"
   mv "$DIR/queue-nudge.json.tmp" "$DIR/queue-nudge.json"
