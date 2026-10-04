@@ -1,0 +1,21 @@
+SCENARIO 1: inherited queued row stays suppressed
+watcher_exit=124
+checkpoint: no actionable wake within 2s
+queued_rows_after_watch=1
+
+SCENARIO 2: row appended after successor launch is surfaced and presented
+watcher_output:
+check: pending durable wakes
+queued_rows_before_drain=2
+drain_output:
+1791090368	1	check	inherited	check: inherited delivery
+1791090368	2	check	later	check: later row
+
+SCENARIO 3: branch-held row is replayed after grant release
+initial_main_drain:
+1791090368	2	check	main-owned	check: main-owned row
+watcher_output_after_release:
+check: pending durable wakes
+released_row_drain:
+1791090368	1	check	branch-held	check: branch-held row
+1791090368	2	check	main-owned	check: main-owned row

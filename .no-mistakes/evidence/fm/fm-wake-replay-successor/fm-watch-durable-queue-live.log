@@ -1,0 +1,5 @@
+ok - already queued main wake ends the watcher cycle without a duplicate
+ok - downtime recovery precedes generic queue replay
+ok - handling successor supervises without recursively replaying its queued row
+ok - handling successor replays a row appended after its inherited delivery
+ok - handling successor replays a branch-held row after its grant releases
