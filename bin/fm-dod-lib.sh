@@ -365,7 +365,7 @@ EOF
 Publish each committed checkpoint to the separate remote ref $checkpoint_ref with this command: git push origin HEAD:refs/heads/$checkpoint_ref. This must not move the ship branch, PR branch or default branch.
 Immediately after every push, append the progress note with checkpoint_sha=<pushed full SHA>; this is part of the push handoff, even when the push was made by no-mistakes.
 Name $checkpoint_ref and its exact commit in the progress note, then read that ref back from origin before claiming the checkpoint is transferable.
-At takeover or resume, run \`"$checkpoint_bin" "<worktree>" "<status-file>" "$branch" "$checkpoint_ref"\`; it checks every named branch that exists on origin, so inspect any commits it reports before trusting the note.
+At takeover or resume, run \`"$checkpoint_bin" "<worktree>" "<status-file>" "$mode" "$branch" "$checkpoint_ref"\`; it checks every named branch that exists on origin plus the completed no-mistakes push head when that delivery path is active, so inspect any commits it reports before trusting the note.
 While no-mistakes owns the ship branch, never edit, commit or push that branch; keep reporting the run identifier, gate and reattach command, and update only the separate $checkpoint_ref ref when this checkout already has the checkpoint commit being reported.
 EOF
       printf '%s\n' 'As soon as a PR exists, maintain a "## Status and next step" section in its body with the latest done / next / how to resume note and exact pushed commit, preserving every other section and the no-mistakes attestation.'

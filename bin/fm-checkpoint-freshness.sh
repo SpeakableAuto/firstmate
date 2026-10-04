@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# Compare the latest status checkpoint with the relevant branches on origin.
-# Usage: fm-checkpoint-freshness.sh <worktree> <status-file> <branch> [branch...]
-# A checkpoint line records checkpoint_sha=<full SHA>. Missing branches are
-# ignored, but every branch that exists on origin is checked.
+# Compare the latest status checkpoint with every pushed delivery head.
+# Usage: fm-checkpoint-freshness.sh <worktree> <status-file> <mode> <branch> [branch...]
+# A checkpoint line records checkpoint_sha=<full SHA>. Missing origin branches
+# are ignored. A completed no-mistakes push contributes its pipeline head too.
 set -euo pipefail
 
-if [ "$#" -lt 3 ]; then
-  echo 'usage: fm-checkpoint-freshness.sh <worktree> <status-file> <branch> [branch...]' >&2
+if [ "$#" -lt 4 ]; then
+  echo 'usage: fm-checkpoint-freshness.sh <worktree> <status-file> <mode> <branch> [branch...]' >&2
   exit 2
 fi
-worktree=$1 status_file=$2
-shift 2
+worktree=$1 status_file=$2 mode=$3
+shift 3
 branches=("$@")
-refs=()
+case "$mode" in
+  direct-PR|no-mistakes) ;;
+  *) echo 'invalid delivery mode' >&2; exit 2 ;;
+esac
 for branch in "${branches[@]}"; do
   [[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo 'invalid branch' >&2; exit 2; }
-  refs+=("refs/heads/$branch")
 done
 [ -f "$status_file" ] || { echo 'checkpoint note missing' >&2; exit 1; }
 
@@ -30,20 +32,47 @@ if [ -z "$sha" ]; then
   exit 1
 fi
 
-if ! remote_heads=$(git -C "$worktree" ls-remote --heads origin "${refs[@]}" 2>/dev/null); then
-  echo 'cannot read origin' >&2
-  exit 2
-fi
-fetch_refs=()
+heads=()
+labels=()
 for branch in "${branches[@]}"; do
-  head=$(printf '%s\n' "$remote_heads" | awk -v ref="refs/heads/$branch" '$2 == ref { print $1; exit }')
-  [ -z "$head" ] || fetch_refs+=("refs/heads/$branch")
+  if git -C "$worktree" fetch --no-tags origin "refs/heads/$branch" >/dev/null 2>&1; then
+    head=$(git -C "$worktree" rev-parse --verify 'FETCH_HEAD^{commit}')
+    heads+=("$head")
+    labels+=("origin/$branch")
+    continue
+  fi
+  if ! remote_head=$(git -C "$worktree" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null); then
+    echo 'cannot read origin' >&2
+    exit 2
+  fi
+  if [ -n "$remote_head" ]; then
+    echo "cannot fetch origin/$branch" >&2
+    exit 2
+  fi
 done
-[ "${#fetch_refs[@]}" -gt 0 ] || { echo 'no checked branch exists on origin' >&2; exit 2; }
-if ! git -C "$worktree" fetch --no-tags origin "${fetch_refs[@]}" >/dev/null 2>&1; then
-  echo 'cannot fetch checked branches from origin' >&2
-  exit 2
+
+if [ "$mode" = no-mistakes ]; then
+  command -v no-mistakes >/dev/null 2>&1 || { echo 'cannot read no-mistakes pipeline head' >&2; exit 2; }
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck source=bin/fm-nm-run-lib.sh
+  . "$script_dir/fm-nm-run-lib.sh"
+  if ! pipeline_status=$(fm_nm_run_checked "$worktree" 15 axi status); then
+    echo 'cannot read no-mistakes pipeline head' >&2
+    exit 2
+  fi
+  run_branch=$(fm_nm_strip_quotes "$(fm_nm_field "$pipeline_status" branch)")
+  pipeline_head=$(fm_nm_strip_quotes "$(fm_nm_field "$pipeline_status" head_sha)")
+  [ -n "$pipeline_head" ] || pipeline_head=$(fm_nm_strip_quotes "$(fm_nm_field "$pipeline_status" head)")
+  if [ "$run_branch" = "${branches[0]}" ] \
+     && printf '%s\n' "$pipeline_status" | grep -Eq '^[[:space:]]*push,[[:space:]]*completed,'; then
+    [[ "$pipeline_head" =~ ^[0-9a-fA-F]{40}$ ]] \
+      || { echo 'no-mistakes pushed head is invalid' >&2; exit 2; }
+    heads+=("$pipeline_head")
+    labels+=("no-mistakes/$run_branch")
+  fi
 fi
+
+[ "${#heads[@]}" -gt 0 ] || { echo 'no pushed delivery head is available' >&2; exit 2; }
 if ! git -C "$worktree" cat-file -e "$sha^{commit}" 2>/dev/null; then
   echo "checkpoint SHA $sha is unavailable; cannot determine lag"
   exit 1
@@ -52,23 +81,31 @@ fi
 stale=0
 contained=0
 checked=
-for branch in "${branches[@]}"; do
-  head=$(printf '%s\n' "$remote_heads" | awk -v ref="refs/heads/$branch" '$2 == ref { print $1; exit }')
-  [ -n "$head" ] || continue
-  checked="${checked:+$checked, }origin/$branch"
+index=0
+while [ "$index" -lt "${#heads[@]}" ]; do
+  head=${heads[$index]}
+  label=${labels[$index]}
+  checked="${checked:+$checked, }$label"
+  if [ "$sha" != "$head" ] && ! git -C "$worktree" cat-file -e "$head^{commit}" 2>/dev/null; then
+    echo "checkpoint SHA $sha differs from pushed head $head ($label); the pushed commit is unavailable locally"
+    stale=1
+    index=$((index + 1))
+    continue
+  fi
   if git -C "$worktree" merge-base --is-ancestor "$sha" "$head"; then
     contained=1
     if [ "$sha" != "$head" ]; then
       count=$(git -C "$worktree" rev-list --count "$sha..$head")
-      echo "note lags branch by $count commits (origin/$branch $head)"
+      echo "note lags branch by $count commits ($label $head)"
       git -C "$worktree" log --format='- %h %s' --reverse "$sha..$head"
       stale=1
     fi
   elif ! git -C "$worktree" merge-base --is-ancestor "$head" "$sha"; then
-    echo "checkpoint SHA $sha diverges from origin/$branch ($head)"
+    echo "checkpoint SHA $sha diverges from $label ($head)"
     git -C "$worktree" log --format='- %h %s' --reverse "$sha..$head"
     stale=1
   fi
+  index=$((index + 1))
 done
 [ "$stale" -eq 0 ] || exit 1
 if [ "$contained" -eq 0 ]; then

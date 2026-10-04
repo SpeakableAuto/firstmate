@@ -1429,7 +1429,7 @@ test_checkpoint_handoffs() {
          assert_contains "$text" "Name wip/$id and its exact commit" 'progress note does not name checkpoint ref'
          assert_contains "$text" 'Immediately after every push' 'push handoff does not require a fresh note'
          assert_contains "$text" "$ROOT/bin/fm-checkpoint-freshness.sh" 'resume freshness check does not use the absolute Firstmate code path'
-         assert_contains "$text" "\"fm/$id\" \"wip/$id\"" 'resume freshness check does not compare both pushed refs'
+         assert_contains "$text" "\"$mode\" \"fm/$id\" \"wip/$id\"" 'resume freshness check does not identify its delivery path and both pushed refs'
          assert_contains "$text" 'must not move the ship branch, PR branch or default branch' 'checkpoint push can mutate a delivery branch'
          assert_contains "$text" 'preserving every other section and the no-mistakes attestation' 'missing attestation preservation' ;;
     esac

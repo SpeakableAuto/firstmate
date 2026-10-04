@@ -608,7 +608,7 @@ test_relaunch_appends_the_progress_note_to_the_instructions() {
   assert_grep "## Progress note" "$brief" "the note should be a dated section in the instructions"
   assert_grep "reproduced the crash in parser.go" "$brief" "the note text should reach the replacement"
   assert_grep "$ROOT/bin/fm-checkpoint-freshness.sh" "$brief" "the replacement should use the absolute Firstmate checker path"
-  assert_grep "'fm/rl2' 'wip/rl2'" "$brief" "the replacement should compare the ship and checkpoint refs"
+  assert_grep "'no-mistakes' 'fm/rl2' 'wip/rl2'" "$brief" "the replacement should compare its delivery path, ship ref, and checkpoint ref"
   assert_grep "reproduced the crash in parser.go" "$dir/home/state/rl2.control-relaunch.note" \
     "the note should also be preserved beside the transaction record"
   launch_brief="$dir/home/data/rl2/launch-brief.md"
