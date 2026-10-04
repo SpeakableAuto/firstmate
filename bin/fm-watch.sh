@@ -2684,11 +2684,10 @@ while :; do
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
 
-  # A row queued after the handling turn's drain must reach the next Stop-owned
-  # watcher before slower fleet checks can hold this cycle for minutes.
-  # Recovery takes precedence when the arm reopened an acknowledged episode.
-  resurface_after_downtime
-  if [ "$(fm_wake_main_unpresented_count "$STATE/.main-eligible-rows" "$HANDLING_QUEUE_BASELINE")" -gt 0 ]; then
+  # A handling successor must surface rows added after its inherited baseline
+  # before slower fleet checks can hold this cycle for minutes.
+  if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ] \
+    && [ "$(fm_wake_main_unpresented_count "$STATE/.main-eligible-rows" "$HANDLING_QUEUE_BASELINE")" -gt 0 ]; then
     wake "check: pending durable wakes"
   fi
 
@@ -2746,6 +2745,17 @@ while :; do
   # Then deliver any queued-but-unsurfaced result, including one a runner
   # published while this watcher was between cycles.
   procevent_surface_queued
+
+  # A process-event result carries richer adapter-owned wake context than the
+  # generic recovery reason, so give that owner first refusal.
+  resurface_after_downtime
+
+  # A producer may append directly to the durable queue while this watcher is
+  # already waiting. No new status signature is required for that append, so
+  # surface main-owned rows on the next poll without appending a duplicate row.
+  if [ "$(fm_wake_main_unpresented_count "$STATE/.main-eligible-rows" "$HANDLING_QUEUE_BASELINE")" -gt 0 ]; then
+    wake "check: pending durable wakes"
+  fi
 
   # The existing poll loop also owns the bounded inactive-outcome cadence.
   # This is mechanical and silent unless a durable terminal-outcome obligation

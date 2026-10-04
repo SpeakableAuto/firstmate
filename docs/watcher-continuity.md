@@ -183,7 +183,7 @@ The next Stop then re-arms as before.
 
 The durable wake queue preserves actionable events between a watcher close and the next drain.
 After the downtime-resurface boundary gets first refusal, an active watcher surfaces unpresented main-owned rows in that queue, even when their producer did not change a status signature.
-The watcher checks those rows at the start of each cycle, before slower fleet reconciliation can delay a row queued during the previous handling turn.
+The handling successor checks those rows at the start of each cycle, before slower fleet reconciliation can delay a row queued during the previous handling turn.
 When the next turn-end arm finds an identity-matched watcher still healthy, it surfaces an unpresented main-owned row immediately instead of following that cycle, so an in-progress slower check cannot delay the row.
 The bounded turn-end guard enforces recovery at Stop when no watcher is live and no open generation claim is still deciding.
 So a finished, hung, or identity-mismatched claim cannot suppress that recovery ([`turnend-guard.md`](turnend-guard.md#harness-integrations) owns that boundary).
