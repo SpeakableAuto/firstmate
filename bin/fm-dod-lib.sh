@@ -349,6 +349,7 @@ fm_checkpoint_block() {  # <mode> <task-id> <forge>
 # Progress checkpoints
 At each meaningful step (implementation milestone, validation result, or handoff), append a short progress note to the status file: done / next / how to resume.
 Include the branch, exact commit, relevant validation command and result, remaining work, and any blocker, so another crew on any machine can continue without this chat or a local-only path.
+Record the pushed commit as checkpoint_sha=<full 40-character SHA> in that note, or explicitly say the checkpoint is local and not yet pushed.
 Before validation takes custody, commit each meaningful implementation checkpoint with that same concise resume note in the commit body; never commit secrets or private operational context.
 While no-mistakes owns the branch, report its run identifier, current gate and supported reattach command instead of editing or committing its work.
 EOF
@@ -361,7 +362,9 @@ EOF
     *)
       cat <<EOF
 Publish each committed checkpoint to the separate remote ref $checkpoint_ref with this command: git push origin HEAD:refs/heads/$checkpoint_ref. This must not move the ship branch, PR branch or default branch.
+Immediately after every push, append the progress note with checkpoint_sha=<pushed full SHA>; this is part of the push handoff, even when the push was made by no-mistakes.
 Name $checkpoint_ref and its exact commit in the progress note, then read that ref back from origin before claiming the checkpoint is transferable.
+At takeover or resume, run bin/fm-checkpoint-freshness.sh <worktree> <status-file> <remote-branch> against the ship branch if it exists on origin, otherwise $checkpoint_ref; inspect any commits it reports before trusting the note.
 While no-mistakes owns the ship branch, never edit, commit or push that branch; keep reporting the run identifier, gate and reattach command, and update only the separate $checkpoint_ref ref when this checkout already has the checkpoint commit being reported.
 EOF
       printf '%s\n' 'As soon as a PR exists, maintain a "## Status and next step" section in its body with the latest done / next / how to resume note and exact pushed commit, preserving every other section and the no-mistakes attestation.'

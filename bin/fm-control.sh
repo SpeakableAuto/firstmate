@@ -1018,6 +1018,9 @@ record_note() {
         echo "First, check your instruction inbox: list $STATE/$ID.inbox/*.msg, act on"
         echo "each message in numeric order, then mv each handled file into"
         echo "$STATE/$ID.inbox/handled/. A steer sent before the relaunch survives there."
+        echo "Check checkpoint freshness before relying on the progress note:"
+        echo "bin/fm-checkpoint-freshness.sh '$WT' '$STATE/$ID.status' '<remote-branch>'."
+        echo "Use the ship branch when it exists on origin; otherwise use wip/$ID."
         echo
         printf '%s\n' "$NOTE"
       } >> "$RELAUNCH_BRIEF" \
