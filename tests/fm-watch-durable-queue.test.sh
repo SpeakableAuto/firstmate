@@ -22,7 +22,9 @@ assert_contains "$out" 'check: pending durable wakes' 'pending queue did not wak
 pass 'already queued main wake ends the watcher cycle without a duplicate'
 
 home="$tmp/after-drain-home"
-mkdir -p "$home/state" "$home/config" "$home/data"
+fakebin="$home/fakebin"
+mkdir -p "$home/state" "$home/config" "$home/data" "$fakebin"
+fm_test_track_watcher_state "$home/state"
 printf 'pending:handling:queue-after-drain.1.aaa\n' > "$home/state/.watcher-down"
 chmod 600 "$home/state/.watcher-down"
 append_wake "$home/state" check earlier 'check: earlier row'
@@ -30,30 +32,50 @@ FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" > "$home/drain.out" 2> "$home/drain
   || fail 'the handling turn could not drain its earlier row'
 ack_drain_err "$home/state" "$home/drain.err" \
   || fail 'the handling turn could not acknowledge its earlier row'
-append_wake "$home/state" check later 'check: row queued mid-turn'
-# In the old order, unreadable program input produces another check before the
-# queued row is surfaced.
-mkfifo "$home/data/backlog.md"
-FM_HOME="$home" FM_WATCH_PREDECESSOR_ARM_PID='' FM_WATCH_HANDLING_SUCCESSOR=0 FM_POLL=1 FM_SIGNAL_GRACE=0 \
-  FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-  "$ROOT/bin/fm-watch-arm.sh" > "$home/stop-arm.out" 2>&1 &
-arm_pid=$!
+printf '%s\n' '## In flight' '- [ ] slow-program - Slow program (repo: fixture) (kind: program)' \
+  > "$home/data/backlog.md"
+real_cksum=$(command -v cksum)
+cat > "$fakebin/cksum" <<'SH'
+#!/usr/bin/env bash
+touch "$FM_HOME/state/program-reconcile-blocked"
 i=0
-while kill -0 "$arm_pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+while [ ! -e "$FM_HOME/state/program-reconcile-release" ] \
+  && [ "$i" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ]; do
+  sleep 1
+  i=$((i + 1))
+done
+exec "$FM_REAL_CKSUM" "$@"
+SH
+chmod +x "$fakebin/cksum"
+PATH="$fakebin:$PATH" FM_REAL_CKSUM="$real_cksum" FM_HOME="$home" \
+  FM_WATCH_HANDLING_SUCCESSOR=1 FM_POLL=1 FM_SIGNAL_GRACE=0 \
+  FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+  "$ROOT/bin/fm-watch.sh" > "$home/handling-watcher.out" 2>&1 &
+watcher_pid=$!
+i=0
+while [ ! -e "$home/state/program-reconcile-blocked" ] && [ "$i" -lt 100 ]; do
   sleep 0.1
   i=$((i + 1))
 done
-if kill -0 "$arm_pid" 2>/dev/null; then
-  kill -TERM "$arm_pid" 2>/dev/null || true
-  wait "$arm_pid" 2>/dev/null || true
-  fail 'the Stop-owned arm delayed the row queued after drain/ack'
-fi
-wait "$arm_pid" || fail 'the Stop-owned arm failed after the handling turn'
+[ -e "$home/state/program-reconcile-blocked" ] \
+  || fail 'the handling watcher did not enter its slow synchronous reconciliation call'
+append_wake "$home/state" check later 'check: row queued mid-turn'
+PATH="$fakebin:$PATH" FM_REAL_CKSUM="$real_cksum" FM_HOME="$home" \
+  FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=1 FM_GUARD_GRACE=30 \
+  "$ROOT/bin/fm-watch-arm.sh" > "$home/stop-arm.out" 2>&1 &
+arm_pid=$!
+wait_for_exit "$arm_pid" 30 \
+  || fail 'the Stop-owned arm delayed the post-check row behind the blocked watcher'
 out=$(cat "$home/stop-arm.out")
-assert_contains "$out" 'check: rearm-resurface' 'turn-end watcher delayed the new row behind fleet checks'
+assert_contains "$out" 'check: pending durable wakes' \
+  'turn-end attachment did not surface the row appended after the watcher queue check'
+is_live_non_zombie "$watcher_pid" \
+  || fail 'the slow watcher exited before the turn-end attachment proved the race'
 assert_contains "$(cat "$home/state/.wake-queue")" "$(printf '\tcheck\tlater\t')" \
   'turn-end watcher removed the durable row before the next drain'
-pass 'turn-end watcher delivers a row queued after in-turn drain and acknowledgement before slow checks'
+touch "$home/state/program-reconcile-release"
+wait_for_exit "$watcher_pid" 50 >/dev/null 2>&1 || true
+pass 'turn-end attachment promptly delivers a post-check row while the watcher is blocked'
 
 home="$tmp/recovery-home"
 mkdir -p "$home/state" "$home/config" "$home/data"

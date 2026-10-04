@@ -487,10 +487,16 @@ if [ "$mode" = stop ]; then
 fi
 
 # If a genuinely live+fresh watcher already holds the lock, do not start a second
-# one - attach to that cycle and wait until it ends so the harness notify fires
-# then, not as an immediate empty wake. (--restart skips this: it just stopped
-# this home's watcher and wants a fresh one.)
+# one. A turn-end arm surfaces an unpresented durable row immediately; otherwise
+# it attaches and waits so the harness notify fires when that cycle ends.
+# --restart skips this because it just stopped this home's watcher.
 if [ "$mode" = arm ] && healthy_watcher; then
+  if [ -z "${FM_WATCH_PREDECESSOR_ARM_PID:-}" ] \
+    && [ "$(fm_wake_main_unpresented_count)" -gt 0 ]; then
+    report_attached
+    echo "check: pending durable wakes"
+    exit 0
+  fi
   cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
   cycle_begin "$HEALTHY_PID" attached "$HEALTHY_IDENTITY"
   report_attached
