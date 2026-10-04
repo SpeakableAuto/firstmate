@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the public pacing calculator with fixed windows and percentages.
 set -u
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TOOL="$ROOT/bin/fm-quota-pacing.mjs"
