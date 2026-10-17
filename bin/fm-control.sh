@@ -687,7 +687,7 @@ do_exit() {
     case "$submit_output" in
       *'fm-herdr-submit-stage: preflight-content'*) stage=preflight-content ;;
       *'fm-herdr-submit-stage: literal-send'*) stage=literal-send ;;
-      *'fm-herdr-submit-stage: payload-proof-cleared'*) stage=payload-proof-cleared ;;
+      *'fm-herdr-submit-stage: payload-proof-cleared'*) stage='payload-proof-cleared' ;;
       *'fm-herdr-submit-stage: enter-send-exhausted'*) stage=enter-send-exhausted ;;
     esac
     verdict=${submit_output##*$'\n'}
