@@ -588,7 +588,7 @@ retire_busy_incarnation() {
 # `already-stopped`, `endpoint-gone`, or `stopped`.
 do_exit() {
   local state cmd hazard verdict composer_state cancel absence interrupt_result=not-needed
-  local submit_output stage='' stage_detail=''
+  local submit_output submit_status stage='' stage_detail='' xtrace_enabled=0
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -675,7 +675,14 @@ do_exit() {
   if [ "$BACKEND" = herdr ]; then
     # Herdr's submit adapter emits a fixed stage code on stderr. Consume all
     # transport detail here, since a rejected literal send may echo typed text.
-    submit_output=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>&1) \
+    case $- in *x*) xtrace_enabled=1; set +x ;; esac
+    if submit_output=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>&1); then
+      submit_status=0
+    else
+      submit_status=$?
+    fi
+    [ "$xtrace_enabled" -eq 0 ] || set -x
+    [ "$submit_status" -eq 0 ] \
       || die "the exit command could not be sent to task $ID on $BACKEND (stage: transport)"
     case "$submit_output" in
       *'fm-herdr-submit-stage: preflight-content'*) stage=preflight-content ;;

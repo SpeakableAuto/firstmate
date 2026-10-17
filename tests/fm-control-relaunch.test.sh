@@ -2136,7 +2136,7 @@ case "${1:-} ${2:-}" in
       cat "$D/herdr-agent-registration"
     elif [ -f "$D/herdr-agent-live" ]; then
       # The agent came back with its server. Nothing here is reclaimable.
-      printf '{"result":{"agent":{"agent_status":"idle"}}}\n'
+      printf '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}\n'
     else
       # A pane that comes back holding no agent is the adoptable state.
       printf '{"error":{"code":"agent_not_found"}}\n'
@@ -2161,6 +2161,10 @@ case "${1:-} ${2:-}" in
     # back before deciding what was delivered - exactly as the tmux fake above
     # and tests/fixtures.sh do.
     payload=${4:-}
+    if [ -f "$D/herdr-send-text-fails" ]; then
+      printf 'typed-payload-detail\n' >&2
+      exit 1
+    fi
     case "$payload" in
       ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
     esac
@@ -2169,6 +2173,12 @@ case "${1:-} ${2:-}" in
         printf '%s\n' "$payload" > "$D/launched-command"
         : > "$D/herdr-agent-live" ;;
     esac
+    exit 0 ;;
+  'pane read')
+    printf '%s\n' \
+      '────────────────────────────────────────────────────────────' \
+      '❯ ' \
+      '────────────────────────────────────────────────────────────'
     exit 0 ;;
   'workspace list')
     printf '{"result":{"workspaces":[]}}\n'
@@ -2351,6 +2361,33 @@ test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server() {
   [ "$(meta_field "$dir" rl72 window)" = 'fmlab:%7' ] \
     || fail "exit must leave the recorded endpoint exactly as it found it"
   pass "fm-control exit: a herdr pane that outlived its stopped server is already-stopped, not gone"
+}
+
+test_herdr_exit_xtrace_preserves_the_submit_failure_verdict() {
+  local dir out rc=0
+  herdr_case_or_skip traced-herdr-exit rl78 || {
+    echo "skip - traced herdr exit needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  rm -f "$dir/fake/herdr-stopped"
+  : > "$dir/fake/herdr-agent-live"
+  : > "$dir/fake/herdr-send-text-fails"
+
+  out=$(env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SESSION -u HERDR_SOCKET_PATH \
+    -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID \
+    PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
+    FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 \
+    bash -x "$CONTROL" rl78 exit 2>&1) || rc=$?
+  expect_code 1 "$rc" "a traced Herdr literal-send failure must remain a send failure"$'\n'"$out"
+  assert_contains "$out" "stage: literal-send" \
+    "xtrace must not replace the fixed submit-failure stage with an unconfirmed-delivery error"
+  assert_not_contains "$out" "exit-command=delivered" \
+    "a failed literal send must never be reported as delivered"
+  assert_not_contains "$out" "typed-payload-detail" \
+    "the fixed stage report must not replay transport detail that may contain typed text"
+  pass "fm-control exit: xtrace cannot corrupt Herdr's fixed submit verdict"
 }
 
 test_herdr_rebind_stays_in_the_recorded_session() {
@@ -2607,6 +2644,7 @@ test_reclaim_refuses_an_unreadable_endpoint
 test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
+test_herdr_exit_xtrace_preserves_the_submit_failure_verdict
 test_herdr_rebind_stays_in_the_recorded_session
 test_herdr_reclaim_refuses_an_agent_that_came_back
 test_herdr_reclaim_keeps_the_task_whole

@@ -1430,10 +1430,10 @@ _fm_composer_locate_footer_zone() {  # <plain>
 
 # Claude's slash menu can repeat the composer's own glyph below its closing
 # separator. Accept that lower row as menu furniture only when it names the
-# exact slash command typed in a glyph-proven separated composer, and every
+# typed /exit in a glyph-proven separated composer, and every
 # remaining row has the menu's indented entry or continuation shape.
 _fm_composer_locate_slash_menu_zone() {  # <plain>
-  local plain=$1 typed selected row raw trimmed next
+  local plain=$1 typed row raw trimmed next
   [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] \
     && [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" = 1 ] \
     && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -ge 0 ] \
@@ -1442,12 +1442,10 @@ _fm_composer_locate_slash_menu_zone() {  # <plain>
   fm_composer_normalize_trim_var typed
   case "$typed" in '❯'*) typed=${typed#❯} ;; *) return 1 ;; esac
   fm_composer_normalize_trim_var typed
-  [[ "$typed" =~ ^/[[:alnum:]_-]+$ ]] || return 1
+  [ "$typed" = /exit ] || return 1
   row=$FM_COMPOSER_SCAN_BARE_ROW
   raw=$(_fm_composer_screen_row "$row" "$plain")
-  [[ "$raw" =~ ^[[:space:]]+❯[[:space:]]+(/[[:alnum:]_-]+)[[:space:]]{2,}[^[:space:]] ]] || return 1
-  selected=${BASH_REMATCH[1]}
-  [ "$selected" = "$typed" ] || return 1
+  [[ "$raw" =~ ^[[:space:]]+❯[[:space:]]+/exit[[:space:]]{2,}[^[:space:]] ]] || return 1
   next=$((row + 1))
   while :; do
     raw=$(_fm_composer_screen_row "$next" "$plain")
