@@ -1191,22 +1191,25 @@ ok - live Herdr submit confirm: Claude Code (2.1.283 (Claude Code)) on herdr 0.9
 Measured again on 2026-10-18 against Herdr 0.9.3 and Claude Code 2.1.295 in an isolated named lab session.
 The menu now repeats the composer's own `❯ /exit` glyph row below the closing separator and follows it with indented command descriptions.
 Before correction, content extraction returned `/exit` plus those menu descriptions, the payload proof failed, Ctrl+U cleared the typed command, and no Enter was sent.
-The selector now treats that lower block as menu furniture only when the proven separated composer holds the same slash command and every lower row has the menu's indented shape.
+The selector now treats that lower block as menu furniture only when the proven separated composer holds `/exit`, the repeated lower glyph also names `/exit`, and every lower row has the menu's indented shape.
 The captured viewport regression also checks that a mismatched lower prompt does not get discarded.
 The pane and agent presence reads preserve Herdr's structured not-found errors on stderr while excluding Bash xtrace lines from JSON parsing.
 Every Herdr `send-failed` branch emits a fixed stage code, and `fm-control.sh exit` reports that code without relaying typed text.
+The traced control-plane failure path is pinned by `tests/fm-control-relaunch.test.sh`.
 
 Exact commands and results on `maxs-mac-mini`:
 
 ```sh
 bash tests/fm-composer-lib.test.sh
 bash tests/fm-backend-herdr.test.sh
+bash tests/fm-control-relaunch.test.sh
 FM_HERDR_SUBMIT_CONFIRM_LIVE=1 bash tests/fm-herdr-submit-confirm-live-e2e.test.sh
 ```
 
 ```text
-ok - Claude 2.1.295 slash menu selects the real typed composer and refuses an unproved lower prompt
+ok - Claude 2.1.295 slash menu selects only a proven /exit composer
 ok - Herdr pane and agent reads keep structured stderr errors while discarding Bash xtrace
+ok - fm-control exit: xtrace cannot corrupt Herdr's fixed submit verdict
 ok - live Herdr submit confirm: Claude Code (2.1.295 (Claude Code)) on herdr 0.9.3 proves and submits a typed /exit behind its command popup
 ```
 
