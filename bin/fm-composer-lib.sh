@@ -1428,13 +1428,49 @@ _fm_composer_locate_footer_zone() {  # <plain>
     && [ "$FM_COMPOSER_SCAN_BARE_ROW" -le "$FM_COMPOSER_FOOTER_LAST" ]
 }
 
+# Claude's slash menu can repeat the composer's own glyph below its closing
+# separator. Accept that lower row as menu furniture only when it names the
+# exact slash command typed in a glyph-proven separated composer, and every
+# remaining row has the menu's indented entry or continuation shape.
+_fm_composer_locate_slash_menu_zone() {  # <plain>
+  local plain=$1 typed selected row raw trimmed next
+  [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] \
+    && [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" = 1 ] \
+    && [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -ge 0 ] \
+    && [ "$FM_COMPOSER_SCAN_BARE_ROW" -eq $((FM_COMPOSER_SCAN_PI_CLOSE + 1)) ] || return 1
+  typed=$(_fm_composer_screen_row "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" "$plain")
+  fm_composer_normalize_trim_var typed
+  case "$typed" in '❯'*) typed=${typed#❯} ;; *) return 1 ;; esac
+  fm_composer_normalize_trim_var typed
+  [[ "$typed" =~ ^/[[:alnum:]_-]+$ ]] || return 1
+  row=$FM_COMPOSER_SCAN_BARE_ROW
+  raw=$(_fm_composer_screen_row "$row" "$plain")
+  [[ "$raw" =~ ^[[:space:]]+❯[[:space:]]+(/[[:alnum:]_-]+)[[:space:]]{2,}[^[:space:]] ]] || return 1
+  selected=${BASH_REMATCH[1]}
+  [ "$selected" = "$typed" ] || return 1
+  next=$((row + 1))
+  while :; do
+    raw=$(_fm_composer_screen_row "$next" "$plain")
+    trimmed=$raw
+    fm_composer_normalize_trim_var trimmed
+    [ -n "$trimmed" ] || break
+    [[ "$raw" =~ ^[[:space:]]+/[[:alnum:]_-]+[[:space:]]{2,}[^[:space:]] ]] \
+      || [[ "$raw" =~ ^[[:space:]]{8,}[^[:space:]] ]] || return 1
+    next=$((next + 1))
+  done
+  FM_COMPOSER_FOOTER_AFTER=$FM_COMPOSER_SCAN_PI_CLOSE
+  FM_COMPOSER_FOOTER_GLYPH=$FM_COMPOSER_SCAN_PI_GLYPH_ROW
+  FM_COMPOSER_FOOTER_LAST=$((next - 1))
+}
+
 _fm_composer_select_cursorless() {
   local plain=$1 generic=-1 next boundary raw trimmed glyph bare footer=0
   FM_COMPOSER_SELECTED_KIND=
   FM_COMPOSER_SELECTED_FIRST=-1
   FM_COMPOSER_SELECTED_LAST=-1
   FM_COMPOSER_SELECTED_AMBIG=0
-  if _fm_composer_locate_footer_zone "$plain"; then footer=1; fi
+  if _fm_composer_locate_footer_zone "$plain" \
+     || _fm_composer_locate_slash_menu_zone "$plain"; then footer=1; fi
   if [ "$FM_COMPOSER_SCAN_BOX_BOTTOM" -ge 0 ]; then
     generic=$FM_COMPOSER_SCAN_BOX_BOTTOM
     FM_COMPOSER_SELECTED_KIND=box
