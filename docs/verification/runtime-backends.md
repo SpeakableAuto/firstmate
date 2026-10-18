@@ -1370,7 +1370,7 @@ Observed guarantee: one exact home-local, journal-correlated, one-tab and one-pa
 The cleanup suites passed again on 2026-10-19 on macOS arm64, Bash 3.2.57 and Herdr 0.9.3 protocol 22.
 Refresh this evidence with the guarded lab helper and `bin/fm-test-run.sh tests/fm-herdr-session-cleanup.test.sh tests/fm-herdr-session-cleanup-e2e.test.sh`.
 The portable regression counted exactly 8 and 16 journal validations for inventories of 8 and 16 metadata-backed workers, respectively, with only the initial workspace-list call and no cleanup locks.
-It also rejected journal ambiguity, changed identity, changed version 2 bindings and metadata appearing after indexing, and avoided journal reads for an ordinary-workspace-only inventory.
+It also rejected journal ambiguity, changed identity, changed version 2 bindings and metadata appearing after indexing.
 The real restored-shell test reported:
 
 ```text

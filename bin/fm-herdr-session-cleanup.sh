@@ -353,8 +353,6 @@ fm_herdr_session_cleanup() {
     fm_herdr_cleanup_warn "session '$session' workspace discovery was unreadable; preserving every candidate"
     return 0
   }
-  # Ordinary workspaces alone need no journal discovery pass.
-  case "$candidates" in *'└ '*' · p:'*) ;; *) return 0 ;; esac
   index=$(fm_herdr_cleanup_journal_index "$session" "$home_real") || return 0
   candidates=$(fm_herdr_cleanup_index_candidates "$index" "$candidates") || return 0
   while IFS=$'\t' read -r workspace title record; do

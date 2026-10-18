@@ -333,10 +333,6 @@ reset_fixture; : > "$FIXTURE_DIR/focus-refuse"; assert_preserved "focus refusal"
     [ "$(cat "$API_LOG")" = 'test workspace list' ] || fail "recorded workers needed extra backend probes"
     [ ! -s "$CLOSE_LOG" ] || fail "recorded workers were closed"
   done
-  : > "$PARSE_LOG"
-  printf '[{"workspace_id":"w1","label":"firstmate"}]' > "$FIXTURE_DIR/inventory.json"
-  fm_herdr_session_cleanup >/dev/null 2>&1
-  [ ! -s "$PARSE_LOG" ] || fail "ordinary workspaces triggered a journal scan"
   pass "discovery validates each journal once as inventory doubles; recorded workers take no locks"
 ) || exit 1
 
