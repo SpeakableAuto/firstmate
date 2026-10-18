@@ -588,6 +588,7 @@ retire_busy_incarnation() {
 # `already-stopped`, `endpoint-gone`, or `stopped`.
 do_exit() {
   local state cmd hazard verdict composer_state cancel absence interrupt_result=not-needed
+  local submit_output submit_status stage='' stage_detail='' xtrace_enabled=0
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -671,10 +672,32 @@ do_exit() {
   # authoritative proof is the agent-state wait below. The retried Enter still
   # matters, because a slash command opens a completion popup on some TUIs that
   # swallows the first Enter.
-  verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
+  if [ "$BACKEND" = herdr ]; then
+    # Herdr's submit adapter emits a fixed stage code on stderr. Consume all
+    # transport detail here, since a rejected literal send may echo typed text.
+    case $- in *x*) xtrace_enabled=1; set +x ;; esac
+    if submit_output=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>&1); then
+      submit_status=0
+    else
+      submit_status=$?
+    fi
+    [ "$xtrace_enabled" -eq 0 ] || set -x
+    [ "$submit_status" -eq 0 ] \
+      || die "the exit command could not be sent to task $ID on $BACKEND (stage: transport)"
+    case "$submit_output" in
+      *'fm-herdr-submit-stage: preflight-content'*) stage=preflight-content ;;
+      *'fm-herdr-submit-stage: literal-send'*) stage=literal-send ;;
+      *'fm-herdr-submit-stage: payload-proof-cleared'*) stage='payload-proof-cleared' ;;
+      *'fm-herdr-submit-stage: enter-send-exhausted'*) stage=enter-send-exhausted ;;
+    esac
+    verdict=${submit_output##*$'\n'}
+    stage_detail=" (stage: ${stage:-unknown})"
+  else
+    verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
+      || die "the exit command could not be sent to task $ID on $BACKEND"
+  fi
   [ "$verdict" != send-failed ] \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
+    || die "the exit command could not be sent to task $ID on $BACKEND$stage_detail"
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
     die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
   }

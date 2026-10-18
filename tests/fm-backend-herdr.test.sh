@@ -467,6 +467,51 @@ test_recovery_grade_read_widens_only_at_its_own_boundary() {
   pass "herdr recovery-grade read: a stopped server means missing there, and nowhere else"
 }
 
+test_structured_pane_and_agent_reads_ignore_xtrace_but_keep_json_errors() {
+  local out trace="$TMP_ROOT/structured-read-xtrace.err"
+  out=$(/bin/bash -x -c '
+    . "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_cli() {
+      case "$2 $3" in
+        "pane get") printf "%s\n" "{\"result\":{\"pane\":{\"pane_id\":\"w1:p2\"}}}" ;;
+        "agent get") printf "%s\n" "{\"result\":{\"agent\":{\"agent_status\":\"idle\"}}}" ;;
+      esac
+    }
+    fm_backend_herdr_pane_process_state() { printf agent; }
+    printf "%s %s" "$(fm_backend_herdr_pane_presence_state fmtest w1:p2)" "$(fm_backend_herdr_pane_agent_state fmtest w1:p2)"
+  ' "$ROOT" 2>"$trace")
+  [ "$out" = 'present live' ] || fail "xtrace must not corrupt successful pane or agent JSON, got '$out'"
+  [ -s "$trace" ] || fail "the xtrace test did not produce trace output"
+  out=$(/bin/bash -x -c '
+    . "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_cli() {
+      case "$2 $3" in
+        "pane get") printf "%s\n" "{\"error\":{\"code\":\"pane_not_found\"}}" >&2; return 1 ;;
+      esac
+    }
+    fm_backend_herdr_pane_presence_state fmtest w1:p2
+  ' "$ROOT" 2>"$trace")
+  [ "$out" = dead ] || fail "a structured pane-not-found error on stderr must remain distinguishable, got '$out'"
+  out=$(/bin/bash -x -c '
+    . "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_cli() {
+      case "$2 $3" in
+        "pane get") printf "%s\n" "{\"result\":{\"pane\":{\"pane_id\":\"w1:p2\"}}}" ;;
+        "agent get") printf "%s\n" "{\"error\":{\"code\":\"agent_not_found\"}}" >&2; return 1 ;;
+      esac
+    }
+    fm_backend_herdr_pane_agent_state fmtest w1:p2
+  ' "$ROOT" 2>"$trace")
+  [ "$out" = no-agent ] || fail "a structured agent-not-found error on stderr must remain distinguishable, got '$out'"
+  out=$(/bin/bash -x -c '
+    . "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_cli() { printf "not-json\n"; }
+    printf "%s %s" "$(fm_backend_herdr_pane_presence_state fmtest w1:p2)" "$(fm_backend_herdr_pane_agent_state fmtest w1:p2)"
+  ' "$ROOT" 2>"$trace")
+  [ "$out" = 'unknown unknown' ] || fail "malformed pane JSON must remain unknown under xtrace, got '$out'"
+  pass "Herdr pane and agent reads keep structured stderr errors while discarding Bash xtrace"
+}
+
 # --- stale agent registration over a shell-only pane (issue #4115) -----------
 #
 # Herdr keeps a Pi registration (`agent get` -> agent=pi, agent_status=idle)
@@ -4473,8 +4518,10 @@ test_send_text_submit_preexisting_working_does_not_confirm_failed_enter() {
   herdr_submit_identity_prefix "$resp" codex
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 1 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 1 0.01 0.01' "$ROOT" 2>"$dir/stage.err" )
   [ "$out" = send-failed ] || fail "a failed Enter must not be reported as queued delivery merely because native status is working, got '$out'"
+  [ "$(cat "$dir/stage.err")" = 'fm-herdr-submit-stage: enter-send-exhausted' ] \
+    || fail "failed Enter should name its send-failed stage"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 1 ] || fail "send_text_submit should attempt the configured number of Enters, made $enter_count attempt(s)"
   pass "fm_backend_herdr_send_text_submit: a failed Enter cannot borrow preexisting working state as queued-delivery proof"
@@ -4723,8 +4770,10 @@ test_send_text_submit_send_failed() {
   herdr_submit_identity_prefix "$resp" codex
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "x" 2 0.01 0.01' "$ROOT" 2>"$dir/stage.err" )
   [ "$out" = send-failed ] || fail "send_text_submit should report send-failed when the literal send itself fails, got '$out'"
+  [ "$(cat "$dir/stage.err")" = 'fm-herdr-submit-stage: literal-send' ] \
+    || fail "literal send failure should name its stage"
   pass "fm_backend_herdr_send_text_submit: reports 'send-failed' when the literal send-text call itself errors"
 }
 
@@ -4841,8 +4890,10 @@ test_send_text_submit_refuses_enter_when_composer_holds_only_the_suffix() {
   printf '{"result":{"agent":{"agent_status":"working"}}}\n' > "$resp/7.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" 2>"$dir/stage.err" )
   [ "$out" = send-failed ] || fail "a composer holding only the payload suffix, cleared back to empty, should report send-failed, got '$out'"
+  [ "$(cat "$dir/stage.err")" = 'fm-herdr-submit-stage: payload-proof-cleared' ] \
+    || fail "cleared proof failure should name its stage"
   enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
   [ "$enter_count" -eq 0 ] || fail "a suffix must not be submitted, sent $enter_count Enter(s)"
   [ "$(herdr_ctrl_u_count "$log")" -eq 1 ] || fail "the refused suffix should be cleared with one Ctrl+U, sent $(herdr_ctrl_u_count "$log")"
@@ -4924,8 +4975,10 @@ test_send_text_submit_claude_refuses_to_type_into_a_nonempty_composer() {
   printf '  \xe2\x9d\xaf %s\n' "${text: -480}" > "$resp/2.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" )
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "$1" 3 0.01 0.01' "$ROOT" "$text" 2>"$dir/stage.err" )
   [ "$out" = send-failed ] || fail "a Claude composer that already holds text should refuse the send, got '$out'"
+  [ "$(cat "$dir/stage.err")" = 'fm-herdr-submit-stage: preflight-content' ] \
+    || fail "nonempty preflight should name its stage"
   [ "$(grep -c $'\x1f''pane'$'\x1f''send-text' "$log")" -eq 0 ] || fail "nothing may be typed after a leftover tail, or Enter would submit tail plus message"
   [ "$(grep -c $'\x1f''pane'$'\x1f''send-keys' "$log")" -eq 0 ] || fail "a refused pre-send composer must not receive any key"
   pass "fm_backend_herdr_send_text_submit: a Claude composer holding leftover text is refused before anything is typed"
@@ -5754,6 +5807,7 @@ test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
 test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one
 test_recovery_grade_read_widens_only_at_its_own_boundary
+test_structured_pane_and_agent_reads_ignore_xtrace_but_keep_json_errors
 test_stale_registration_over_a_shell_only_pane_is_agent_free
 test_stale_registration_ignores_status_and_reads_the_process
 test_pane_agent_session_ref_reports_a_resumable_reference_with_its_agent

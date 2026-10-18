@@ -2039,9 +2039,21 @@ fm_backend_herdr_container_ensure() {  # <cwd-for-a-fresh-workspace> [<launcher-
 
 # fm_backend_herdr_pane_presence_state: classify one exact pane get response
 # as dead|present|unknown from its JSON body, never from process exit status.
+fm_backend_herdr_structured_read() {  # <session> <herdr read arguments...>
+  local response
+  # Herdr sends successful JSON to stdout and not-found JSON to stderr.
+  # Bash -x also writes to stderr, so accept exactly one complete JSON body
+  # from the combined stream instead of handing trace lines to jq as JSON.
+  response=$(fm_backend_herdr_cli "$@" 2>&1) || true
+  printf '%s\n' "$response" | jq -Rsc '
+    [split("\n")[] | fromjson? | select(type == "object" and (has("result") or has("error")))]
+    | if length == 1 then .[0] else empty end
+  ' 2>/dev/null
+}
+
 fm_backend_herdr_pane_presence_state() {  # <session> <pane_id>
   local session=$1 pane_id=$2 out code pid
-  out=$(fm_backend_herdr_cli "$session" pane get "$pane_id" 2>&1)
+  out=$(fm_backend_herdr_structured_read "$session" pane get "$pane_id")
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
   if [ -n "$code" ]; then
     [ "$code" = "pane_not_found" ] && printf 'dead' || printf 'unknown'
@@ -2268,7 +2280,7 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
     esac
     return 0
   fi
-  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
+  out=$(fm_backend_herdr_structured_read "$session" agent get "$pane_id")
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
   if [ -n "$code" ]; then
     [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
@@ -3435,15 +3447,18 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   if [ "${identity%%$'\t'*}" = claude ]; then
     proof=1
     content=$(fm_backend_herdr_composer_content "$target") \
-      || { printf 'send-failed'; return 0; }
-    [ -z "${content//[$' \t\r\n\v\f']/}" ] || { printf 'send-failed'; return 0; }
+      || { printf 'fm-herdr-submit-stage: preflight-content\n' >&2; printf 'send-failed'; return 0; }
+    [ -z "${content//[$' \t\r\n\v\f']/}" ] \
+      || { printf 'fm-herdr-submit-stage: preflight-content\n' >&2; printf 'send-failed'; return 0; }
   fi
-  fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
+  fm_backend_herdr_send_literal "$target" "$text" \
+    || { printf 'fm-herdr-submit-stage: literal-send\n' >&2; printf 'send-failed'; return 0; }
   sleep "$settle"
   if [ "$proof" = 1 ]; then
     if ! content=$(fm_backend_herdr_composer_content "$target") \
       || ! fm_backend_herdr_composer_payload_shown "$text" "$content"; then
       if fm_backend_herdr_composer_clear "$target" "$text"; then
+        printf 'fm-herdr-submit-stage: payload-proof-cleared\n' >&2
         printf 'send-failed'
       else
         printf 'unknown'
@@ -3467,6 +3482,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     elif [ "$enter_sent" -eq 0 ]; then
       i=$((i + 1))
       if [ "$i" -ge "$retries" ]; then
+        printf 'fm-herdr-submit-stage: enter-send-exhausted\n' >&2
         printf 'send-failed'
         return 0
       fi
@@ -3505,6 +3521,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
     i=$((i + 1))
     if [ "$i" -ge "$retries" ]; then
       if [ "$enter_sent" -eq 0 ]; then
+        printf 'fm-herdr-submit-stage: enter-send-exhausted\n' >&2
         printf 'send-failed'
       else
         fm_composer_queued_enter_verdict "$verdict" \

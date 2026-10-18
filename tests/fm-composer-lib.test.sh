@@ -219,6 +219,24 @@ test_matrix_claude_arrow_statusline_footer() {
   pass "matrix: claude's arrow statusline is footer furniture, not a composer holding text"
 }
 
+test_claude_2295_slash_menu_keeps_the_typed_composer_selected() {
+  # Captured after typing /exit in an isolated Claude Code 2.1.295 Herdr pane.
+  # The menu repeats ❯ below the real composer's closing separator.
+  local screen nonexit out caps
+  caps=$'styled=1\ncursor=0\nidentity=0'
+  screen=$'────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯'"$NBSP"$'/exit\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ❯ /exit                       Exit the CLI\n    /context                    Visualize current context usage as a colored grid\n    /usage-credits              Configure usage credits or request them from your admin when you hit a limit'
+  out=$(fm_composer_extract_selected_content "$caps" "$screen")
+  [ "$out" = /exit ] || fail "the slash menu must not be included in extracted draft text, got '$out'"
+  assert_screen "Claude 2.1.295 typed /exit above its slash menu" pending "$caps" "$screen"
+  nonexit=${screen//\/exit/\/compact}
+  out=$(fm_composer_extract_selected_content "$caps" "$nonexit")
+  [ "$out" != /compact ] || fail "a matching non-exit slash command must not activate the Claude exit compatibility path"
+  screen=${screen/❯ \/exit                       Exit the CLI/❯ \/other                      Other command}
+  out=$(fm_composer_extract_selected_content "$caps" "$screen")
+  [ "$out" != /exit ] || fail "a mismatched lower prompt must not be discarded as the slash menu"
+  pass "Claude 2.1.295 slash menu selects only a proven /exit composer"
+}
+
 test_composer_footer_demotion_needs_a_proven_pair() {
   # The demotion is bounded in three directions, and each bound is a case
   # where a lower glyph row IS the live composer.
@@ -969,6 +987,7 @@ test_idle_placeholder_case_mode_is_explicit
 test_real_text_is_pending
 test_matrix_claude_bare_nbsp_row
 test_matrix_claude_arrow_statusline_footer
+test_claude_2295_slash_menu_keeps_the_typed_composer_selected
 test_composer_footer_demotion_needs_a_proven_pair
 test_composer_footer_zone_is_shape_independent
 test_composer_footer_zone_refuses_rather_than_allows
