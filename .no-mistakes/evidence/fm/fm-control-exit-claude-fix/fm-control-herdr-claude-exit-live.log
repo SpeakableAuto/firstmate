@@ -1,0 +1,7 @@
+versions: herdr 0.9.3 | 2.1.295 (Claude Code)
+lab-session: fm-lab-fm-control-exit-15467-31782
+before-agent-state: idle
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-control-exit-live.IhyCtD/home
+stopped exitlive harness=claude backend=herdr endpoint=fm-lab-fm-control-exit-15467-31782:w1:p1 worktree=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M561Z76Y2ZMQTDPPXWGVHSTZ
+after-agent-registration: absent
+endpoint-preserved: w1:p1

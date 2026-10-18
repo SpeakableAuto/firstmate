@@ -1,0 +1,8 @@
+versions: herdr 0.9.3 | 2.1.295 (Claude Code)
+lab-session: fm-lab-fm-control-xtrac-74641-29158
+bash-x-exit-code: 0
+xtrace-emitted: yes
+control-outcome: stopped traced harness=claude backend=herdr
+misreported-unconfirmed-delivery: no
+agent-after-traced-exit: absent
+endpoint-preserved: w1:p1

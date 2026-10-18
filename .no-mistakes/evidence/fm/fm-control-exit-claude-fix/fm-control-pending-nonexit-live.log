@@ -1,0 +1,10 @@
+versions: herdr 0.9.3 | 2.1.295 (Claude Code)
+lab-session: fm-lab-fm-control-nonex-43046-10015
+typed-nonexit-command: /compact
+refusal-exit-code: 1
+refusal: fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-control-nonexit-live.IkPESK/home
+error: task nonexit's composer visibly holds pending text; refusing to type the /exit exit command because it would concatenate onto that text. Clear or submit the pending text, then retry 'exit'
+agent-after-refusal: idle
+clean-exit: fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-control-nonexit-live.IkPESK/home
+stopped nonexit harness=claude backend=herdr endpoint=fm-lab-fm-control-nonex-43046-10015:w1:p1 worktree=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M561Z76Y2ZMQTDPPXWGVHSTZ
+agent-after-clean-exit: absent
