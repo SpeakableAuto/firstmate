@@ -1367,6 +1367,22 @@ HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
 
 Observed guarantee: one exact home-local, journal-correlated, one-tab and one-pane childless idle shell was closed after restoration while the exact non-target focus and default fleet session remained unchanged, and a repeat run was a no-op.
 
+The cleanup suites passed again on 2026-10-19 on macOS arm64, Bash 3.2.57 and Herdr 0.9.3 protocol 22.
+Refresh this evidence with the guarded lab helper and `bin/fm-test-run.sh tests/fm-herdr-session-cleanup.test.sh tests/fm-herdr-session-cleanup-e2e.test.sh`.
+The portable regression counted exactly 8 and 16 journal validations for inventories of 8 and 16 metadata-backed workers, respectively, with only the initial workspace-list call and no cleanup locks.
+It also rejected journal ambiguity, changed identity, changed version 2 bindings and metadata appearing after indexing, and avoided journal reads for an ordinary-workspace-only inventory.
+The real restored-shell test reported:
+
+```text
+ok - real named lab cleanup closes only the exact stale pane and preserves exact focus
+ok - real named lab cleanup is idempotent and leaves the default fleet session to the teardown tripwire
+evidence: herdr=0.9.3 protocol=22 default-session-tripwire=armed
+```
+
+Both suites exited 0 and guarded teardown verified the unchanged default session.
+These checks are harness-independent: the changed path uses journals, metadata and Herdr topology, with no vendor-rendered harness signal.
+Other runtime adapters are unchanged; every primary harness reaches this same cleanup through locked session start.
+
 ### Workspace-removal focus safety
 
 The focus-flash regression ran on 2026-08-05 against both Herdr 0.7.5 protocol 17 and Herdr 0.8.0 protocol 19 on macOS aarch64, with the 0.7.5 run using the pinned upstream release binary first on `PATH`:
