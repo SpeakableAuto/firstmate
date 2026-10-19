@@ -439,6 +439,7 @@ The watcher's liveness tick applies the identical rule during ordinary supervisi
 - The remote endpoint is probed read-only once per cadence.
 - Only a positive `dead` or `missing` reply relaunches through that command.
 - An unreachable transport or inconclusive state is left untouched rather than replaced locally.
+- The same cadence also reads the route's steering-inbox health, so a live mate that stops processing its inbox still wakes firstmate (see [Swallowed doorbells](#swallowed-doorbells)).
 
 ### Inventory reconcile for markerless routes
 
@@ -487,6 +488,10 @@ When deduplication finds that the worker already moved the matching record into 
 The remote host runs no doorbell re-ring ladder of its own.
 A swallowed doorbell for an ordinary reply-bearing request surfaces through the parent's pending-reply recovery and escalation.
 Its recovery request rings the doorbell again when it is enqueued.
+
+Independently of reply tracking, the parent watcher raises a `check: remote secondmate inbox stalled` wake when the route's oldest unprocessed inbox record, fire-and-forget included, is too old or consecutive doorbells keep failing, even while the endpoint still reads as alive.
+The alarm only notifies: it never relaunches the mate, and an unreachable inbox probe is unknown rather than healthy.
+[`bin/fm-secondmate-liveness-lib.sh`](../bin/fm-secondmate-liveness-lib.sh) owns the thresholds and reminder cadence, and [`bin/fm-task-inbox-lib.sh`](../bin/fm-task-inbox-lib.sh) owns the remote snapshot and failure streak.
 
 ### Remote reads
 
