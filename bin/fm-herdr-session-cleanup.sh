@@ -15,6 +15,9 @@
 # one pane, absent task metadata, no registered agent, and a process proof that
 # the pane contains only one idle recognized shell with no child process. A
 # version 2 journal must also bind the exact workspace, tab, and pane.
+# Discovery validates journals once into an invocation-local index and skips
+# metadata-backed matches before locks or backend probes. The index is never
+# mutation authority: fresh journal scans still guard closure and retirement.
 # Topology is first checked from one locked API snapshot, then every mutation
 # prerequisite is immediately rechecked before the existing exact-pane
 # focus-preserving close helper is called.
@@ -62,8 +65,8 @@ fm_herdr_cleanup_home_identity() {
   (cd "$FM_HOME" 2>/dev/null && pwd -P)
 }
 
-fm_herdr_cleanup_journal_matches() { # <title> <session> <home-real>
-  local title=$1 session=$2 home_real=$3 journal id expected journal_home
+fm_herdr_cleanup_journal_index() { # <session> <home-real>
+  local session=$1 home_real=$2 journal id expected journal_home
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
   for journal in "$STATE"/*"$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX"; do
     [ -f "$journal" ] && [ ! -L "$journal" ] || continue
@@ -78,9 +81,36 @@ fm_herdr_cleanup_journal_matches() { # <title> <session> <home-real>
     fi
     expected=$(fm_backend_herdr_projection_workspace_label \
       "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID")
-    [ "$expected" = "$title" ] || continue
-    printf '%s\t%s\t%s\n' "$journal" "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$expected" "$journal" "$id" "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID" \
+      "$FM_BACKEND_HERDR_JOURNAL_VERSION" \
+      "${FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID:--}" \
+      "${FM_BACKEND_HERDR_JOURNAL_TAB_ID:--}" \
+      "${FM_BACKEND_HERDR_JOURNAL_PANE_ID:--}"
   done
+}
+
+fm_herdr_cleanup_journal_matches() { # <title> <session> <home-real>
+  # Deliberately fresh: mutation checks must notice new ambiguous journals too.
+  local index
+  index=$(fm_herdr_cleanup_journal_index "$2" "$3") || return 1
+  printf '%s\n' "$index" | FM_HERDR_CLEANUP_TITLE="$1" awk -F '\t' '
+    $1 == ENVIRON["FM_HERDR_CLEANUP_TITLE"] { print $2 "\t" $3 "\t" $4 }
+  '
+}
+
+fm_herdr_cleanup_index_candidates() { # <index> <workspace-title-tsv>
+  # A blank separator also handles an empty index. Keep every duplicate in the
+  # count rather than overwriting it with the last matching journal.
+  printf '%s\n\n%s\n' "$1" "$2" | awk -F '\t' '
+    NF == 0 { candidates = 1; next }
+    !candidates {
+      count[$1]++
+      record[$1] = $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8
+      next
+    }
+    count[$2] == 1 { print $0 "\t" record[$2] }
+  '
 }
 
 fm_herdr_cleanup_unique_match() { # <title> <session> <home-real>
@@ -199,21 +229,20 @@ fm_herdr_cleanup_revalidate() { # <session> <workspace> <tab> <pane> <title> <to
   [ "${focus#*$'\t'}" != "$tab" ]
 }
 
-fm_herdr_cleanup_one() { # <session> <workspace> <title> <home-real>
+fm_herdr_cleanup_one() { # <session> <workspace> <title> <home-real> <indexed-record>
   local session=$1 workspace=$2 title=$3 home_real=$4 token journal id task_lock
   local version bound_workspace bound_tab bound_pane presentation_lock snapshot
   local tab pane state close_status=0
   token=$(fm_herdr_cleanup_title_token "$title") || return 0
-  if ! fm_herdr_cleanup_unique_match "$title" "$session" "$home_real"; then
-    return 0
-  fi
-  journal=$FM_HERDR_CLEANUP_JOURNAL
-  id=$FM_HERDR_CLEANUP_ID
-  version=$FM_HERDR_CLEANUP_VERSION
-  bound_workspace=$FM_HERDR_CLEANUP_BOUND_WORKSPACE
-  bound_tab=$FM_HERDR_CLEANUP_BOUND_TAB
-  bound_pane=$FM_HERDR_CLEANUP_BOUND_PANE
-  [ "$FM_HERDR_CLEANUP_TOKEN" = "$token" ] || return 0
+  local indexed_token
+  IFS=$'\t' read -r journal id indexed_token version bound_workspace bound_tab bound_pane <<< "$5"
+  [ "$indexed_token" = "$token" ] || return 0
+  [ "$bound_workspace" != - ] || bound_workspace=
+  [ "$bound_tab" != - ] || bound_tab=
+  [ "$bound_pane" != - ] || bound_pane=
+  # A stale index can only make this skip conservative. Absence is checked
+  # again under the locks and during immediate mutation revalidation.
+  [ ! -e "$STATE/$id.meta" ] && [ ! -L "$STATE/$id.meta" ] || return 0
   task_lock="$STATE/.spawn-$id.lock"
   if ! fm_lock_try_acquire "$task_lock"; then
     fm_herdr_cleanup_warn "$id skipped because its task lock is busy"
@@ -293,7 +322,7 @@ fm_herdr_cleanup_one() { # <session> <workspace> <title> <home-real>
 }
 
 fm_herdr_session_cleanup() {
-  local session home_real list candidates workspace title journal found=0
+  local session home_real list candidates workspace title journal index record found=0
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 0
   for journal in "$STATE"/*"$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX"; do
     if [ -f "$journal" ] && [ ! -L "$journal" ]; then
@@ -324,9 +353,11 @@ fm_herdr_session_cleanup() {
     fm_herdr_cleanup_warn "session '$session' workspace discovery was unreadable; preserving every candidate"
     return 0
   }
-  while IFS=$'\t' read -r workspace title; do
+  index=$(fm_herdr_cleanup_journal_index "$session" "$home_real") || return 0
+  candidates=$(fm_herdr_cleanup_index_candidates "$index" "$candidates") || return 0
+  while IFS=$'\t' read -r workspace title record; do
     [ -n "$workspace" ] && [ -n "$title" ] || continue
-    fm_herdr_cleanup_one "$session" "$workspace" "$title" "$home_real"
+    fm_herdr_cleanup_one "$session" "$workspace" "$title" "$home_real" "$record"
   done <<< "$candidates"
   return 0
 }

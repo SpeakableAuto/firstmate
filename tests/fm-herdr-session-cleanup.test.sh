@@ -88,6 +88,10 @@ fixture_workspace_json() {
 }
 
 fixture_workspaces() {
+  if [ -f "$FIXTURE_DIR/inventory.json" ]; then
+    cat "$FIXTURE_DIR/inventory.json"
+    return
+  fi
   local title tabs panes
   title=$(cat "$FIXTURE_DIR/title")
   tabs=$(cat "$FIXTURE_DIR/tabs")
@@ -170,6 +174,10 @@ fm_backend_herdr_cli() {
       ;;
     "api snapshot")
       : > "$FIXTURE_DIR/snapshotted"
+      if [ -e "$FIXTURE_DIR/add-journal" ]; then write_v1 fm-task; fi
+      if [ -e "$FIXTURE_DIR/change-journal" ]; then write_v1 "$ID" ZyXwVuTsRqPoNmLkJiHgFe; fi
+      if [ -e "$FIXTURE_DIR/change-binding" ]; then write_v2 "$FM_HOME" w9 "$TAB" "$PANE"; fi
+      if [ -e "$FIXTURE_DIR/add-metadata" ]; then : > "$FM_STATE_OVERRIDE/$ID.meta"; fi
       printf '{"result":{"snapshot":{"focused_workspace_id":"w1","focused_tab_id":"%s","focused_pane_id":"w1:p1","workspaces":' "$(cat "$FIXTURE_DIR/active-tab")"
       fixture_workspaces
       printf ',"tabs":'; fixture_tabs
@@ -270,6 +278,7 @@ fm_herdr_session_cleanup >/dev/null 2>&1
 [ "$(wc -l < "$CLOSE_LOG" | tr -d ' ')" = 1 ] || fail "matching v2 cleanup did not close exactly once"
 pass "v2 cleanup requires and accepts the exact journal endpoint binding"
 reset_fixture; : > "$FM_STATE_OVERRIDE/$ID.meta"; assert_preserved "current task metadata"
+reset_fixture; ln -s "$TMP_ROOT/missing-meta" "$FM_STATE_OVERRIDE/$ID.meta"; assert_preserved "dangling metadata symlink"
 reset_fixture; printf 'live\n' > "$FIXTURE_DIR/agent"; assert_preserved "registered agent"
 reset_fixture; printf 'unknown\n' > "$FIXTURE_DIR/agent"; assert_preserved "unknown agent"
 reset_fixture; printf '2\n' > "$FIXTURE_DIR/tabs"; printf '2\n' > "$FIXTURE_DIR/panes"; assert_preserved "multiple tabs"
@@ -279,8 +288,55 @@ reset_fixture; : > "$FIXTURE_DIR/process-unsafe"; assert_preserved "child proces
 reset_fixture; : > "$FIXTURE_DIR/error-api-snapshot"; assert_preserved "unreadable snapshot"
 reset_fixture; : > "$FIXTURE_DIR/error-workspace-get"; assert_preserved "unreadable topology check"
 reset_fixture; : > "$FIXTURE_DIR/race"; assert_preserved "revalidation race"
+reset_fixture; : > "$FIXTURE_DIR/add-journal"; assert_preserved "journal ambiguity appeared after indexing"
+reset_fixture; : > "$FIXTURE_DIR/change-journal"; assert_preserved "journal identity changed after indexing"
+reset_fixture; write_v2 "$FM_HOME" "$WS" "$TAB" "$PANE"; : > "$FIXTURE_DIR/change-binding"; assert_preserved "v2 binding changed after indexing"
+reset_fixture; : > "$FIXTURE_DIR/add-metadata"; assert_preserved "metadata appeared after indexing"
 reset_fixture; printf '%s\n' "$TAB" > "$FIXTURE_DIR/active-tab"; assert_preserved "active target"
 reset_fixture; : > "$FIXTURE_DIR/focus-refuse"; assert_preserved "focus refusal"
+
+# Count actual validator calls, including calls made from command substitutions.
+# This instruments the library interface without replacing its validation.
+(
+  eval "$(declare -f fm_backend_herdr_projection_journal_snapshot | sed '1s/fm_backend_herdr_projection_journal_snapshot/real_journal_snapshot/')"
+  eval "$(declare -f fm_backend_herdr_cli | sed '1s/fm_backend_herdr_cli/fixture_cli/')"
+  PARSE_LOG="$TMP_ROOT/journal-parses"
+  API_LOG="$TMP_ROOT/discovery-api"
+  # shellcheck disable=SC2329 # Invoked indirectly by sourced cleanup functions.
+  fm_backend_herdr_projection_journal_snapshot() {
+    printf '%s\n' "$1" >> "$PARSE_LOG"
+    real_journal_snapshot "$@"
+  }
+  # shellcheck disable=SC2329 # Invoked indirectly by sourced cleanup functions.
+  fm_backend_herdr_cli() {
+    printf '%s\n' "$*" >> "$API_LOG"
+    fixture_cli "$@"
+  }
+  for size in 8 16; do
+    reset_fixture
+    rm -f "$FM_STATE_OVERRIDE/$ID.herdr-presentation"
+    : > "$PARSE_LOG"
+    : > "$API_LOG"
+    printf '[' > "$FIXTURE_DIR/inventory.json"
+    for ((n = 1; n <= size; n++)); do
+      ID=recorded-$n
+      TOKEN=$(printf 'Token%017d' "$n")
+      TITLE="└ $ID · p:$TOKEN"
+      write_v2 "$FM_HOME" "w$n" "w$n:t1" "w$n:p1"
+      : > "$FM_STATE_OVERRIDE/$ID.meta"
+      [ "$n" -eq 1 ] || printf ',' >> "$FIXTURE_DIR/inventory.json"
+      printf '{"workspace_id":"w%s","label":"%s"}' "$n" "$TITLE" >> "$FIXTURE_DIR/inventory.json"
+    done
+    printf ']' >> "$FIXTURE_DIR/inventory.json"
+    fm_herdr_session_cleanup >/dev/null 2>&1
+    parses=$(wc -l < "$PARSE_LOG" | tr -d ' ')
+    [ "$parses" -eq "$size" ] || fail "$size journals required $parses validation passes"
+    [ ! -s "$LOCK_LOG" ] || fail "recorded workers acquired cleanup locks"
+    [ "$(cat "$API_LOG")" = 'test workspace list' ] || fail "recorded workers needed extra backend probes"
+    [ ! -s "$CLOSE_LOG" ] || fail "recorded workers were closed"
+  done
+  pass "discovery validates each journal once as inventory doubles; recorded workers take no locks"
+) || exit 1
 
 INTEGRATION_ROOT="$TMP_ROOT/bootstrap-integration"
 mkdir -p "$INTEGRATION_ROOT/home/state" "$INTEGRATION_ROOT/home/data" "$INTEGRATION_ROOT/home/config"

@@ -400,6 +400,8 @@ It runs only when the current home has at least one ordinary presentation journa
 A primary never recursively sweeps a secondmate home.
 
 Discovery starts from the exact current `└ <concise-task> · p:<22-character-token>` grammar, but a title or token alone is never mutation authority.
+Discovery validates the home-local journals once per invocation and joins workspace titles against that in-memory index, rejecting ambiguous journal matches and skipping metadata-backed workers before locks or backend probes.
+Mutation checks still rescan the journals freshly before closure and retirement, so the discovery index cannot authorize either action.
 A candidate must meet all of these conditions:
 
 - The title must contain exactly one token occurrence across the named-session snapshot.
