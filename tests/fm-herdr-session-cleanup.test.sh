@@ -302,10 +302,12 @@ reset_fixture; : > "$FIXTURE_DIR/focus-refuse"; assert_preserved "focus refusal"
   eval "$(declare -f fm_backend_herdr_cli | sed '1s/fm_backend_herdr_cli/fixture_cli/')"
   PARSE_LOG="$TMP_ROOT/journal-parses"
   API_LOG="$TMP_ROOT/discovery-api"
+  # shellcheck disable=SC2329 # Invoked indirectly by sourced cleanup functions.
   fm_backend_herdr_projection_journal_snapshot() {
     printf '%s\n' "$1" >> "$PARSE_LOG"
     real_journal_snapshot "$@"
   }
+  # shellcheck disable=SC2329 # Invoked indirectly by sourced cleanup functions.
   fm_backend_herdr_cli() {
     printf '%s\n' "$*" >> "$API_LOG"
     fixture_cli "$@"
