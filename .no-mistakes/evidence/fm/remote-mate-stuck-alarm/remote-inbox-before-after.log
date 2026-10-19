@@ -1,0 +1,4 @@
+Regression reproduction at base commit 9278622525fce90f788151ca2e50daffab1667d7
+exit=1 output=error: unknown command: inbox-health
+Fixed target commit 96720e84e975ee52599e5831d7a42851327aaba2
+exit=0 output=remote-inbox-v1 1 0

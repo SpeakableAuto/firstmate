@@ -1,0 +1,7 @@
+Scenario: remote inbox health state transitions through the shipped CLI
+stale-unprocessed: remote-inbox-v1 902 0
+after-one-failed-doorbell: remote-inbox-v1 902 1
+after-protected-draft-skip: remote-inbox-v1 902 1
+after-two-consecutive-failures: remote-inbox-v1 902 2
+after-successful-doorbell: remote-inbox-v1 902 0
+after-acknowledgement: remote-inbox-v1 0 0
