@@ -345,12 +345,15 @@ fm_task_inbox_is_fire_and_forget() {  # <record-path>
 }
 
 # Oldest escalation-tracked unhandled record, or fail when none is due.
-fm_task_inbox_oldest_unhandled() {  # <state-dir> <task-id>
+# The remote health probe opts in to include fire-and-forget acknowledgements.
+fm_task_inbox_oldest_unhandled() {  # <state-dir> <task-id> [include-fire-and-forget]
   local dir best='' best_n=0 f n
   dir=$(fm_task_inbox_dir "$1" "$2")
   for f in "$dir"/*.msg; do
     [ -e "$f" ] || continue
-    fm_task_inbox_is_fire_and_forget "$f" && continue
+    if [ "${3:-}" != include-fire-and-forget ]; then
+      fm_task_inbox_is_fire_and_forget "$f" && continue
+    fi
     n=$(fm_task_inbox_seq_of "${f##*/}") || continue
     if [ -z "$best" ] || [ "$n" -lt "$best_n" ]; then
       best=$f
@@ -453,4 +456,47 @@ fm_task_inbox_record_escalated() {  # <state-dir> <task-id> <record-path>
     [ -d "$dir" ] || return 0
     return 1
   fi
+}
+
+# Remote parent-route alarms include fire-and-forget messages: acknowledgement
+# still proves the secondmate read them even when no routed reply is expected.
+# .remote-ring-failures contains <record-basename> <consecutive-failures>.
+# Serialize rings with .remote-ring.lock at the caller, so completion order is
+# the attempt order. Success resets the streak; a protected draft (rc=1) is
+# not a delivery attempt and leaves it unchanged. Acknowledging the streak's
+# last record makes it obsolete. Readers never count handled records.
+fm_task_inbox_remote_ring_result() {  # <state-dir> <task-id> <record-path> <ring-rc>
+  local dir rec=$3 rc=$4 previous='' count=0
+  dir=$(fm_task_inbox_dir "$1" "$2")
+  case "$rc" in 0|2|3) ;; *) return 0 ;; esac
+  if [ -f "$dir/.remote-ring-failures" ]; then
+    read -r previous count < "$dir/.remote-ring-failures" || true
+  fi
+  case "$count" in ''|*[!0-9]*) count=0 ;; esac
+  fm_task_inbox_seq_of "$previous" >/dev/null 2>&1 || count=0
+  [ -f "$dir/$previous" ] || count=0
+  if [ "$rc" = 0 ]; then count=0; else count=$((count + 1)); fi
+  printf '%s %s\n' "${rec##*/}" "$count" > "$dir/.remote-ring-failures.tmp" \
+    && mv -f "$dir/.remote-ring-failures.tmp" "$dir/.remote-ring-failures"
+}
+
+# Read-only, one-line numeric snapshot for the parent's bounded watcher probe:
+# remote-inbox-v1 <oldest-age-seconds> <consecutive-failures>.
+# Empty inboxes report zeroes. Age uses this host's clock, avoiding host skew.
+fm_task_inbox_remote_health() {  # <state-dir> <task-id>
+  local dir rec mtime age=0 previous='' count=0
+  dir=$(fm_task_inbox_dir "$1" "$2")
+  rec=$(fm_task_inbox_oldest_unhandled "$1" "$2" include-fire-and-forget) || rec=''
+  if [ -n "$rec" ]; then
+    mtime=$(fm_path_mtime "$rec") || mtime=$(date +%s)
+    age=$(( $(date +%s) - mtime ))
+    [ "$age" -ge 0 ] || age=0
+    if [ -f "$dir/.remote-ring-failures" ]; then
+      read -r previous count < "$dir/.remote-ring-failures" || true
+      case "$count" in ''|*[!0-9]*) count=0 ;; esac
+      fm_task_inbox_seq_of "$previous" >/dev/null 2>&1 || count=0
+      [ -f "$dir/$previous" ] || count=0
+    fi
+  fi
+  printf 'remote-inbox-v1 %s %s\n' "$age" "$count"
 }
