@@ -884,6 +884,72 @@ SH
   pass "watcher: remote inbox age and failed doorbells wake despite live endpoint, probes and reminders rate-limited"
 }
 
+# Exercise the real teardown entry point without provisioning a remote runtime.
+# Only external retirement/reply-source boundaries are simulated; queue and
+# marker cleanup run against the real libraries in a disposable home.
+test_remote_teardown_retires_inbox_alarm() {
+  local dir code home state rc stub
+  dir="$TMP_ROOT/remote-retirement"
+  code="$dir/code"; home="$dir/home"; state="$home/state"
+  mkdir -p "$code" "$state" "$home/data" "$home/config"
+  cp -R "$ROOT/bin" "$code/bin"
+  git -C "$code" init -q
+  git -C "$code" add bin
+  for stub in fm-guard.sh fm-home-summary-refresh.sh; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$code/bin/$stub"
+  done
+  cat > "$code/bin/fm-procevent-remote-reply.sh" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  retire-finalize-locked) exit "${FM_TEST_FINALIZE_RC:-0}" ;;
+  *) exit 0 ;;
+esac
+SH
+  cat > "$dir/ssh" <<'SH'
+#!/usr/bin/env bash
+args=$(printf '%s' "${!#}" | base64 -d | tr '\0' '\n')
+printf '%s\n' "$args" > "$FM_TEST_RETIRE_LOG"
+exit "${FM_TEST_RETIRE_RC:-0}"
+SH
+  chmod +x "$dir/ssh"
+  fm_write_meta "$state/mate.meta" window=remote:mate kind=secondmate \
+    harness=codex remote_host=lab-host remote_root=/remote/root home=/remote/mate
+  printf '%s\n' '- mate - Remote mate (host: lab-host; root: /remote/root; home: /remote/mate; scope: remote work; projects: alpha; added 2026-01-01)' \
+    > "$home/data/secondmates.md"
+  printf 'old alarm\n' > "$state/.secondmate-inbox-alert-mate"
+  printf 'sibling alarm\n' > "$state/.secondmate-inbox-alert-mate-other"
+  printf '1\t1\tcheck\tsecondmate-inbox-stalled-mate\tretired payload\n' > "$state/.wake-queue"
+  printf '2\t1\tcheck\tsecondmate-inbox-stalled-mate-other\tsibling payload\n3\t1\tcheck\tunrelated\tkeep\n4\t1\theartbeat\tsecondmate-inbox-stalled-mate\tkeep kind\n' \
+    > "$dir/expected-queue"
+  cat "$dir/expected-queue" >> "$state/.wake-queue"
+  cp "$state/.wake-queue" "$dir/original-queue"
+  # Transport refusal and post-retirement finalization refusal both retain
+  # the alarm for reconciliation; neither may silently retire the route.
+  for rc in transport finalize success; do
+    if FM_HOME="$home" FM_ROOT_OVERRIDE="$code" FM_STATE_OVERRIDE="$state" \
+      FM_DATA_OVERRIDE="$home/data" FM_CONFIG_OVERRIDE="$home/config" \
+      FM_SSH_BIN="$dir/ssh" FM_TEST_RETIRE_LOG="$dir/retire.log" \
+      FM_TEST_RETIRE_RC="$([ "$rc" = transport ] && echo 255 || echo 0)" \
+      FM_TEST_FINALIZE_RC="$([ "$rc" = finalize ] && echo 1 || echo 0)" \
+      bash "$code/bin/fm-teardown.sh" mate > "$dir/teardown.out" 2>&1; then
+      [ "$rc" = success ] || fail "$rc refusal allowed remote teardown"
+    else
+      [ "$rc" != success ] || fail "remote teardown failed: $(cat "$dir/teardown.out")"
+      assert_present "$state/.secondmate-inbox-alert-mate" "$rc refusal removed alarm marker"
+      assert_present "$state/mate.meta" "$rc refusal removed route metadata"
+      cmp -s "$dir/original-queue" "$state/.wake-queue" || fail "$rc refusal changed pending wakes"
+    fi
+  done
+  assert_contains "$(cat "$dir/retire.log")" 'retire' "remote retirement was not attempted"
+  assert_absent "$state/mate.meta" "successful retirement left metadata"
+  assert_absent "$state/.secondmate-inbox-alert-mate" "successful retirement left old alarm throttle"
+  assert_present "$state/.secondmate-inbox-alert-mate-other" "retirement removed sibling throttle"
+  cmp -s "$dir/expected-queue" "$state/.wake-queue" || fail "retirement did not prune only the exact alarm check"
+  pass "remote teardown: failed retirement retains alarm; success removes exact check and throttle, preserving siblings"
+}
+
+test_remote_teardown_retires_inbox_alarm
+
 test_watcher_remote_inbox_alarm
 
 test_remote_inbox_health
