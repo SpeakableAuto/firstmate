@@ -2446,3 +2446,24 @@ ok - healthy ticks after rearming preserve the existing state file
 
 These portable fixtures exercise the classifier and state machine, not the live Claude renderer.
 The watchdog pins the operator-selected Claude version and refuses version drift; that pin is not a claim that the stub test verified Claude itself.
+
+
+## Remote parent-route inbox alarm
+
+Verified on 2026-10-19 with macOS 26.4.1 and GNU Bash 3.2.57(1)-release (arm64-apple-darwin25).
+The alarm's protocol and thresholds are owned by `bin/fm-task-inbox-lib.sh` and `bin/fm-secondmate-liveness-lib.sh`; `bin/fm-watch.sh` owns check-wake delivery.
+These portable tests exercise the real watcher and remote command entry point with fixture inboxes and a recorded SSH transport, without contacting a live host or driving Herdr lifecycle.
+The signal reads durable records and transport return codes, so it does not depend on a primary harness's rendered output or runtime backend inventory.
+Live remote-host deployment is not established by this fixture evidence.
+
+```sh
+bash bin/fm-test-run.sh tests/fm-task-inbox.test.sh tests/fm-secondmate-liveness.test.sh
+```
+
+Observed alarm-specific output:
+
+```text
+ok - watcher: remote inbox age and failed doorbells wake despite live endpoint, probes and reminders rate-limited
+ok - remote inbox: age includes fire-and-forget, consecutive failures reset on success and acknowledgement
+ok - remote inbox probe: fifteen-minute and two-doorbell thresholds, strict snapshot parsing, one call
+```

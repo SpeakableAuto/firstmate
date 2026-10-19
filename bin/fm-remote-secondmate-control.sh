@@ -5,6 +5,7 @@
 #   fm-remote-secondmate-control.sh launch <id> <harness> <model|-> <effort|-> herdr [traceparent]
 #   fm-remote-secondmate-control.sh relaunch <id> <harness> <model|default|-> <effort|default|->
 #   fm-remote-secondmate-control.sh state <id>
+#   fm-remote-secondmate-control.sh inbox-health <id>
 #   fm-remote-secondmate-control.sh route <id>
 #   fm-remote-secondmate-control.sh send <id> <message> [fire-and-forget]
 #   fm-remote-secondmate-control.sh key <id> <key>
@@ -303,7 +304,17 @@ cmd_send() {
       return 0
       ;;
   esac
+  # Serialize attempts and their results, independently of inbox allocation.
+  local ring_lock="$CONTROL_STATE/$id.inbox/.remote-ring.lock"
+  if ! fm_task_inbox_lock_acquire "$ring_lock"; then
+    printf 'notice: remote inbox ring lock unavailable; steer remains durably recorded at %s\n' "$rec" >&2
+    return 0
+  fi
   fm_task_inbox_ring "$REMOTE_ENDPOINT_BACKEND" "$REMOTE_ENDPOINT_TARGET" "$rec" "fm-$id" || ring_rc=$?
+  if ! fm_task_inbox_remote_ring_result "$CONTROL_STATE" "$id" "$rec" "$ring_rc"; then
+    printf 'notice: remote inbox doorbell result could not be recorded; steer remains durably recorded at %s\n' "$rec" >&2
+  fi
+  fm_lock_release "$ring_lock"
   case "$ring_rc" in
     1) printf 'notice: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at %s\n' "$rec" >&2 ;;
     2) printf 'notice: doorbell did not reach %s; the steer is durably recorded at %s\n' "$REMOTE_ENDPOINT_TARGET" "$rec" >&2 ;;
@@ -438,6 +449,9 @@ case "${1:-}" in
   launch) shift; [ "$#" -ge 5 ] && [ "$#" -le 6 ] || usage; cmd_launch "$@" ;;
   relaunch) shift; [ "$#" -eq 4 ] || usage; cmd_relaunch "$@" ;;
   state) shift; [ "$#" -eq 1 ] || usage; validate_id "$1"; validate_home "$1"; state_value "$1" ;;
+  inbox-health) shift; [ "$#" -eq 1 ] || usage
+    validate_id "$1"; validate_home "$1"
+    fm_task_inbox_remote_health "$CONTROL_STATE" "$1" ;;
   route) shift; [ "$#" -eq 1 ] || usage; cmd_route "$1" ;;
   send) shift; [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage; cmd_send "$@" ;;
   key) shift; [ "$#" -eq 2 ] || usage; cmd_key "$@" ;;

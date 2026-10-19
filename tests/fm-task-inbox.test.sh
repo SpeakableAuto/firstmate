@@ -798,6 +798,96 @@ test_watcher_dead_pane_ignores_stale_busy_state() {
   pass "watcher: dead-pane recovery overrides stale busy state"
 }
 
+# Remote alarms must include fire-and-forget messages and must forget failures
+# once the record was handled, even if a later message is already waiting.
+test_remote_inbox_health() {
+  local remote_home="$TMP_ROOT/remote-health/home" state rec rec2 out
+  state="$remote_home/state/parent-route"
+  mkdir -p "$state" "$remote_home/bin"
+  printf 'mate\n' > "$remote_home/.fm-secondmate-home"
+  touch "$remote_home/AGENTS.md"
+  out=$(inbox_lib "$state" fm_task_inbox_remote_health "$state" mate)
+  [ "$out" = 'remote-inbox-v1 0 0' ] || fail "empty remote inbox: $out"
+  rec=$(inbox_lib "$state" fm_task_inbox_write "$state" mate first fire-and-forget)
+  age_path "$rec"
+  out=$(FM_HOME="$remote_home" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-remote-secondmate-control.sh" inbox-health mate)
+  [ "$(printf '%s' "$out" | cut -d ' ' -f2)" -gt 900 ] || fail "fire-and-forget age was hidden: $out"
+  inbox_lib "$state" fm_task_inbox_remote_ring_result "$state" mate "$rec" 2
+  inbox_lib "$state" fm_task_inbox_remote_ring_result "$state" mate "$rec" 1
+  out=$(inbox_lib "$state" fm_task_inbox_remote_health "$state" mate)
+  case "$out" in *' 1') ;; *) fail "protected draft changed failure streak: $out" ;; esac
+  inbox_lib "$state" fm_task_inbox_remote_ring_result "$state" mate "$rec" 2
+  out=$(inbox_lib "$state" fm_task_inbox_remote_health "$state" mate)
+  case "$out" in *' 2') ;; *) fail "two failures not recorded: $out" ;; esac
+  inbox_lib "$state" fm_task_inbox_remote_ring_result "$state" mate "$rec" 0
+  out=$(inbox_lib "$state" fm_task_inbox_remote_health "$state" mate)
+  case "$out" in *' 0') ;; *) fail "successful ring did not reset failures: $out" ;; esac
+  inbox_lib "$state" fm_task_inbox_remote_ring_result "$state" mate "$rec" 3
+  rec2=$(inbox_lib "$state" fm_task_inbox_write "$state" mate second)
+  mv "$rec" "$state/mate.inbox/handled/"
+  inbox_lib "$state" fm_task_inbox_remote_ring_result "$state" mate "$rec2" 2
+  out=$(inbox_lib "$state" fm_task_inbox_remote_health "$state" mate)
+  case "$out" in *' 1') ;; *) fail "acknowledged failure leaked into next message: $out" ;; esac
+  mv "$rec2" "$state/mate.inbox/handled/"
+  out=$(inbox_lib "$state" fm_task_inbox_remote_health "$state" mate)
+  [ "$out" = 'remote-inbox-v1 0 0' ] || fail "handled remote inbox stayed unhealthy: $out"
+  pass "remote inbox: age includes fire-and-forget, consecutive failures reset on success and acknowledgement"
+}
+
+# Drive the real watcher and transport with an SSH recorder; no remote endpoint
+# or Herdr lifecycle is touched. A live agent can still have a stalled inbox.
+test_watcher_remote_inbox_alarm() {
+  local dir state out pid i health calls
+  for health in '901 0' '5 2'; do
+    dir=$(setup_watch_case "remote-alarm-${health/ /-}")
+    state="$dir/state"; out="$dir/watch.out"
+    mkdir -p "$dir/data" "$dir/config"
+    fm_write_meta "$state/t1.meta" window=remote:t1 kind=secondmate harness=codex remote_host=lab-host home=/remote/mate
+    printf '%s\n' '- t1 - Remote mate (host: lab-host; root: /remote/root; home: /remote/mate; scope: remote work; projects: alpha; added 2026-01-01)' > "$dir/data/secondmates.md"
+    cat > "$dir/fakebin/ssh" <<'SH'
+#!/usr/bin/env bash
+args=$(printf '%s' "${!#}" | base64 -d | tr '\0' '\n')
+printf '%s\n' "$args" >> "$FM_TEST_SSH_LOG"
+case "$args" in
+  *inbox-health*) printf 'remote-inbox-v1 %s\n' "$FM_TEST_HEALTH" ;;
+  *) printf 'alive\n' ;;
+esac
+SH
+    chmod +x "$dir/fakebin/ssh"
+    touch "$state/.secondmate-inbox-alert-t1"
+    watch_bg "$state" "$dir/fakebin" "$out" \
+      FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" \
+      FM_SSH_BIN="$dir/fakebin/ssh" FM_TEST_SSH_LOG="$dir/ssh.log" FM_TEST_HEALTH="$health"
+    pid=$!
+    i=0
+    while [ "$i" -lt 150 ]; do
+      [ "$(grep -c '^state$' "$dir/ssh.log" 2>/dev/null || true)" = 1 ] && break
+      sleep 0.1; i=$((i + 1))
+    done
+    [ "$i" -lt 150 ] || { kill "$pid" 2>/dev/null; fail "remote liveness was never probed"; }
+    sleep 2
+    kill -0 "$pid" 2>/dev/null || fail "recent inbox alert was not rate-limited: $(cat "$out")"
+    calls=$(grep -c '^inbox-health$' "$dir/ssh.log")
+    [ "$calls" = 1 ] || { kill "$pid" 2>/dev/null; fail "inbox probe ignored cadence: $calls calls"; }
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+    age_path "$state/.secondmate-inbox-alert-t1"
+    age_path "$state/.secondmate-liveness-tick"
+    watch_bg "$state" "$dir/fakebin" "$out" \
+      FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" \
+      FM_SSH_BIN="$dir/fakebin/ssh" FM_TEST_SSH_LOG="$dir/ssh.log" FM_TEST_HEALTH="$health"
+    pid=$!
+    wait_watcher_gone "$pid" 200 || { kill "$pid" 2>/dev/null; fail "remote inbox did not wake watcher"; }
+    assert_contains "$(cat "$out")" 'check: remote secondmate inbox stalled: mate=t1 host=lab-host' "missing remote inbox wake"
+    [ "$(grep -c 'remote secondmate inbox stalled' "$state/.wake-queue")" = 1 ] || fail "alarm was not queued exactly once"
+    assert_absent "$state/.secondmate-relaunch-t1" "inbox alarm attempted recovery"
+  done
+  pass "watcher: remote inbox age and failed doorbells wake despite live endpoint, probes and reminders rate-limited"
+}
+
+test_watcher_remote_inbox_alarm
+
+test_remote_inbox_health
+
 test_write_is_durable_and_exact
 test_doorbell_is_a_shell_noop
 test_doorbell_rejects_terminal_controls

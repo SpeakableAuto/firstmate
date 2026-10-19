@@ -722,4 +722,49 @@ test_sweep_refuses_relaunch_on_ledger_errors
 test_remote_poll_probe_maps_states
 test_remote_poll_probe_unreachable_preserves_route
 
+
+test_remote_inbox_probe_thresholds() {
+  local w out input expected rc
+  w=$(make_remote_probe_world inbox-probe)
+  while read -r input expected; do
+    # shellcheck disable=SC2016 # Positional params expand in the child shell.
+    out=$(env STATE="$w/home/state" FM_HOME="$w/home" FM_DATA_OVERRIDE="$w/home/data" \
+      FM_SSH_BIN="$w/fakebin/ssh" FM_FAKE_SSH_LOG="$w/ssh.log" \
+      FM_FAKE_REMOTE_REPLY="remote-inbox-v1 ${input/:/ }" bash -c '
+        . "$0/bin/fm-secondmate-liveness-lib.sh"
+        fm_secondmate_inbox_probe "$1" rsm1
+        printf "%s|%s\n" "$FM_SM_INBOX_STATUS" "$FM_SM_INBOX_REASON"
+      ' "$ROOT" "$w/home/state/rsm1.meta")
+    case "$out" in "$expected|"*) ;; *) fail "remote inbox $input expected $expected: $out" ;; esac
+    if [ "$expected" = stalled ]; then
+      assert_contains "$out" 'host=lab-host' "alarm lacks host"
+      assert_contains "$out" "oldest-unprocessed=${input%:*}s" "alarm lacks oldest message age"
+      assert_contains "$out" 'secondmate recovery' "alarm lacks recovery suggestion"
+    fi
+  done <<'CASES'
+0:0 healthy
+900:1 healthy
+901:0 stalled
+0:2 stalled
+5:3 stalled
+bad:2 unknown
+01:2 unknown
+CASES
+  [ "$(wc -l < "$w/ssh.log" | tr -d ' ')" = 7 ] || fail "inbox probes did not use exactly one SSH call each"
+  for rc in 1 255; do
+    # shellcheck disable=SC2016 # Child shell reads the production globals.
+    out=$(env FM_HOME="$w/home" FM_DATA_OVERRIDE="$w/home/data" \
+      FM_SSH_BIN="$w/fakebin/ssh" FM_FAKE_SSH_LOG="$w/ssh.log" \
+      FM_FAKE_REMOTE_RC="$rc" FM_FAKE_REMOTE_REPLY='remote-inbox-v1 901 2' bash -c '
+        . "$0/bin/fm-secondmate-liveness-lib.sh"
+        fm_secondmate_inbox_probe "$1" rsm1
+        printf "%s|%s\n" "$FM_SM_INBOX_STATUS" "$FM_SM_INBOX_REASON"
+      ' "$ROOT" "$w/home/state/rsm1.meta")
+    [ "$out" = 'unknown|' ] || fail "failed transport accepted a health snapshot: $out"
+  done
+  pass "remote inbox probe: fifteen-minute and two-doorbell thresholds, strict snapshot parsing, one call"
+}
+
+test_remote_inbox_probe_thresholds
+
 echo "# all fm-secondmate-liveness tests passed"

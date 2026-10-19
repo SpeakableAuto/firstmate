@@ -40,6 +40,8 @@
 #   poll - watcher tick: remote routes take one read-only state probe per
 #          check; repair still happens, but inside fm-spawn's launch gate only
 #          when a relaunch is actually authorized.
+# State probes have a ten-second wall bound so a responsive SSH server cannot
+# hide a wedged remote command and stall the watcher indefinitely.
 #
 # Concurrency: fm_secondmate_liveness_lock serializes probe+kill+relaunch per
 # task across the bootstrap sweep and the watcher tick, so a concurrent
@@ -155,7 +157,7 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
         return 0
       fi
     fi
-    if out=$("$FM_SM_LIVE_LIB_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh state "$id" < /dev/null 2>/dev/null); then
+    if out=$(fm_run_timed 10 "$FM_SM_LIVE_LIB_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh state "$id" < /dev/null 2>/dev/null); then
       remote_rc=0
     else
       remote_rc=$?
@@ -302,4 +304,27 @@ fm_secondmate_liveness_relaunch() {  # <meta> <id> [timeout-secs]
     fm_secondmate_liveness_ledger_add "$id" failed || true
   fi
   return "$rc"
+}
+
+# Read-only parent-route inbox alarm. Called on the watcher's existing liveness
+# cadence, spending at most one extra SSH call bounded to ten seconds per mate.
+# The remote inbox helper owns the snapshot format and counts; this helper owns
+# the 15-minute age / two failed doorbells thresholds. An unavailable or older
+# remote is unknown, never healthy and never permission to restart an agent.
+# Callers queue a check wake before marking notification time, repeat unresolved
+# alarms at most every 15 minutes, and clear that marker on a healthy snapshot.
+fm_secondmate_inbox_probe() {  # <meta> <id>
+  local meta=$1 id=$2 host out age failures
+  FM_SM_INBOX_STATUS=unknown FM_SM_INBOX_REASON=''
+  host=$(fm_meta_get "$meta" remote_host)
+  [ -n "$host" ] || { FM_SM_INBOX_STATUS=local; return 0; }
+  out=$(fm_run_timed 10 "$FM_SM_LIVE_LIB_DIR/fm-on.sh" "$id" \
+    fm-remote-secondmate-control.sh inbox-health "$id" < /dev/null 2>/dev/null) || return 0
+  [[ "$out" =~ ^remote-inbox-v1\ (0|[1-9][0-9]{0,9})\ (0|[1-9][0-9]{0,9})$ ]] || return 0
+  age=${BASH_REMATCH[1]} failures=${BASH_REMATCH[2]}
+  FM_SM_INBOX_STATUS=healthy
+  if [ "$age" -gt 900 ] || [ "$failures" -ge 2 ]; then
+    FM_SM_INBOX_STATUS=stalled
+    FM_SM_INBOX_REASON="check: remote secondmate inbox stalled: mate=$id host=$host oldest-unprocessed=${age}s consecutive-doorbell-failures=$failures; inspect the remote secondmate and its parent-route inbox, then use secondmate recovery if it is stuck"
+  fi
 }

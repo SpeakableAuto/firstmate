@@ -136,6 +136,8 @@
 #                          inbox and a fresh child beacon are not idle proof;
 #                          the foreign queue itself stays read-only, and one
 #                          parent notification covers each no-progress episode
+#   check: remote secondmate inbox stalled: mate=<id> host=<host> ...
+#                          parent-route alarm; see fm-secondmate-liveness-lib.sh
 #   check: secondmate <id> auto-relaunched after <cause> (<where>)
 #                          the liveness tick probed a registered secondmate's
 #                          recorded endpoint, got the recovery-grade `dead` or
@@ -1055,7 +1057,7 @@ secondmate_liveness_tick() {
   [ "$(age_of "$tick_marker")" -ge "$SECONDMATE_LIVENESS_SECS" ] || return 0
   touch "$tick_marker" || return 1
   local now=$(( $(date +%s) )) meta id kind
-  local bound_marker attempts notify_key reason queued err first_reason='' failed=0
+  local bound_marker inbox_marker attempts notify_key reason queued err first_reason='' failed=0
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
     kind=$(fm_meta_get "$meta" kind 2>/dev/null || true)
@@ -1064,6 +1066,26 @@ secondmate_liveness_tick() {
     id=${id%.meta}
     case "$id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
     fm_secondmate_liveness_lock "$id" || continue
+    # Check processing progress even when endpoint liveness remains healthy.
+    fm_secondmate_inbox_probe "$meta" "$id"
+    inbox_marker="$STATE/.secondmate-inbox-alert-$id"
+    case "$FM_SM_INBOX_STATUS" in
+      healthy) rm -f "$inbox_marker" ;;
+      stalled)
+        if [ "$(age_of "$inbox_marker")" -ge 900 ]; then
+          notify_key="secondmate-inbox-stalled-$id"
+          queued=$(fm_wake_queued_keys check)
+          if printf '%s\n' "$queued" | grep -Fx "$notify_key" >/dev/null 2>&1 \
+            || fm_wake_append check "$notify_key" "$FM_SM_INBOX_REASON"; then
+            touch "$inbox_marker"
+            [ -n "$first_reason" ] || first_reason=$FM_SM_INBOX_REASON
+          else
+            failed=1
+          fi
+        fi
+        ;;
+      unknown) triage_log "secondmate $id remote inbox probe unavailable; processing progress unknown" ;;
+    esac
     fm_secondmate_liveness_probe "$meta" "$id" poll
     bound_marker="$STATE/.secondmate-relaunch-bound-$id"
     reason='' notify_key='' err=''
