@@ -189,6 +189,29 @@ test_matrix_claude_bare_nbsp_row() {
   pass "matrix: claude's ❯+NBSP row reads empty on every profile in both locales (#1988)"
 }
 
+test_matrix_claude_titled_rule_live_herdr_capture() {
+  # The last four ANSI rows of an idle Claude pane read through Herdr on
+  # 2026-10-21. Earlier viewport transcript content was omitted from the
+  # fixture; the title, NBSP prompt, rules, and update footer are unmodified.
+  local screen typed unproven false_close redraw
+  screen=$(cat "$ROOT/tests/fixtures/claude-herdr-titled-idle.ansi")
+  assert_screen "live titled Claude composer on herdr" empty "$CAPS_STYLED" "$screen" '' probe-absent
+  assert_screen "live titled Claude composer without identity" empty "$CAPS_STYLED_NOID" "$screen"
+  typed=${screen/"❯$NBSP"/"❯ unfinished draft"}
+  [ "$typed" != "$screen" ] || fail "the live fixture lost its NBSP prompt"
+  assert_screen "draft inside the titled Claude composer" pending "$CAPS_STYLED" "$typed" '' probe-absent
+  unproven=${screen/"❯$NBSP"/"ordinary transcript text"}
+  assert_screen "title and footer without an agent prompt" unknown "$CAPS_STYLED_NOID" "$unproven"
+  false_close=$'────────────────────────\n❯'"$NBSP"$'\n──────────────── Firstmate transcript title ─\n→ live draft'
+  assert_screen "a titled rule cannot close an earlier candidate" pending "$CAPS_STYLED_NOID" "$false_close"
+  redraw=$'────────────────────────\n❯'"$NBSP"$'\n────────────────────────\n──────────────── Firstmate newer composer ─'
+  assert_screen "new titled opener invalidates an older completed pair" unknown "$CAPS_STYLED_NOID" "$redraw"
+  assert_screen "new titled opener invalidates an older pair with Claude identity" unknown "$CAPS_STYLED" "$redraw" '' probe-absent
+  redraw=$'────────────────────────\n❯'"$NBSP"$'\n────────────────────────\n──────────────── Firstmate newer composer ─\n❯ unfinished draft'
+  assert_screen "draft in the unfinished redraw remains pending" pending "$CAPS_STYLED_NOID" "$redraw"
+  pass "matrix: a captured titled Claude rule is empty only with an empty, proven composer"
+}
+
 test_matrix_claude_arrow_statusline_footer() {
   # Real claude 2.x on herdr (captured live 2026-09-20, herdr 0.8.0): the
   # composer is a bare `❯`+U+00A0 row between two solid rules, and the harness
@@ -986,6 +1009,7 @@ test_idle_placeholder_is_empty
 test_idle_placeholder_case_mode_is_explicit
 test_real_text_is_pending
 test_matrix_claude_bare_nbsp_row
+test_matrix_claude_titled_rule_live_herdr_capture
 test_matrix_claude_arrow_statusline_footer
 test_claude_2295_slash_menu_keeps_the_typed_composer_selected
 test_composer_footer_demotion_needs_a_proven_pair

@@ -76,7 +76,8 @@
 #                A separated pair that closes over a bare AGENT-GLYPH row is a
 #                different, self-proving thing: real claude 2.x draws exactly
 #                that (`─` rule, `❯`+NBSP, `─` rule), so the glyph inside the
-#                pair carries the shape and no identity is needed.
+#                pair carries the shape and no identity is needed. Claude may
+#                put a session title at the end of the opening rule.
 #
 # THE COMPOSER FOOTER ZONE (task firstmate-doorbell-vals-pending-p1): a
 # harness draws its own furniture BELOW the composer - a user statusLine, a
@@ -762,6 +763,18 @@ _fm_composer_pi_separator_row() {  # <trimmed-row>
   return 1
 }
 
+# Claude's opening rule may end in a session title and a final rule glyph.
+# Keep the long solid prefix and the closing glyph as structural proof; an
+# ordinary transcript title without both is never a separator candidate.
+_fm_composer_titled_separator_row() {  # <trimmed-row>
+  local row=$1 prefix title
+  case "$row" in *' ─') : ;; *) return 1 ;; esac
+  prefix=${row%% *}
+  title=${row#"$prefix "}
+  title=${title% ─}
+  [ -n "$title" ] && _fm_composer_pi_separator_row "$prefix"
+}
+
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
 _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
@@ -841,9 +854,8 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
         row_glyph_row=$row
       fi
     fi
-    # Pi separator rows: a solid `─` rule at least 8 columns wide. A separator
-    # closes the preceding candidate and immediately opens the next, so an
-    # earlier transcript rule can never outrank the live bottom composer pair.
+    # A solid `─` rule closes the preceding candidate and opens the next. An
+    # earlier transcript rule cannot outrank the live bottom composer pair.
     if _fm_composer_pi_separator_row "$trimmed"; then
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
       if [ "$pi_open" -ge 0 ]; then
@@ -858,6 +870,21 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
         FM_COMPOSER_SCAN_PI_GLYPH_ROW=$pi_glyph_row
         FM_COMPOSER_SCAN_PI_GLYPH=$pi_glyph
       fi
+      pi_open=$row
+      pi_lines=0
+      pi_glyph_row=-1
+      pi_glyph=''
+    elif _fm_composer_titled_separator_row "$trimmed"; then
+      FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
+      # A new opening rule makes any older completed pair stale. Until a
+      # solid closing rule arrives, that older prompt proves nothing about
+      # the composer currently being redrawn.
+      FM_COMPOSER_SCAN_PI_PAIR_FOUND=0
+      FM_COMPOSER_SCAN_PI_PAIR_VALID=0
+      FM_COMPOSER_SCAN_PI_OPEN=-1
+      FM_COMPOSER_SCAN_PI_CLOSE=-1
+      FM_COMPOSER_SCAN_PI_GLYPH_ROW=-1
+      FM_COMPOSER_SCAN_PI_GLYPH=
       pi_open=$row
       pi_lines=0
       pi_glyph_row=-1

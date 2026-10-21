@@ -762,6 +762,28 @@ FM_COMPOSER_MATRIX_LIVE=1 tests/fm-composer-matrix-live-e2e.test.sh
 On 2026-09-20 that guard could not reach its new arm for either installed harness, and the same failures reproduce on the unmodified library: bare `claude` 2.1.236 opens the session picker rather than a session, and the guard's mid-budget Escape then quits it, while codex-cli 0.147.0 parks on a hooks-trust modal the guard correctly refuses to confirm.
 The Herdr captures above are therefore this entry's live evidence, and the guard's claude arm owes a separate repair before it can refresh it.
 
+### 2026-10-21 titled Claude separator through Herdr
+
+Verified on 2026-10-21 on Darwin 25.4.0 arm64, Claude Code 2.1.295, and Herdr 0.9.3.
+A read-only ANSI viewport capture of an idle worker showed a titled opening rule, `❯` plus U+00A0, a solid closing rule, and a mode footer with an update notice on the same line.
+With the previous classifier, this capture returned `unknown` even after removing the footer; removing the title instead returned `empty`.
+The final four captured rows are `tests/fixtures/claude-herdr-titled-idle.ansi`.
+
+```sh
+bash tests/fm-composer-lib.test.sh
+bash -c '. bin/fm-composer-lib.sh; cap=$(herdr --session firstmate-cc pane read wGP:p2 --source visible --format ansi); caps=$(printf "styled=1\ncursor=0\nidentity=1"); first=$(fm_composer_classify_screen "$caps" "$cap"); final=$(fm_composer_classify_screen "$caps" "$cap" "" probe-absent); printf "initial=%s final=%s\n" "$first" "$final"'
+```
+
+```text
+ok - matrix: a captured titled Claude rule is empty only with an empty, proven composer
+initial=need-identity final=empty
+```
+
+The regression also changes the fixture's prompt to real draft text and requires `pending`, and removes the agent prompt and requires `unknown`.
+A separate synthetic case places a titled rule after an earlier `❯` candidate and requires the later live draft to remain `pending`, proving that a titled rule can open or reset a candidate but cannot close one.
+The redraw case also requires `unknown` when a newer titled opener follows a completed older pair without a closing rule, so a stale idle prompt cannot authorize input.
+The Herdr adapter still captures the full visible viewport and delegates the verdict to the shared classifier.
+
 ### 2026-09-15 codex-cli 0.154.0 idle starfield and status footer through Herdr
 
 Verified on 2026-09-15 on macOS arm64 (Darwin 25.5.0) against codex-cli 0.154.0 (model gpt-6-astra, fast mode) running as a Codex second mate inside a Herdr pane, read through Herdr's ANSI capture with its exact capability descriptor (`styled=1`, `cursor=0`, `identity=1`, `rows=20`).
