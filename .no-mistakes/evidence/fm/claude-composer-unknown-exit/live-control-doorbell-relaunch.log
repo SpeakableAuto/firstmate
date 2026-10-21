@@ -1,0 +1,13 @@
+ok - idle real Claude composer classified empty (2.1.295 (Claude Code); herdr 0.9.3; session fm-lab-claude-control-99954-1205)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.QxB6lC
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the requested message WILL still be sent.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ok - fm-send doorbell reached real Claude, which acted and moved 001.msg to handled
+ok - fm-control refused exit with a pending draft and preserved the draft
+ok - fm-control relaunched real Claude in the same Herdr endpoint
+ok - isolated lab teardown follows
