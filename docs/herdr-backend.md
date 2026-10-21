@@ -625,7 +625,8 @@ It hands the visible pane's ANSI viewport plus Herdr's capability facts to the f
 - Bordered boxes.
 - Bare agent-glyph rows, including muse's `⟩`, which the adapter's retired local pattern silently omitted.
 - opencode's left bar.
-- The Pi separator region this adapter pioneered, admitted only when native `agent get` identity is exactly Pi and state is idle or done.
+- Separator envelopes, including Claude's self-proving agent-glyph form whose opening rule may carry a session title.
+- Pi's glyphless separator form, admitted only when native `agent get` identity is exactly Pi and state is idle or done.
 
 ### Pi composer states
 
