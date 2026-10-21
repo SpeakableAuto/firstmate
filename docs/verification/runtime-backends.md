@@ -781,6 +781,7 @@ initial=need-identity final=empty
 
 The regression also changes the fixture's prompt to real draft text and requires `pending`, and removes the agent prompt and requires `unknown`.
 A separate synthetic case places a titled rule after an earlier `❯` candidate and requires the later live draft to remain `pending`, proving that a titled rule can open or reset a candidate but cannot close one.
+The redraw case also requires `unknown` when a newer titled opener follows a completed older pair without a closing rule, so a stale idle prompt cannot authorize input.
 The Herdr adapter still captures the full visible viewport and delegates the verdict to the shared classifier.
 
 ### 2026-09-15 codex-cli 0.154.0 idle starfield and status footer through Herdr

@@ -876,6 +876,15 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
       pi_glyph=''
     elif _fm_composer_titled_separator_row "$trimmed"; then
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
+      # A new opening rule makes any older completed pair stale. Until a
+      # solid closing rule arrives, that older prompt proves nothing about
+      # the composer currently being redrawn.
+      FM_COMPOSER_SCAN_PI_PAIR_FOUND=0
+      FM_COMPOSER_SCAN_PI_PAIR_VALID=0
+      FM_COMPOSER_SCAN_PI_OPEN=-1
+      FM_COMPOSER_SCAN_PI_CLOSE=-1
+      FM_COMPOSER_SCAN_PI_GLYPH_ROW=-1
+      FM_COMPOSER_SCAN_PI_GLYPH=
       pi_open=$row
       pi_lines=0
       pi_glyph_row=-1
