@@ -193,7 +193,7 @@ test_matrix_claude_titled_rule_live_herdr_capture() {
   # The last four ANSI rows of an idle Claude pane read through Herdr on
   # 2026-10-21. Earlier viewport transcript content was omitted from the
   # fixture; the title, NBSP prompt, rules, and update footer are unmodified.
-  local screen typed unproven
+  local screen typed unproven false_close
   screen=$(cat "$ROOT/tests/fixtures/claude-herdr-titled-idle.ansi")
   assert_screen "live titled Claude composer on herdr" empty "$CAPS_STYLED" "$screen" '' probe-absent
   assert_screen "live titled Claude composer without identity" empty "$CAPS_STYLED_NOID" "$screen"
@@ -202,6 +202,8 @@ test_matrix_claude_titled_rule_live_herdr_capture() {
   assert_screen "draft inside the titled Claude composer" pending "$CAPS_STYLED" "$typed" '' probe-absent
   unproven=${screen/"❯$NBSP"/"ordinary transcript text"}
   assert_screen "title and footer without an agent prompt" unknown "$CAPS_STYLED_NOID" "$unproven"
+  false_close=$'────────────────────────\n❯'"$NBSP"$'\n──────────────── Firstmate transcript title ─\n→ live draft'
+  assert_screen "a titled rule cannot close an earlier candidate" pending "$CAPS_STYLED_NOID" "$false_close"
   pass "matrix: a captured titled Claude rule is empty only with an empty, proven composer"
 }
 

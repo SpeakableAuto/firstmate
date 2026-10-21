@@ -854,11 +854,9 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
         row_glyph_row=$row
       fi
     fi
-    # A solid `─` rule or Claude's titled opening rule closes the preceding
-    # candidate and opens the next. An earlier transcript rule cannot outrank
-    # the live bottom composer pair.
-    if _fm_composer_pi_separator_row "$trimmed" \
-       || _fm_composer_titled_separator_row "$trimmed"; then
+    # A solid `─` rule closes the preceding candidate and opens the next. An
+    # earlier transcript rule cannot outrank the live bottom composer pair.
+    if _fm_composer_pi_separator_row "$trimmed"; then
       FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
       if [ "$pi_open" -ge 0 ]; then
         FM_COMPOSER_SCAN_PI_PAIR_FOUND=1
@@ -872,6 +870,12 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
         FM_COMPOSER_SCAN_PI_GLYPH_ROW=$pi_glyph_row
         FM_COMPOSER_SCAN_PI_GLYPH=$pi_glyph
       fi
+      pi_open=$row
+      pi_lines=0
+      pi_glyph_row=-1
+      pi_glyph=''
+    elif _fm_composer_titled_separator_row "$trimmed"; then
+      FM_COMPOSER_SCAN_PI_LAST_SEPARATOR=$row
       pi_open=$row
       pi_lines=0
       pi_glyph_row=-1
