@@ -1,0 +1,12 @@
+### C1 lint on, readiness for real PR 41 (gh-axi not installed on this host)
+refuse: input; fix: [Errno 2] No such file or directory: 'gh-axi'
+exit=1
+--- state after:
+task.meta
+kind=ship
+mode=no-mistakes
+### C2 lint on, non-GitHub forge URL
+refuse: brief-pr-lint forge; fix: use the standalone --file linter and an explicit home opt-out until this forge has a reader
+exit=1
+--- state after:
+task.meta

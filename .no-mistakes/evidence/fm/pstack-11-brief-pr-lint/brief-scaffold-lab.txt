@@ -1,0 +1,61 @@
+### B1 lint absent: legacy scaffold unchanged
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.inmQp9/data/legacy/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+exit=0
+1
+### B2 lint on, no --task-file
+refuse: brief shape; fix: supply --task-file with the completed goal, intent, spec and evidence before scaffolding
+exit=1
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.inmQp9/data/missing: No such file or directory
+### B3 lint on, task file missing Goal
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+refuse: live-proof; fix: add NOT PROVEN WHERE USERS SEE IT: <missing check and reason> immediately after the goal, or a Live proof: https://... evidence link in Verification
+exit=1
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.inmQp9/data/nogoal: No such file or directory
+### B4 lint on, complete task file
+refuse: live-proof; fix: add NOT PROVEN WHERE USERS SEE IT: <missing check and reason> immediately after the goal, or a Live proof: https://... evidence link in Verification
+exit=1
+--- emitted brief # Task + PR evidence shape sections:
+sed: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.inmQp9/data/complete/brief.md: No such file or directory
+ugrep: warning: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.inmQp9/data/complete/brief.md: No such file or directory
+--- standalone recheck of emitted brief:
+refuse: input; fix: [Errno 2] No such file or directory: '/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.inmQp9/data/complete/brief.md'
+exit=1
+### B5 invalid config value
+refuse: brief-pr-lint config; fix: set config/brief-pr-lint to on or off
+exit=2
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.inmQp9/data/badcfg: No such file or directory
+
+=== Re-run after B4 (first attempt used a 9-char 'lab only.' reason, refused by the >=12-char rule)
+### B4 lint on, complete task file
+pass: brief/PR shape; release evidence and approvals still require review
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.I0AYfY/data/complete/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+exit=0
+--- emitted # Task section:
+# Task
+Goal: a crew brief missing evidence is caught before dispatch.
+NOT PROVEN WHERE USERS SEE IT: no staging fleet exists for this check.
+Carve-outs: none
+Staff-facing: no
+## Verification
+| Command | Exit |
+| --- | --- |
+| `bash tests/fm-pr-lint.test.sh` | 0 |
+
+## Captain's intent
+Catch missing evidence.
+## Firstmate spec
+Use the linter.
+--- appended PR evidence shape section:
+# PR evidence shape
+Before reporting a PR ready, run `python3 /Users/mac-mini-0002/.no-mistakes/worktrees/9db47e05032d/01M64ER1Y8H1RVTQNW1PWT59W6/bin/fm-pr-lint.py --pr-url <PR-url>` and fix each refusal; the supervisor repeats this gate at readiness registration.
+--- standalone recheck of emitted brief:
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+### B6 lint on, staff-facing task with no Admin Update
+refuse: admin-update; fix: add Admin Update: https://<published-admin-update> | Coming soon (or Live); publish and verify the Update before release
+exit=1
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.I0AYfY/data/staff: No such file or directory
+### B7 lint off: legacy scaffold, no PR evidence section
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.I0AYfY/data/offcase/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+exit=0
+0

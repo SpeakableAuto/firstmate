@@ -1,0 +1,53 @@
+### S1 complete body (escaped pipe + hand-check table)
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+
+### S2 missing goal
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+exit=1
+
+### S3 missing Verification section
+refuse: verification; fix: add a ## Verification section with recorded commands and numeric exit codes
+refuse: verification-command; fix: record each check in a Command | Exit table, with a backticked command and its actual integer exit code
+exit=1
+
+### S4 malformed command row
+refuse: verification-command; fix: record each check in a Command | Exit table, with a backticked command and its actual integer exit code
+exit=1
+
+### S5 missing carve-out line
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+exit=1
+
+### S6 stripe path changed but Carve-outs: none
+refuse: carve-outs/payments; fix: include payments in Carve-outs, or add Carve-out review: payments | <specific false-positive reason>; classification does not authorize release
+exit=1
+
+### S6b payments declared
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+
+### S7 SQL migration path
+refuse: carve-outs/shared-database-schema; fix: include shared-database-schema in Carve-outs, or add Carve-out review: shared-database-schema | <specific false-positive reason>; classification does not authorize release
+exit=1
+
+### S8 staff-facing without Admin Update
+refuse: admin-update; fix: add Admin Update: https://<published-admin-update> | Coming soon (or Live); publish and verify the Update before release
+exit=1
+
+### S8b staff-facing with Admin Update
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+
+### S9 prose mentions Stripe refunds
+refuse: carve-outs/payments; fix: include payments in Carve-outs, or add Carve-out review: payments | <specific false-positive reason>; classification does not authorize release
+exit=1
+
+### S10 no live proof and no NOT PROVEN line
+refuse: live-proof; fix: add NOT PROVEN WHERE USERS SEE IT: <missing check and reason> immediately after the goal, or a Live proof: https://... evidence link in Verification
+exit=1
+
+### S11 Goal not first line
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+exit=1
+

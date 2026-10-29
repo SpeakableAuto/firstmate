@@ -1,0 +1,27 @@
+### R1 --pr-url on real PR 41 (gh-axi absent on this host)
+refuse: input; fix: [Errno 2] No such file or directory: 'gh-axi'
+exit=1
+
+### R2 real PR 41 body as-is (pre-gate PR, written before this rule)
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+refuse: staff-facing; fix: declare exactly one Staff-facing: yes or Staff-facing: no line
+exit=1
+
+### R3 PR 41 real changed paths (2 args) with a completed shape, Carve-outs: none
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+[]
+### R3 (corrected) PR 41 real changed paths: 10 files, Carve-outs: none
+bin/fm-spawn.sh
+bin/fm-teardown.sh
+bin/fm-test-run.sh
+bin/fm-wake-lib.sh
+bin/fm-worktree-slots-lib.sh
+bin/fm-worktree-slots.sh
+docs/configuration.md
+tests/fm-spawn-worktree-settle.test.sh
+tests/fm-teardown.test.sh
+tests/fm-worktree-slots.test.sh
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
