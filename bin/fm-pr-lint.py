@@ -39,9 +39,10 @@ import sys
 from urllib.parse import urlsplit
 
 
+# Prose describes intent, so retain broad words that are ambiguous in code.
 CATEGORIES = {
-    'payments': r'\b(?:payments?|stripe|refunds?|billing)\b',
-    'logins-keys-secrets': r'\b(?:logins?|passwords?|secrets?|credentials?|oauth|auth|authentication|jwt|api[- ]keys?|private[- ]keys?|access[- ]tokens?)\b',
+    'payments': r'\b(?:payments?|stripe|refunds?|billing|checkout)\b',
+    'logins-keys-secrets': r'\b(?:logins?|passwords?|secrets?|credentials?|oauth|auth|authentication|jwt|keys?|tokens?)\b',
     'shared-database-schema': r'\b(?:migrations?|schema|alter\s+table|create\s+table|add\s+column|shared[- ]database)\b',
 }
 # Changed paths stay conservative: broad words still flag likely carve-outs.
