@@ -90,7 +90,8 @@ CAP_REQUEST = re.compile(
     r'\bzac (?:asked|wants|requested)\s+(?:for\s+)?(?:only\s+)?(?:the\s+)?'
     r'(?:\btop[\s-]*' + NUMBER + r'|\b' + NUMBER + r'\s+best|\bbest[\s-]*' + NUMBER + r')\b', re.I)
 CAP_WITHDRAWAL = re.compile(
-    r'\b(?:but\s+now|no\s+longer|instead|every\s+item|all\s+of\s+them|withdrawn|not)\b', re.I)
+    r'\b(?:but\s+now|no\s+longer|has\s+since|withdr[ea]w\w*|changed\s+(?:his|their)\s+mind'
+    r'|(?:now|instead)\s+wants\s+(?:every|all)|every\s+item|all\s+of\s+them|full\s+list)\b', re.I)
 
 
 def current_cap_request(intent):
