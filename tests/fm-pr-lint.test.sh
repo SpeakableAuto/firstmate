@@ -84,6 +84,14 @@ class Linter(unittest.TestCase):
     def test_verification_tables(self):
         piped = GOOD.replace('`python3 -m unittest`', '`git log --oneline \\| head -3`')
         self.assertEqual(self.run_lint(piped).returncode, 0, self.run_lint(piped).stderr)
+        for command in ('``grep -n \'`x`\' file``', '`` `x` ``', '``echo `pwd` \\| wc``', '```a``b```'):
+            with self.subTest(command=command):
+                body = GOOD.replace('`python3 -m unittest`', command)
+                self.assertEqual(self.run_lint(body).returncode, 0, self.run_lint(body).stderr)
+        for command in ('``pwd`', '`pwd``', '``', '` `', '`` ``', '`a`b`', '``a``b``'):
+            with self.subTest(command=command):
+                body = GOOD.replace('`python3 -m unittest`', command)
+                self.assertIn('verification-command', self.run_lint(body).stderr)
         hand = GOOD+'\nChecked by hand:\n\n| Check | Result |\n| --- | --- |\n| Opened the page | looked right |\n'
         self.assertEqual(self.run_lint(hand).returncode, 0, self.run_lint(hand).stderr)
         after = GOOD+'\n| Command | Exit |\n| --- | --- |\n| `pwd` | pending |\n'

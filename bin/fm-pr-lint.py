@@ -60,6 +60,12 @@ CODE_CATEGORIES = {
 }
 
 
+def code_span(cell):
+    match = re.fullmatch(r'(`+)(?!`)([^\n]+?)(?<!`)\1', cell)
+    return bool(match and match[2].strip()
+                and len(match[1]) not in {len(run) for run in re.findall(r'`+', match[2])})
+
+
 def prose(text):
     """Keep declarations outside quoted/fenced examples and HTML comments."""
     text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
@@ -125,7 +131,7 @@ def lint(text, kind='pr', paths=(), diff=''):
         if not header or all(re.fullmatch(r'[-: ]+', cell) for cell in row):
             continue
         cmd, code = header
-        if (len(row) <= max(header) or not re.fullmatch(r'`[^`\n]+`', row[cmd])
+        if (len(row) <= max(header) or not code_span(row[cmd])
                 or not re.fullmatch(r'-?\d+', row[code])
                 or re.search(r'\b(?:TODO|TBD|PLACEHOLDER)\b', row[cmd], re.I)):
             invalid = True
