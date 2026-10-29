@@ -36,8 +36,10 @@ mv "$pool/next" "$pool/treehouse-state.json"
 EOF
   cat > "$CASE/bin/lsof" <<'EOF'
 #!/usr/bin/env bash
-if [ "${SLOT_TEST_LIVE:-0}" = 1 ]; then echo 12345; exit 0; fi
-exit 1
+[ "$*" = '-a -d cwd -Fpn' ] || exit 99
+[ -z "${SLOT_TEST_LSOF_FAIL:-}" ] || exit 2
+printf 'p1\nfcwd\nn/\n'
+if [ -n "${SLOT_TEST_LIVE:-}" ]; then printf 'p12345\nfcwd\nn%s\n' "$SLOT_TEST_LIVE"; fi
 EOF
   chmod +x "$CASE/bin/"*
   export PATH="$CASE/bin:$ORIGINAL_PATH"
@@ -72,13 +74,14 @@ reclaim
 room || fail 'reclaim did not free room'
 pass 'absent cap, malformed config, read-only room, bounded safe reclaim'
 
-for risk in dirty unlanded live claimed recorded leased; do
+for risk in dirty unlanded live lsof-fails claimed recorded leased; do
   make_case "$risk"
   printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
   case "$risk" in
     dirty) echo work > "$SLOT/untracked" ;;
     unlanded) echo work > "$SLOT/file"; git -C "$SLOT" add file; git -C "$SLOT" commit -qm work ;;
-    live) export SLOT_TEST_LIVE=1 ;;
+    live) mkdir -p "$SLOT/sub"; SLOT_TEST_LIVE=$(cd "$SLOT/sub" && pwd -P); export SLOT_TEST_LIVE ;;
+    lsof-fails) export SLOT_TEST_LSOF_FAIL=1 ;;
     claimed) printf 'task=active\nhome=%s\n' "$FM_HOME" > "$CASE/pool/1/.fm-slot-owner" ;;
     recorded) printf 'worktree=%s\n' "$SLOT" > "$FM_HOME/state/active.meta" ;;
     leased) jq '.worktrees[0].leased=true' "$CASE/pool/treehouse-state.json" > "$CASE/next"; mv "$CASE/next" "$CASE/pool/treehouse-state.json" ;;
@@ -88,7 +91,7 @@ for risk in dirty unlanded live claimed recorded leased; do
   [ -d "$SLOT" ] || fail "$risk slot removed"
   refuses "$risk remains at cap"
   [ "$risk" = unlanded ] || [ ! -e "$SLOT_TEST_LOG" ] || fail "$risk attempted destruction"
-  unset SLOT_TEST_LIVE
+  unset SLOT_TEST_LIVE SLOT_TEST_LSOF_FAIL
   pass "$risk slot retained and admission refused"
 done
 

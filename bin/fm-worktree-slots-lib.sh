@@ -274,11 +274,34 @@ fm_worktree_slots_scan() {  # <projects-dir> [<project-dir>...]
   done
 }
 
+# Does no process have its working directory in <slot> or under it? One
+# system-wide `lsof -a -d cwd` listing, bounded by process count, never the
+# recursive +D walk of the copy's file tree. A missing lsof, an lsof error or
+# unparsable output is uncertainty, never evidence of an idle slot.
+fm_worktree_slot_cwd_idle() {  # <slot>
+  local dir out line
+  dir=$(CDPATH='' cd -- "$1" 2>/dev/null && pwd -P) || return 1
+  out=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      p[0-9]*|fcwd|'') ;;
+      n*)
+        case "${line#n}" in
+          "$dir"|"$dir"/*) return 1 ;;
+        esac
+        ;;
+      *) return 1 ;;
+    esac
+  done <<EOF
+$out
+EOF
+}
+
 # Is scanned slot <index> a reclaim candidate (see CONTRACT)? Read-only.
 # Returns 0 when it is, 1 when it is not (FM_WORKTREE_SLOT_KEPT_REASON says
 # why), and 2 when the local homes cannot be enumerated.
 fm_worktree_slot_reclaimable() {  # <index> <record-state>
-  local idx=$1 record_state=$2 slot rc=0 dirty processes
+  local idx=$1 record_state=$2 slot rc=0 dirty
   slot=${FM_WORKTREE_SLOT_PATHS[$idx]}
   FM_WORKTREE_SLOT_KEPT_REASON=
   if [ "${FM_WORKTREE_SLOT_STATUSES[$idx]}" != candidate ]; then
@@ -311,11 +334,7 @@ fm_worktree_slot_reclaimable() {  # <index> <record-state>
     FM_WORKTREE_SLOT_KEPT_REASON="worktree has uncommitted changes"
     return 1
   fi
-  # lsof exit 1 with no output means no matching open file. Any diagnostic or
-  # missing executable is uncertainty, never evidence of an idle slot.
-  rc=0
-  processes=$(lsof -t +D "$slot" 2>&1) || rc=$?
-  if [ -n "$processes" ] || [ "$rc" -gt 1 ]; then
+  if ! fm_worktree_slot_cwd_idle "$slot"; then
     FM_WORKTREE_SLOT_KEPT_REASON="worktree has a live process or process inspection failed"
     return 1
   fi
