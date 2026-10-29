@@ -36,6 +36,96 @@ class Linter(unittest.TestCase):
         return subprocess.run(['python3', str(TOOL), '--file', str(p), *args],
                               text=True, capture_output=True)
 
+    def brief(self, intent, spec='Write the requested report.'):
+        return GOOD + "\n## Captain's intent\n" + intent + "\n## Firstmate spec\n" + spec + "\n"
+
+    def assert_depth_refused(self, body):
+        result = self.run_lint(body, '--kind', 'brief')
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('refuse: research-depth; fix:', result.stderr)
+        for fix in ('every item', 'complete coverage', 'page', 'Captain', 'Zac asked'):
+            self.assertIn(fix, result.stderr)
+
+    def test_rule23_source_cases(self):
+        data = json.loads((ROOT/'tests/fixtures/brief-depth-rule23.json').read_text())
+        for intent in [data['not_this'], *data['refused']]:
+            with self.subTest(intent=intent):
+                self.assert_depth_refused(self.brief(intent))
+        for intent in [data['do_this'], data['accepted_exception'], *data['allowed']]:
+            with self.subTest(intent=intent):
+                result = self.run_lint(self.brief(intent), '--kind', 'brief')
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_research_depth_cap_variants(self):
+        for activity in ('Research', 'Study', 'Audit', 'Learn from', 'Inventory', 'Review of'):
+            for cap in ('top-3 ideas', 'best 10 ideas', 'a few ideas', 'shortlist of 5 ideas',
+                        'five key findings', 'maximum of 3 useful recommendations'):
+                with self.subTest(activity=activity, cap=cap):
+                    self.assert_depth_refused(self.brief(f'{activity} the tool and return {cap}.'))
+        self.assert_depth_refused(self.brief('Understand the tool.', 'Research it and return the top 5 ideas.'))
+        self.assert_depth_refused(GOOD.replace('incomplete evidence is caught before use.',
+                                              'Research the tool and return the top 5 ideas.'))
+
+    def test_research_depth_exception_provenance(self):
+        for mention in ('Zac asked for the top 3.', 'Zac wants the best five.', 'Zac requested the 3 best.'):
+            with self.subTest(mention=mention):
+                result = self.run_lint(self.brief('Research the tool. '+mention), '--kind', 'brief')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_depth_refused(self.brief('Research the tool and return the top 3.', mention))
+        for mention in ('Zac asked not to cap at the top 3.',
+                        '<!-- Zac asked for the top 3. -->',
+                        '```text\nZac asked for the top 3.\n```'):
+            self.assert_depth_refused(self.brief('Research the tool and return the top 3.\n'+mention))
+        result = self.run_lint(self.brief('Research the tool.\n> Zac asked for the top 3.'), '--kind', 'brief')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_research_depth_scope(self):
+        for intent in ('Build a UI listing the top 5 bookings.', 'Research the tool without limiting findings.',
+                       'Learn from the tool and inventory every option.'):
+            result = self.run_lint(self.brief(intent), '--kind', 'brief')
+            self.assertEqual(result.returncode, 0, result.stderr)
+        body = self.brief('Research the tool and return the top 5 ideas.')
+        self.assertEqual(self.run_lint(body).returncode, 0)
+        wrapped = '# Worker role\nResearch examples: top 5 ideas.\n# Task\n'+self.brief('Build a UI listing the top 5 bookings.')
+        wrapped += '# Standing orders\nResearch everything, never a top 5.\n'
+        result = self.run_lint(wrapped, '--kind', 'brief')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        body = self.brief('Research the tool and return the top 5 ideas.')
+        body += '\n## Verification\nZac asked for the top 5.\n'
+        self.assert_depth_refused(body)
+        self.assert_depth_refused('# Worker role\n# Task\n'+self.brief('Research the tool and return the top 5 ideas.')+'# Rules\nFix bugs.\n')
+
+    def test_research_depth_scaffold(self):
+        home = self.root/'depth-home'
+        (home/'config').mkdir(parents=True)
+        env = dict(os.environ, FM_HOME=str(home))
+        for key in ('FM_ROOT_OVERRIDE', 'FM_CONFIG_OVERRIDE', 'FM_DATA_OVERRIDE', 'FM_STATE_OVERRIDE'):
+            env.pop(key, None)
+        task = self.root/'task.md'
+        task.write_text(self.brief('Research pstack and return the top 5 ideas we can borrow.'))
+        def scaffold(name):
+            return subprocess.run(['bash', str(ROOT/'bin/fm-brief.sh'), name, 'demo',
+                                   '--scout', '--task-file', str(task)],
+                                  env=env, text=True, capture_output=True)
+        for setting in (None, 'off', 'on'):
+            config = home/'config/brief-pr-lint'
+            if setting is not None:
+                config.write_text(setting+'\n')
+            name = 'depth-'+str(setting)
+            result = scaffold(name)
+            if setting == 'on':
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('research-depth', result.stderr)
+                self.assertFalse((home/'data'/name).exists())
+            else:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('return the top 5 ideas', (home/'data'/name/'brief.md').read_text())
+        task.write_text(self.brief('Research the market. Zac asked for the top 3 competitors only.'))
+        result = scaffold('depth-authorized')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        emitted = (home/'data/depth-authorized/brief.md').read_text()
+        self.assertEqual(self.run_lint(emitted, '--kind', 'brief').returncode, 0)
+
     def test_complete(self):
         r = self.run_lint(GOOD)
         self.assertEqual(r.returncode, 0, r.stderr)
