@@ -22,8 +22,10 @@ spelled-out numbers through twenty are recognized (one-twelve, fifteen, twenty).
 Bug/error/fix work in Captain's intent follows the source gate exemption; words
 in the Task preamble or Firstmate spec do not. Only Captain's intent can authorize
 a cap, by a direct request: "Zac asked for the top 3", "Zac wants the best five",
-or "Zac requested the 3 best". A withdrawal cue in that sentence or the next
-(but now, no longer, instead, every item, all of them, withdrawn, not) cancels it.
+or "Zac requested the 3 best". An explicit override in that sentence or the next
+(but now, no longer, has since, withdrew/withdrawn, changed his/their mind,
+now/instead wants every/all, every item, all of them, full list) cancels it;
+ordinary "not" or "instead" wording does not.
 The first Task preamble and Captain's intent / Firstmate spec are checked, not
 Verification or the surrounding worker instructions. An uncapped brief need not
 contain coverage/page wording to pass. PR bodies do not use this depth check.
