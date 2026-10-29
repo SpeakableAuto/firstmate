@@ -66,6 +66,21 @@ class Linter(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.run_lint(GOOD+'\nChanges Stripe partial refunds.\n').returncode, 1)
 
+    def test_broad_prose_carve_outs(self):
+        for text, category in [
+                ('Moves the booking checkout total to the new pricing helper', 'payments'),
+                ('Rotates the webhook signing keys', 'logins-keys-secrets'),
+                ('Rotates the integration tokens', 'logins-keys-secrets')]:
+            for kind in ('pr', 'brief'):
+                with self.subTest(text=text, kind=kind):
+                    body = GOOD+'\n'+text+'\n'
+                    result = self.run_lint(body, '--kind', kind)
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    self.assertIn('carve-outs/'+category, result.stderr)
+                    declared = body.replace('Carve-outs: none', 'Carve-outs: '+category)
+                    result = self.run_lint(declared, '--kind', kind)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_verification_tables(self):
         piped = GOOD.replace('`python3 -m unittest`', '`git log --oneline \\| head -3`')
         self.assertEqual(self.run_lint(piped).returncode, 0, self.run_lint(piped).stderr)
