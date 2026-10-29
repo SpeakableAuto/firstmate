@@ -398,6 +398,24 @@ fm_worktree_slot_destroy_supported() {
   treehouse destroy --help 2>/dev/null | grep -q -- '--include-unlanded'
 }
 
+# Print <slot> as its pool's treehouse-state.json spells it. Treehouse matches
+# that spelling exactly, so a pool reached through a symlink (/var vs
+# /private/var) would otherwise be "not managed"; canonical paths stay for
+# comparisons only. Fails when no recorded entry resolves to <slot>.
+fm_worktree_slot_recorded_path() {  # <slot>
+  local slot recorded
+  slot=$(fm_worktree_slots_canonical_dir "$1") || return 1
+  while IFS= read -r recorded; do
+    [ -n "$recorded" ] || continue
+    [ "$(fm_worktree_slots_canonical_dir "$recorded")" = "$slot" ] || continue
+    printf '%s\n' "$recorded"
+    return 0
+  done <<EOF
+$(jq -r '.worktrees[].path | strings' "$(dirname "$(dirname "$slot")")/treehouse-state.json" 2>/dev/null)
+EOF
+  return 1
+}
+
 # Remove one slot through Treehouse's own safe destroy: no --include-* flag, so
 # only a merged, clean, idle, unleased slot goes. Run from the project, which is
 # how Treehouse resolves the pool. FM_WORKTREE_SLOT_DESTROY_OUTPUT keeps
@@ -407,6 +425,10 @@ fm_worktree_slot_destroy() {  # <project-dir> <slot>
   FM_WORKTREE_SLOT_DESTROY_OUTPUT=
   fm_worktree_slot_destroy_supported || {
     FM_WORKTREE_SLOT_DESTROY_OUTPUT="this treehouse has no safe-by-default destroy, so nothing was removed"
+    return 1
+  }
+  slot=$(fm_worktree_slot_recorded_path "$slot") || {
+    FM_WORKTREE_SLOT_DESTROY_OUTPUT="no treehouse-state.json entry records $2, so nothing was removed"
     return 1
   }
   FM_WORKTREE_SLOT_DESTROY_OUTPUT=$( ( CDPATH='' cd -- "$project" && treehouse destroy "$slot" --yes ) 2>&1)

@@ -9,7 +9,10 @@ fm_git_identity fmtest fmtest@example.invalid
 make_case() {
   CASE="$TMP_ROOT/$1"
   export FM_HOME="$CASE/home"
-  mkdir -p "$FM_HOME"/{projects,config,state,data} "$CASE/bin" "$CASE/pool/1"
+  mkdir -p "$FM_HOME"/{projects,config,state,data} "$CASE/bin" "$CASE/real-pool/1"
+  # POOL_VIA=link reaches the pool through a symlink (as /var -> /private/var
+  # does), so Treehouse records a spelling that differs from the resolved path.
+  if [ "${POOL_VIA:-}" = link ]; then ln -s real-pool "$CASE/pool"; else mv "$CASE/real-pool" "$CASE/pool"; fi
   PROJECT="$FM_HOME/projects/project"
   SLOT="$CASE/pool/1/project"
   fm_git_worktree "$PROJECT" "$SLOT" fixture-task
@@ -24,12 +27,15 @@ if [ "$*" = 'destroy --help' ]; then
 fi
 printf '%s\n' "$*" >> "$SLOT_TEST_LOG"
 [ "$1" = destroy ] && [ "$#" = 3 ] && [ "$3" = --yes ] || exit 99
+pool=$(dirname "$(dirname "$2")")
+# Like real Treehouse, match only the path exactly as recorded.
+jq -e --arg slot "$2" 'any(.worktrees[]; .path == $slot)' "$pool/treehouse-state.json" >/dev/null || {
+  echo "$2 is not managed by treehouse"; exit 1; }
 # This fake models the safe tool boundary; the subject must never bypass it.
 [ -z "$(git -C "$2" status --porcelain)" ] || exit 1
 git -C "$2" merge-base --is-ancestor HEAD main || exit 1
 project=$(git -C "$2" rev-parse --path-format=absolute --git-common-dir)
 project=${project%/.git}
-pool=$(dirname "$(dirname "$2")")
 git -C "$project" worktree remove "$2"
 jq --arg slot "$2" '.worktrees |= map(select(.path != $slot))' "$pool/treehouse-state.json" > "$pool/next"
 mv "$pool/next" "$pool/treehouse-state.json"
@@ -120,3 +126,22 @@ printf '{broken' > "$CASE/pool/treehouse-state.json"
 refuses 'unreadable pool'
 assert_contains "$FM_WORKTREE_SLOT_ROOM_REASON" 'cannot read Treehouse pool' 'corrupt pool reason'
 pass 'unreadable pool fails closed'
+
+for risk in none dirty; do
+  POOL_VIA=link make_case "symlinked-$risk"
+  [ "$(fm_worktree_slots_canonical_dir "$SLOT")" != "$SLOT" ] || fail 'fixture pool is not reached through a symlink'
+  printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
+  [ "$risk" = none ] || echo work > "$SLOT/untracked"
+  refuses "symlinked pool $risk"
+  reclaim
+  if [ "$risk" = none ]; then
+    [ ! -d "$SLOT" ] || fail 'symlinked pool: reclaimable slot kept'
+    grep -qxF "destroy $SLOT --yes" "$SLOT_TEST_LOG" || fail 'treehouse not given the recorded slot path'
+    room || fail 'symlinked pool: reclaim did not free room'
+  else
+    [ -d "$SLOT" ] || fail 'symlinked pool: dirty slot removed'
+    [ ! -e "$SLOT_TEST_LOG" ] || fail 'symlinked pool: dirty slot destruction attempted'
+    refuses 'symlinked pool dirty remains at cap'
+  fi
+done
+pass 'symlinked pool root: recorded spelling reclaims, protected slot kept'
