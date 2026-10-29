@@ -196,6 +196,17 @@ def url_valid(value):
         return False
 
 
+def carve_out_signals(text, paths=(), diff=''):
+    """Shared conservative classifier; declarations and evidence are not signals."""
+    clean = prose(text)
+    narrative = '\n'.join(line for line in clean.splitlines() if not line.lstrip().startswith('|'))
+    narrative = re.sub(r'^(?:Carve-outs|Carve-out review|Staff-facing|Staff-facing review|Admin Update):[^\n]*', '', narrative, flags=re.M | re.I)
+    return {category for category in CATEGORIES
+            if (re.search(CATEGORIES[category], narrative.replace('_', '-'), re.I)
+                or any(re.search(PATH_CATEGORIES[category], path.replace('_', '-'), re.I) for path in paths)
+                or any(re.search(CODE_CATEGORIES[category], line) for line in diff.splitlines()))}
+
+
 def lint(text, kind='pr', paths=(), diff=''):
     errors = []
 
@@ -268,11 +279,9 @@ def lint(text, kind='pr', paths=(), diff=''):
     narrative = '\n'.join(line for line in clean.splitlines() if not line.lstrip().startswith('|'))
     narrative = re.sub(r'^(?:Carve-outs|Carve-out review|Staff-facing|Staff-facing review|Admin Update):[^\n]*', '', narrative, flags=re.M | re.I)
     signals = narrative + '\n' + '\n'.join(paths) + '\n' + diff
+    flagged_categories = carve_out_signals(text, paths, diff)
     for category in CATEGORIES:
-        flagged = (re.search(CATEGORIES[category], narrative.replace('_', '-'), re.I)
-                   or any(re.search(PATH_CATEGORIES[category], path.replace('_', '-'), re.I) for path in paths)
-                   or any(re.search(CODE_CATEGORIES[category], line) for line in diff.splitlines()))
-        if flagged and category not in categories:
+        if category in flagged_categories and category not in categories:
             reviews = re.findall(r'^Carve-out review:\s*'+re.escape(category)+r'\s*\|\s*(.+)$', clean, re.M | re.I)
             if len(reviews) != 1 or not meaningful(reviews[0]):
                 refuse('carve-outs/'+category, f'include {category} in Carve-outs, or add Carve-out review: {category} | <specific false-positive reason>; classification does not authorize release')
