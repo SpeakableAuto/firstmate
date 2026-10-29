@@ -72,8 +72,9 @@ CODE_CATEGORIES = {
 
 # Mirror the gate linked by kitchen rule 23, including fix-task and count exclusions:
 # https://github.com/SpeakableAuto/claude-config/pull/81
-# Firstmate additionally scopes authorization and fix-task exemption to captain intent
-# and only accepts a direct, current request for the cap.
+# Firstmate additionally scopes authorization to captain intent and the fix-task
+# exemption to the Task preamble and captain intent (never the spec), and only
+# accepts a direct, current request for the cap.
 NUMBER = r'(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)'
 FINDINGS = r'(?:ideas?|items?|findings?|options?|techniques?|recommendations?|points?|things?|tips?|ways?|lessons?|picks?|examples?|sources?|tools?|competitors?|features?|takeaways?|insights?)'
 RESEARCH = re.compile(
