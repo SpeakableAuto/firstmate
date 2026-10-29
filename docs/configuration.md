@@ -1326,7 +1326,9 @@ A failing recheck wakes the supervisor once per distinct error, then at most eve
 Backlog captain/external holds suspend admission checks until the row is queued and unheld again.
 A wait whose backlog row is done or no longer exists leaves the queue.
 Capacity and hold waits keep ordinary supervision alive even with no live workers; unplaceable waits do not.
-Firstmate's morning report reads `bin/fm-placement.sh waits` (run from the home, for example `FM_HOME=<home> <home>/bin/fm-placement.sh waits`): a JSON array of the same ledger, ordered P0-P3 then oldest first, where each row carries `task`, `state` (`capacity`, `ready`, `hold`, or `unplaceable`), `failed` (the named failing checks), `impact`, `since`, `checked`, `request`, and `over_four_hours` (true only for a `capacity` or `ready` wait older than four hours).
+Firstmate's morning report reads `bin/fm-placement.sh waits` (run from the home, for example `FM_HOME=<home> <home>/bin/fm-placement.sh waits`): a JSON array of the same ledger, ordered P0-P3 then oldest first, where each current-wait row carries `task`, `state` (`capacity`, `ready`, `hold`, or `unplaceable`), `failed` (the named failing checks), `impact`, `since`, `checked`, `request`, and `over_four_hours` (true only for a `capacity` or `ready` wait older than four hours).
+The same read includes `history` rows for capacity waits that exceeded four hours before admission, removal, or a hold, for 48 hours after their last capacity observation so the next morning can report resolved bottlenecks too.
+These rows carry `over_four_hours: true`, `wait_seconds`, and `observed_at`; they never reenter dispatch, and their durable evidence remains in the ledger's `bottlenecks` map after the reporting window expires.
 The per-attempt decision with each check's reason is the matching entry in `state/capacity.json` `.decisions`.
 Script headers own command and ledger mechanics; `tests/fm-placement.test.sh` exercises refusal, atomic publication, ordering, and the executable retry path.
 

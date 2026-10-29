@@ -12,7 +12,9 @@ evidence on stdin and prints a complete decision.
 record consumes that decision; one replace publishes the decision and its wait
 in state/capacity.json, under an exclusive ledger lock. This is the capacity log.
 waits prints P0-P3, oldest-first waits, with over_four_hours computed at read time
-for capacity waits only. A fit refusal is 'unplaceable' (never a capacity wait);
+for capacity waits, plus historical bottlenecks observed within the last 48h.
+Those history rows never reenter dispatch; the ledger retains their evidence.
+A fit refusal is 'unplaceable' (never a capacity wait);
 a terminal decision or drop removes the wait.
 due emits 'due' on a 900-second cadence or a changed resource fingerprint;
 it never launches work. The watcher owns rechecks and normal wake delivery.
@@ -291,6 +293,26 @@ def assess(config, data, task, harness, model, effort):
     return decision
 
 
+def remember_bottlenecks(value, now):
+    """Capture elapsed capacity waits before admission/hold/drop erases them."""
+    changed = False
+    for row in value["waits"].values():
+        if row["state"] not in ("capacity", "ready") or now - row["since"] <= 14400:
+            continue
+        key = f'{row["task"]}:{row["since"]}'
+        events = value.setdefault("bottlenecks", {})
+        previous = events.get(key, {})
+        event = dict(row, state="history", over_four_hours=True,
+                     wait_seconds=now - row["since"], observed_at=now,
+                     # A successful recheck clears failed; keep the refusal
+                     # that explains the already-observed bottleneck.
+                     failed=row["failed"] or previous.get("failed", []))
+        if previous != event:
+            events[key] = event
+            changed = True
+    return changed
+
+
 def ledger(state, operation, task=None, mode=None):
     state.mkdir(parents=True, exist_ok=True)
     with open(state / ".capacity-ledger.lock", "a", encoding="utf-8") as lock:
@@ -298,6 +320,9 @@ def ledger(state, operation, task=None, mode=None):
         path = state / "capacity.json"
         value = read(path) if path.exists() else {"version": 1, "decisions": [], "waits": {}}
         now = int(time.time())
+        remembered = remember_bottlenecks(value, now)
+        if remembered and operation not in ("record", "amend", "hold", "drop"):
+            atomic(path, value)
         if operation in ("record", "amend"):
             decision = json.load(sys.stdin)
             if decision.get("task") != task or mode not in ("spawn", "recheck"):
@@ -340,10 +365,11 @@ def ledger(state, operation, task=None, mode=None):
         if operation == "hold":
             if task in value["waits"]:
                 value["waits"][task].update(state="hold", hold=mode)
+            if task in value["waits"] or remembered:
                 atomic(path, value)
             return True
         if operation == "drop":
-            if value["waits"].pop(task, None) is not None:
+            if value["waits"].pop(task, None) is not None or remembered:
                 atomic(path, value)
             return True
         if operation == "alerts":
@@ -358,9 +384,17 @@ def ledger(state, operation, task=None, mode=None):
             impacts = {}
             if operation == "ordered":
                 impacts = {row["id"]: row.get("impact") or "P2" for row in json.load(sys.stdin)["records"]}
-            return sorted((dict(row, impact=impacts.get(row["task"], row.get("impact", "P2")),
+            history = []
+            for event in value.get("bottlenecks", {}).values():
+                current = value["waits"].get(event["task"], {})
+                still_waiting = (current.get("since") == event["since"]
+                                 and current.get("state") in ("capacity", "ready"))
+                if not still_waiting and now - event["observed_at"] <= 172800:
+                    history.append(event)
+            rows = [dict(row, impact=impacts.get(row["task"], row.get("impact", "P2")),
                                 over_four_hours=row["state"] in ("capacity", "ready") and now - row["since"] > 14400)
-                           for row in value["waits"].values()),
+                    for row in value["waits"].values()] + history
+            return sorted(rows,
                           key=lambda row: (row["impact"], row["since"], row["task"]))
         if not value["waits"]:
             return False
