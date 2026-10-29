@@ -121,6 +121,11 @@
 # a later scout promotion could not outrank), stops the scaffold before
 # anything is written. Secondmate charters never take it.
 # Refuses to overwrite an existing brief.
+# Opt-in config/brief-pr-lint requires --task-file <path>, a completed Task body
+# beginning with Goal: and including the Captain's intent / Firstmate spec
+# subsections. It is linted before any scaffold is written, then placed under
+# # Task. With the setting absent, existing placeholder scaffolds are unchanged.
+# bin/fm-pr-lint.py --help owns the evidence and classification syntax.
 # Opt-in scoped workflow context is rendered by fm-workflow-context.sh into a
 # separate private operational section; a missing/invalid selected record refuses the
 # scaffold before its brief is written. Secondmate charters load their own home.
@@ -196,6 +201,7 @@ FORGE=none
 FORGE_SET=0
 SHAPE=
 SHAPE_SET=0
+TASK_FILE=
 POS=()
 want_value=
 for a in "$@"; do
@@ -208,6 +214,7 @@ for a in "$@"; do
       branch-prefix) BRANCH_PREFIX=$a; BRANCH_PREFIX_SET=1 ;;
       forge) FORGE=$a; FORGE_SET=1 ;;
       shape) SHAPE=$a; SHAPE_SET=1 ;;
+      task-file) TASK_FILE=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -218,6 +225,8 @@ for a in "$@"; do
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
+    --task-file) want_value="task-file" ;;
+    --task-file=*) TASK_FILE=${a#--task-file=} ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --branch-prefix) want_value="branch-prefix" ;;
@@ -330,6 +339,37 @@ append_brief_include() {
 
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
+# Validate completed task input before creating directories or writing a brief.
+# shellcheck source=bin/fm-pr-lint-lib.sh
+. "$SCRIPT_DIR/fm-pr-lint-lib.sh"
+TASK_INPUT=
+if [ "$KIND" = secondmate ]; then
+  [ -z "$TASK_FILE" ] || { echo 'error: --task-file is for ship/scout tasks' >&2; exit 1; }
+else
+  LINT_ON=0
+  if fm_pr_lint_enabled "$CONFIG"; then
+    LINT_ON=1
+  else
+    LINT_RC=$?
+    [ "$LINT_RC" -eq 1 ] || exit "$LINT_RC"
+  fi
+  if [ "$LINT_ON" -eq 1 ] && [ -z "$TASK_FILE" ]; then
+    echo 'refuse: brief shape; fix: supply --task-file with the completed goal, intent, spec and evidence before scaffolding' >&2
+    exit 1
+  fi
+  if [ -n "$TASK_FILE" ]; then
+    if [ ! -f "$TASK_FILE" ] || ! TASK_INPUT=$(cat "$TASK_FILE"); then
+      echo 'error: --task-file must be readable' >&2
+      exit 1
+    fi
+    for heading in "## Captain's intent" '## Firstmate spec'; do
+      printf '%s\n' "$TASK_INPUT" | grep -Fqx "$heading" || { echo "error: --task-file needs $heading" >&2; exit 1; }
+    done
+    if [ "$LINT_ON" -eq 1 ]; then
+      python3 "$SCRIPT_DIR/fm-pr-lint.py" --file "$TASK_FILE" --kind brief || exit 1
+    fi
+  fi
+fi
 WORKFLOW_CONTEXT=
 if [ "$KIND" != secondmate ]; then
   WORKFLOW_CONTEXT=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" \
@@ -539,6 +579,9 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 {FIRSTMATE_SPEC}
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
+if [ -n "$TASK_INPUT" ]; then
+  TASK_SECTION=$(printf '# Task\n%s\n' "$TASK_INPUT")
+fi
 
 # One shared string keeps the ship and scout infrastructure rule identical.
 # Rule 2 governs file edits, so it does not prohibit pool administration.
@@ -699,6 +742,10 @@ A correction edits only the wrong text: do not run \`$FM_ROOT/bin/fm-ensure-agen
 
 ${PRIVATE_WORKFLOW_BEFORE_DOD}$DOD
 EOF
+if [ "$LINT_ON" -eq 1 ] && [ "$MODE" != local-only ]; then
+  # shellcheck disable=SC2016 # Emit literal Markdown backticks, never execute the example.
+  printf '\n# PR evidence shape\nBefore reporting a PR ready, run `python3 %s/bin/fm-pr-lint.py --pr-url <PR-url>` and fix each refusal; the supervisor repeats this gate at readiness registration.\n' "$FM_ROOT" >> "$BRIEF"
+fi
 append_brief_include
 if [ "$FORGE" = none ]; then
   echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
