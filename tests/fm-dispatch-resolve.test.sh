@@ -1701,4 +1701,21 @@ assert_equals 1 "$(wc -l < "$QUOTA_AXI_CALLS" | tr -d ' ')" "other failures neve
 unset QUOTA_AXI_RECOVERY_FIXTURE
 pass "bounded Claude cache recovery ranks recent evidence, preserves candidate order, and discloses age"
 
+# Placement mode prefers admitted Claude within the matched task-fit rule,
+# independently of the larger quota score of an equally fitting candidate.
+cp "$BASE_RULES" "$RULES"
+printf '{"version":1}\n' > "$HOME_DIR/config/crew-placement.json"
+write_quota "$QUOTA" 0.9 -0.4
+write_response "$RESPONSE" rule_4 0.9
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" 'placement Claude preference follows task-fit rule'
+jq '.providers[0].windows[0].percentRemaining=39' "$QUOTA" > "$TMP_ROOT/low.json"
+mv "$TMP_ROOT/low.json" "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'cursor'" 'placement preference cannot waive Claude 40 percent floor'
+rm "$HOME_DIR/config/crew-placement.json"
+pass 'placement selection retains task fit and Claude floor before quota ranking'
+
 printf '# all fm-dispatch-resolve tests passed\n'

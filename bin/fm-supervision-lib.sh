@@ -44,7 +44,7 @@ fm_sup_stat_mtime() {
 #                         registered event source (a source is a wait on an
 #                         external process, not a task, so it has no metadata),
 #                         a registered custom check, or accepted-program
-#                         reconciliation
+#                         reconciliation, or placement capacity waits
 #   FM_SUP_WATCHER_FRESH  true/false - a watcher beacon within the grace window
 #   FM_SUP_BEACON_DESC    human-readable beacon age, for banners ("never" if absent)
 #   FM_SUP_QUEUE_PENDING  true/false - state/.wake-queue has unread records
@@ -86,6 +86,10 @@ fm_supervision_status() {
   fi
 
   # Future checks retain the tokenless watcher; explicit user pauses do not.
+  # Placement waits need a watcher even when the last live worker has exited.
+  if [ -f "$state/capacity.json" ] && ! jq -e '.waits | length == 0' "$state/capacity.json" >/dev/null 2>&1; then
+    FM_SUP_NEEDED=true
+  fi
   # shellcheck disable=SC2034 # Public status consumed by guard/stop adapters.
   FM_SUP_PROGRAMS=0
   if programs=$(fm_programs_json "$(fm_program_backlog_path "$state")" "" "$state/.program-reconciliation"); then
