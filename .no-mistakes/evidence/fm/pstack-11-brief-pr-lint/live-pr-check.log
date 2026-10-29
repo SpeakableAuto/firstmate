@@ -1,0 +1,32 @@
+== lint on: register PR 41 (no Goal/carve-out/staff lines)
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+refuse: carve-outs/payments; fix: include payments in Carve-outs, or add Carve-out review: payments | <specific false-positive reason>; classification does not authorize release
+refuse: staff-facing; fix: declare exactly one Staff-facing: yes or Staff-facing: no line
+exit=1
+-- t-a.meta after:
+kind=ship
+mode=direct-PR
+-- state files changed:
+none
+== lint on: register PR 43 (complete shape)
+pass: brief/PR shape head=29df9e432159029fdfa4f8507e45fe354f5c0cde; release evidence and approvals still require review
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+error: named head cannot be verified: worktree missing
+exit=1
+-- t-b.meta after:
+kind=ship
+mode=direct-PR
+== lint off: register PR 41 (legacy behaviour)
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+error: named head cannot be verified: worktree missing
+exit=1
+-- t-c.meta after:
+kind=ship
+mode=direct-PR

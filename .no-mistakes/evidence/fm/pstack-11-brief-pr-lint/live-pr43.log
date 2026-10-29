@@ -1,0 +1,3 @@
+$ fm-pr-lint.py --pr-url https://github.com/SpeakableAuto/firstmate/pull/43
+pass: brief/PR shape head=29df9e432159029fdfa4f8507e45fe354f5c0cde; release evidence and approvals still require review
+exit=0

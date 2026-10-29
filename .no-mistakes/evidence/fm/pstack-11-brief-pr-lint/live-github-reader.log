@@ -1,0 +1,9 @@
+$ fm-pr-lint.py --pr-url https://github.com/SpeakableAuto/firstmate/pull/41
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+refuse: carve-outs/payments; fix: include payments in Carve-outs, or add Carve-out review: payments | <specific false-positive reason>; classification does not authorize release
+refuse: staff-facing; fix: declare exactly one Staff-facing: yes or Staff-facing: no line
+exit=1
+$ fm-pr-lint.py --pr-url https://gitlab.com/a/b/pull/1
+refuse: input; fix: unsupported PR URL; use a GitHub pull URL or lint an exported body with --file
+exit=1

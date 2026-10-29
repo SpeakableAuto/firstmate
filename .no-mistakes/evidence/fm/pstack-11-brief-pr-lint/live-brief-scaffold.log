@@ -1,0 +1,53 @@
+== lint off (absent): legacy scaffold
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.QIGsLT/data/legacy/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+exit=0
+== lint on, no --task-file
+refuse: brief shape; fix: supply --task-file with the completed goal, intent, spec and evidence before scaffolding
+exit=1
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.QIGsLT/data/t-missing: No such file or directory
+== lint on, task without Goal
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+refuse: verification; fix: add a ## Verification section with recorded commands and numeric exit codes
+refuse: verification-command; fix: record each check in a Command | Exit table, with a backticked command and its actual integer exit code
+refuse: live-proof; fix: add NOT PROVEN WHERE USERS SEE IT: <missing check and reason> immediately after the goal, or a Live proof: https://... evidence link in Verification
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+refuse: staff-facing; fix: declare exactly one Staff-facing: yes or Staff-facing: no line
+exit=1
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.QIGsLT/data/t-bad: No such file or directory
+== lint on, staff-facing task without Update link
+refuse: admin-update; fix: add Admin Update: https://<published-admin-update> | Coming soon (or Live); publish and verify the Update before release
+exit=1
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.QIGsLT/data/t-noupd: No such file or directory
+== lint on, complete task
+pass: brief/PR shape; release evidence and approvals still require review
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.QIGsLT/data/t-good/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+exit=0
+-- emitted brief Task + PR evidence sections:
+# Task
+Goal: staff see their weekly roster on the admin portal.
+NOT PROVEN WHERE USERS SEE IT: no staging portal in this lab.
+Carve-outs: none
+Staff-facing: yes
+Admin Update: https://admin.example.com/updates/42 | Coming soon
+## Captain's intent
+Staff need the roster.
+## Firstmate spec
+Edit the staff portal roster page.
+## Verification
+| Command | Exit |
+| --- | --- |
+| `npm test` | 0 |
+
+# Herdr lifecycle declaration - NOT ENABLED
+**HARD SAFETY GATE:** this scaffold cannot inspect the task text filled in above.
+If the task will start, stop, delete, restart, profile, or otherwise drive Herdr lifecycle behavior, stop and regenerate the brief with `--herdr-lab` before dispatch.
+Do not add Herdr lifecycle commands to this unguarded brief by hand.
+
+# PR evidence shape
+Before reporting a PR ready, run `python3 /Users/mac-mini-0002/.no-mistakes/worktrees/9db47e05032d/01M64M74R2T8KTV7N7AVE3J952/bin/fm-pr-lint.py --pr-url <PR-url>` and fix each refusal; the supervisor repeats this gate at readiness registration.
+-- re-lint emitted brief:
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+== invalid config value
+refuse: brief-pr-lint config; fix: set config/brief-pr-lint to on or off
+exit=2
