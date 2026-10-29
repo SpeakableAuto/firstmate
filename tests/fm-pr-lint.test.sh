@@ -36,6 +36,181 @@ class Linter(unittest.TestCase):
         return subprocess.run(['python3', str(TOOL), '--file', str(p), *args],
                               text=True, capture_output=True)
 
+    def brief(self, intent, spec='Write the requested report.'):
+        return GOOD + "\n## Captain's intent\n" + intent + "\n## Firstmate spec\n" + spec + "\n"
+
+    def assert_depth_refused(self, body):
+        result = self.run_lint(body, '--kind', 'brief')
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('refuse: research-depth; fix:', result.stderr)
+        for fix in ('every item', 'complete coverage', 'page', 'Captain', 'Zac asked'):
+            self.assertIn(fix, result.stderr)
+
+    def test_rule23_source_cases(self):
+        data = json.loads((ROOT/'tests/fixtures/brief-depth-rule23.json').read_text())
+        for intent in [data['not_this'], *data['refused']]:
+            with self.subTest(intent=intent):
+                self.assert_depth_refused(self.brief(intent))
+        for intent in [data['do_this'], data['accepted_exception'], *data['allowed']]:
+            with self.subTest(intent=intent):
+                result = self.run_lint(self.brief(intent), '--kind', 'brief')
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_research_depth_cap_variants(self):
+        for activity in ('Research', 'Study', 'Audit', 'Learn from', 'Inventory', 'Review of'):
+            for cap in ('top-3 ideas', 'best 10 ideas', 'five key findings', 'maximum of 3 useful recommendations'):
+                with self.subTest(activity=activity, cap=cap):
+                    self.assert_depth_refused(self.brief(f'{activity} the tool and return {cap}.'))
+        self.assert_depth_refused(self.brief('Understand the tool.', 'Research it and return the top 5 ideas.'))
+        self.assert_depth_refused(GOOD.replace('incomplete evidence is caught before use.',
+                                              'Research the tool and return the top 5 ideas.'))
+
+    def test_research_depth_exception_provenance(self):
+        for mention in ('Zac asked for the top 3.', 'Zac wants the best five.', 'Zac requested the 3 best.'):
+            with self.subTest(mention=mention):
+                result = self.run_lint(self.brief('Research the tool. '+mention), '--kind', 'brief')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_depth_refused(self.brief('Research the tool and return the top 3.', mention))
+        for mention in ('Zac asked not to cap at the top 3.',
+                        'Zac asked about the top 5 last week but now wants every item.',
+                        '<!-- Zac asked for the top 3. -->',
+                        '```text\nZac asked for the top 3.\n```'):
+            self.assert_depth_refused(self.brief('Research the tool and return the top 3.\n'+mention))
+        result = self.run_lint(self.brief('Research the tool.\n> Zac asked for the top 3.'), '--kind', 'brief')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_research_depth_scope(self):
+        for intent in ('Build a UI listing the top 5 bookings.', 'Research the tool without limiting findings.',
+                       'Learn from the tool and inventory every option.',
+                       'Research the API and include a few examples of each endpoint.',
+                       'Research the vendors and draw up a shortlist of 5 options.'):
+            result = self.run_lint(self.brief(intent), '--kind', 'brief')
+            self.assertEqual(result.returncode, 0, result.stderr)
+        body = self.brief('Research the tool and return the top 5 ideas.')
+        self.assertEqual(self.run_lint(body).returncode, 0)
+        wrapped = '# Worker role\nResearch examples: top 5 ideas.\n# Task\n'+self.brief('Build a UI listing the top 5 bookings.')
+        wrapped += '# Standing orders\nResearch everything, never a top 5.\n'
+        result = self.run_lint(wrapped, '--kind', 'brief')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        body = self.brief('Research the tool and return the top 5 ideas.')
+        body += '\n## Verification\nZac asked for the top 5.\n'
+        self.assert_depth_refused(body)
+        self.assert_depth_refused('# Worker role\n# Task\n'+self.brief('Research the tool and return the top 5 ideas.')+'# Rules\nFix bugs.\n')
+        for spec in ('Write the report; record any command errors you hit.', 'Fix lint failures before the PR.'):
+            self.assert_depth_refused(self.brief('Research pstack and return the top 5 ideas we can borrow.', spec))
+
+    def test_research_depth_preamble_cannot_exempt(self):
+        body = self.brief('Research pstack and return the top 5 ideas we can borrow.')
+        for before, after in (
+            ('isolated staging is unavailable.', 'report only; no live system to check for errors.'),
+            ('Goal: incomplete evidence is caught before use.', 'Goal: fix gaps in our understanding.'),
+            ('Carve-outs: none', 'Carve-outs: none\nCarve-out review: payments | No fixes to any payment operations.'),
+            ('Staff-facing: no', 'Staff-facing: no\nStaff-facing review: no bug fixes to staff workflows.'),
+        ):
+            with self.subTest(after=after):
+                self.assert_depth_refused(body.replace(before, after))
+        for intent in ('Fix the top 3 bugs from the audit report.',
+                       'Review of the change: fix the top 3 lint errors.'):
+            result = self.run_lint(self.brief(intent), '--kind', 'brief')
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_research_depth_withdrawn_requests(self):
+        for cue in ('but now wants every item', 'no longer wants a cap', 'he has since asked for depth',
+                    'he withdrew it', 'that request is withdrawn', 'he changed his mind', 'they changed their mind',
+                    'he now wants every finding', 'he instead wants all findings', 'include every item',
+                    'include all of them', 'give the full list'):
+            for separator in (' ', '. ', '.\n'):
+                with self.subTest(cue=cue, separator=separator):
+                    intent = 'Research pstack and return the top 5 ideas. Zac asked for the top 5 last week'+separator+cue+'.'
+                    self.assert_depth_refused(self.brief(intent))
+        for intent in ('Research the market. Zac asked for the top 3 competitors only.',
+                       'Research the market. Zac wants the best five. Write the report.',
+                       'Research the market. Zac requested the 3 best.\nDeliver the report page.',
+                       'Research the market. Zac asked for the top 3 competitors. Do not include resellers.',
+                       'Research the market. Zac asked for the top 3 competitors, not every reseller.',
+                       'Research the market. Zac asked for the top 3 competitors (not resellers).',
+                       'Research the market. Zac wants the best five. Use a page instead of chat.'):
+            result = self.run_lint(self.brief(intent), '--kind', 'brief')
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_research_depth_scaffold(self):
+        home = self.root/'depth-home'
+        (home/'config').mkdir(parents=True)
+        env = dict(os.environ, FM_HOME=str(home))
+        for key in ('FM_ROOT_OVERRIDE', 'FM_CONFIG_OVERRIDE', 'FM_DATA_OVERRIDE', 'FM_STATE_OVERRIDE'):
+            env.pop(key, None)
+        task = self.root/'task.md'
+        task.write_text(self.brief('Research pstack and return the top 5 ideas we can borrow.'))
+        def scaffold(name):
+            return subprocess.run(['bash', str(ROOT/'bin/fm-brief.sh'), name, 'demo',
+                                   '--scout', '--task-file', str(task)],
+                                  env=env, text=True, capture_output=True)
+        for setting in (None, 'off', 'on'):
+            config = home/'config/brief-pr-lint'
+            if setting is not None:
+                config.write_text(setting+'\n')
+            name = 'depth-'+str(setting)
+            result = scaffold(name)
+            if setting == 'on':
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('research-depth', result.stderr)
+                self.assertFalse((home/'data'/name).exists())
+            else:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('return the top 5 ideas', (home/'data'/name/'brief.md').read_text())
+        task.write_text(self.brief('Research the market. Zac asked for the top 3 competitors only.'))
+        result = scaffold('depth-authorized')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        emitted = (home/'data/depth-authorized/brief.md').read_text()
+        self.assertEqual(self.run_lint(emitted, '--kind', 'brief').returncode, 0)
+
+    def test_research_depth_scaffold_review_regressions(self):
+        home = self.root/'review-home'
+        (home/'config').mkdir(parents=True)
+        (home/'config/brief-pr-lint').write_text('on\n')
+        env = dict(os.environ, FM_HOME=str(home))
+        for key in ('FM_ROOT_OVERRIDE', 'FM_CONFIG_OVERRIDE', 'FM_DATA_OVERRIDE', 'FM_STATE_OVERRIDE'):
+            env.pop(key, None)
+        cases = [
+            ('Research pstack and return the top 5 ideas we can borrow. Zac asked for the top 3 competitors.', '', False),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 5 ideas from those competitors.', False),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 5 competitors.', False),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 3 ideas.', False),
+            ('Research pstack. Zac asked for the top 3.', 'Return the top 3 ideas.', False),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 3 competitors.', True),
+            ('Research pstack. Zac asked for the top three competitors.', 'Return the best 2 competitors.', True),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return at most 2 competitors.', True),
+            ('Research pstack. Zac asked for the top3 COMPETITORS.', 'Return the best 1 competitor.', True),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 3 competitors and the top 2 ideas.', False),
+            ('Research pstack. Zac asked for the top 3 competitors. Zac requested the 2 best ideas.',
+             'Return the best 3 competitors and the top 2 ideas.', True),
+            ('Research error patterns in customer reports and return the top 5 findings.', '', False),
+            ('Audit bug reports and return the top 5 lessons.', '', False),
+            ('Research regression patterns and return the top 5 findings.', '', False),
+            ('Research failing tests and return the top 5 findings.', '', False),
+            ('Research lint errors and return the top 5 findings.', '', False),
+            ('Research how to fix bugs and return the top 5 findings.', '', False),
+            ('Do not fix the top 3 bugs from the audit report. Research the top 5 findings.', '', False),
+            ('Fix the top 3 bugs from the audit report.', '', True),
+            ('Repair the top 3 failing tests from the audit report.', '', True),
+            ('Review of the change: resolve the top 3 lint errors.', '', True),
+            ('Fix the top 3 bugs from the audit report. Research the top 5 findings.', '', False),
+            ('Fix the top 3 bugs from the audit report.', 'Research the top 5 findings.', False),
+        ]
+        for index, (intent, spec, allowed) in enumerate(cases):
+            with self.subTest(intent=intent, spec=spec):
+                name = 'review-'+str(index)
+                task = self.root/'review-task.md'
+                task.write_text(self.brief(intent, spec))
+                result = subprocess.run(['bash', str(ROOT/'bin/fm-brief.sh'), name, 'demo',
+                                         '--scout', '--task-file', str(task)],
+                                        env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0 if allowed else 1, result.stdout+result.stderr)
+                self.assertEqual((home/'data'/name/'brief.md').exists(), allowed)
+                if not allowed:
+                    self.assertIn('refuse: research-depth; fix:', result.stderr)
+                    self.assertIn('complete coverage', result.stderr)
+
     def test_complete(self):
         r = self.run_lint(GOOD)
         self.assertEqual(r.returncode, 0, r.stderr)

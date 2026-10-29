@@ -1,0 +1,27 @@
+{
+  "rule_source": "https://github.com/SpeakableAuto/kitchen/pull/16",
+  "gate_source": "https://github.com/SpeakableAuto/claude-config/pull/81",
+  "provenance": "The rule's Not-this and Do-this examples and the Claude gate's regression prompts; not a scenario from the frozen v2 eval corpus.",
+  "not_this": "Research pstack and return the top 5 ideas we can borrow.",
+  "do_this": "Complete coverage: inventory every skill and script, adopt, adapt or skip each, and list the backlog. Deliver a three-line chat headline and the full depth in a navigable page.",
+  "accepted_exception": "Research the market. Zac asked for the top 3 competitors only.",
+  "refused": [
+    "Audit our rules and list the top ten weakest.",
+    "Research competitors, top four only.",
+    "Research pstack and give me the top 5 of its ideas.",
+    "Study the market and list the five best options.",
+    "Investigate pricing tools and pick the best 5.",
+    "Analyse the playbooks and return the 3 most important techniques.",
+    "Deep dive on Hermes, no more than 5 recommendations.",
+    "Researching rivals: at most 3 competitors please.",
+    "Research this. Zac wants depth, not a top 5."
+  ],
+  "allowed": [
+    "Research pstack. Complete coverage: inventory every skill.",
+    "Fix the top 3 bugs from the audit report.",
+    "Review of the change: fix the top 3 lint errors.",
+    "Research the routines. Return under 250 words, no more than 300 words.",
+    "Investigate the outage, retry up to 3 times.",
+    "Build the booking page with the top section first."
+  ]
+}

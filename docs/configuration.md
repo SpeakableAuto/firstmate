@@ -950,6 +950,7 @@ Other values and unreadable files refuse the affected operation.
 The enabled gate requires Python 3.9 or newer; GitHub readiness also requires `gh-axi` with complete `pr view --full` and `pr diff --full` output.
 
 With lint enabled, `bin/fm-brief.sh` requires `--task-file <path>` containing the completed Task body, including the intent and specification subsections, and validates it before writing a ship or scout scaffold.
+Brief validation also checks research findings caps; `bin/fm-pr-lint.py --help` owns the recognized forms, captain-intent exception and scope.
 Secondmate charters are outside this gate.
 The standalone command can recheck a subsequently edited brief; this opt-in does not add a spawn-time check or validate every manual write.
 `bin/fm-pr-check.sh` reads the GitHub body and diff and refuses malformed evidence before readiness registration, merge polling or parent publication.
