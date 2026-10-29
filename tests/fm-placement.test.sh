@@ -36,6 +36,8 @@ cp "$DATA/task-one/placement.json" "$TMP_ROOT/work"
 jq '.workload="iphone"' "$TMP_ROOT/work" > "$DATA/task-one/placement.json"
 bad=$(assess "$base")
 assert_equals fail "$(jq -r .checks.fit.status <<< "$bad")" 'iPhone builds refused on light profile'
+assert_equals '["fit"]' "$(jq -c .failed <<< "$bad")" 'fit refusal still measures room and names only fit'
+iphone=$bad
 jq '.requires_drive=true' "$TMP_ROOT/work" > "$DATA/task-one/placement.json"
 bad=$(assess "$base")
 assert_equals fail "$(jq -r .checks.fit.status <<< "$bad")" 'drive work refused on a no-drive machine'
@@ -68,6 +70,13 @@ mv "$STATE/next" "$STATE/capacity.json"
 waits=$(python3 "$TOOL" waits "$STATE")
 assert_equals 'p0-old,p0-new,task-one,p2,p3' "$(jq -r 'map(.task)|join(",")' <<< "$waits")" 'P0-P3, oldest within level'
 assert_equals true "$(jq -r '.[0].over_four_hours' <<< "$waits")" 'morning report flags waits older than four hours'
+jq '.task="iphone-wait"' <<< "$iphone" | python3 "$TOOL" record "$STATE" iphone-wait spawn >/dev/null
+jq '.waits["iphone-wait"].since=1' "$STATE/capacity.json" > "$STATE/next"
+mv "$STATE/next" "$STATE/capacity.json"
+iphone_row=$(python3 "$TOOL" waits "$STATE" | jq -c '.[]|select(.task=="iphone-wait")')
+assert_equals unplaceable "$(jq -r .state <<< "$iphone_row")" 'fit refusal is unplaceable, not a capacity wait'
+assert_equals '["fit"]:false' "$(jq -r '"\(.failed|tostring):\(.over_four_hours)"' <<< "$iphone_row")" 'unplaceable wait names fit and is never a capacity bottleneck'
+python3 "$TOOL" drop "$STATE" iphone-wait >/dev/null
 assert_equals due "$(python3 "$TOOL" due "$STATE")" 'first tick is due'
 assert_equals '' "$(python3 "$TOOL" due "$STATE")" 'unchanged capacity does not busy poll'
 touch "$STATE/.capacity-freed"
@@ -117,6 +126,10 @@ case "$1" in
   update) echo --archive-body ;;
   mv) echo '[<id>...]' ;;
   show)
+    for arg in "$@"; do
+      [ ! -f "$FM_HOME/missing-$arg" ] || { echo 'code: NOT_FOUND'; exit 1; }
+      [ ! -f "$FM_HOME/done-$arg" ] || { printf '  state: done\n  held: no\n  blocked: no\n'; exit 0; }
+    done
     if [ -f "$FM_HOME/held" ]; then
       printf '  state: queued\n  held: yes\n  blocked: no\n  hold_kind: captain\n'
     else
@@ -150,6 +163,8 @@ rm "$STATE/occupant.meta"
 tick > "$TMP_ROOT/tick.out" 2> "$TMP_ROOT/tick.err"
 assert_equals ready "$(jq -r '.waits["task-one"].state' "$STATE/capacity.json")" 'actual tick admits after crew metadata removal'
 assert_contains "$(cat "$STATE/.wake-queue")" 'capacity-ready task-one' 'admission uses durable ordinary wake queue'
+assert_equals '' "$(cat "$TMP_ROOT/tick.out")" 'capacity-ready is delivered only through the wake queue'
+assert_equals 1 "$(grep -c 'capacity-ready task-one' "$STATE/.wake-queue")" 'one recheck queues one capacity-ready row'
 assert_absent "$STATE/task-one.meta" 'retry cannot launch a worker itself'
 count=$(jq '.decisions|length' "$STATE/capacity.json")
 tick >/dev/null 2>&1
@@ -161,6 +176,20 @@ assert_equals "$count" "$(jq '.decisions|length' "$STATE/capacity.json")" 'held 
 pass 'executable retry admits after freeing event, keeps holds, and never launches'
 
 rm "$TMP_ROOT/held"
+jq '.task="iphone-wait"' <<< "$iphone" | python3 "$TOOL" record "$STATE" iphone-wait spawn >/dev/null
+for id in gone-task done-task; do
+  jq --arg id "$id" '.task=$id' <<< "$blocked" | python3 "$TOOL" record "$STATE" "$id" spawn >/dev/null
+done
+touch "$TMP_ROOT/missing-gone-task" "$TMP_ROOT/done-done-task" "$STATE/.capacity-freed"
+count=$(jq '.decisions|length' "$STATE/capacity.json")
+tick >/dev/null 2>&1
+assert_equals unplaceable "$(jq -r '.waits["iphone-wait"].state' "$STATE/capacity.json")" 'unplaceable wait stays listed for rerouting'
+assert_equals 0 "$(jq '[.decisions[]|select(.task=="iphone-wait")]|length - 1' "$STATE/capacity.json")" 'unplaceable wait is never rechecked'
+assert_equals null "$(jq -r '.waits["gone-task"]' "$STATE/capacity.json")" 'wait for a removed backlog row leaves the queue'
+assert_equals null "$(jq -r '.waits["done-task"]' "$STATE/capacity.json")" 'wait for a done backlog row leaves the queue'
+python3 "$TOOL" drop "$STATE" iphone-wait >/dev/null
+pass 'fit refusals are not rechecked and finished or removed tasks leave the queue'
+
 "$BIN/quota-axi" | jq '.providers[0].state.stale=true' > "$TMP_ROOT/stale-quota.json"
 touch "$STATE/.capacity-freed"
 FM_TEST_QUOTA_FILE="$TMP_ROOT/stale-quota.json" tick >/dev/null 2>&1
@@ -175,6 +204,11 @@ mkdir -p "$SUP_STATE"
 printf '%s\n' "$blocked" | python3 "$TOOL" record "$SUP_STATE" task-one spawn >/dev/null
 needed=$(bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_status "$2"; printf "%s" "$FM_SUP_NEEDED"' bash "$ROOT" "$SUP_STATE")
 assert_equals true "$needed" 'capacity wait alone keeps supervision running'
+UNPLACEABLE_STATE="$TMP_ROOT/unplaceable-only/state"
+mkdir -p "$UNPLACEABLE_STATE"
+printf '%s\n' "$iphone" | python3 "$TOOL" record "$UNPLACEABLE_STATE" task-one spawn >/dev/null
+needed=$(bash -c '. "$1/bin/fm-supervision-lib.sh"; fm_supervision_status "$2"; printf "%s" "$FM_SUP_NEEDED"' bash "$ROOT" "$UNPLACEABLE_STATE")
+assert_equals false "$needed" 'unplaceable wait alone does not keep supervision running'
 pass 'capacity waits remain watched without any live worker'
 
 # One real spawn invocation proves the gate is wired ahead of allocation.
@@ -199,6 +233,14 @@ assert_equals 1 "$(jq '.decisions|length' "$SPAWN_HOME/state/capacity.json")" 's
 assert_equals P0 "$(jq -r '.waits["iphone-task"].impact' "$SPAWN_HOME/state/capacity.json")" 'spawn refusal preserves intake priority'
 assert_absent "$SPAWN_HOME/state/iphone-task.meta" 'bad placement never publishes worker metadata'
 assert_absent "$SPAWN_HOME/state/.placement-admission.lock" 'refusal releases admission lock'
+fm_test_spawn_brief "$SPAWN_HOME" invalid-task
+printf '%s\n' "$blocked" | jq '.task="invalid-task"' | python3 "$TOOL" record "$SPAWN_HOME/state" invalid-task spawn >/dev/null
+printf -- '- [ ] invalid-task - Invalid project fixture (impact: P1)\n' >> "$SPAWN_HOME/data/backlog.md"
+out=$(fm_test_run_spawn "$SPAWN_HOME" "$SPAWN_PROJECT" "$SPAWN_BIN" invalid-task "$TMP_ROOT/no-such-project" --scout --harness codex --model test --effort high)
+rc=$?
+expect_code 1 "$rc" 'spawn refuses a missing project'
+assert_equals null "$(jq -r '.waits["invalid-task"]' "$SPAWN_HOME/state/capacity.json")" 'non-capacity spawn exit leaves no capacity wait'
+assert_equals 'spawn ended before placement for a non-capacity reason' "$(jq -r '[.decisions[]|select(.task=="invalid-task")][-1].terminal' "$SPAWN_HOME/state/capacity.json")" 'non-capacity spawn exit records a terminal decision'
 pass 'real spawn refuses bad placement before allocating a worker'
 
 # Canonical impact wins conflicting legacy priority; missing impact defaults P2.

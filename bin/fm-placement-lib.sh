@@ -3,8 +3,9 @@
 # from begin through launch publication/rollback; cleanup always releases it.
 # fm_placement_begin <id> initializes one attempt before spawn's existing locks.
 # fm_placement_check <harness> <model> <effort> <quota-pass|fail|unknown>
-# publishes one decision BEFORE provisioning. fm_placement_abort records early
-# refusals whose fit/room/quota evidence could not be obtained, exactly once.
+# publishes one decision BEFORE provisioning. fm_placement_abort <lock-reason>
+# records an early lock refusal as a capacity wait, exactly once; without a
+# reason it records a terminal decision that leaves no wait (non-capacity exit).
 # fm-placement.py owns the atomic decision/wait format. Configuration lives in
 # docs/configuration.md. fm-worktree-slots.sh room <project> owns slot room;
 # its printed reason is retained verbatim (no slot cleanup here).
@@ -50,6 +51,7 @@ fm_placement_publish() {
   FM_PLACEMENT_ROOT=$(printf '%s\n' "$recorded" | jq -r '.checks["treehouse-root"].root // ""') || return 1
   fm_placement_alerts || return 1
   if ! printf '%s\n' "$recorded" | jq -e '.admitted' >/dev/null; then
+    ! printf '%s\n' "$recorded" | jq -e '.terminal' >/dev/null || return 1
     printf 'error: placement refused: %s (state/capacity.json)\n' "$(printf '%s\n' "$recorded" | jq -r '[.checks|to_entries[]|select(.value.status != "pass")|"\(.key): \(.value.reason)"]|join("; ")')" >&2
     return 1
   fi
@@ -98,12 +100,20 @@ fm_placement_return_rejected() { # <project> <worktree>; fresh, closed endpoint 
   touch "$STATE/.capacity-freed"
 }
 
-fm_placement_abort() {
-  local reason=${1:-locks} decision
+fm_placement_abort() { # [<lock-reason>]; no reason records a terminal non-wait exit
+  local reason=${1:-} decision request
   [ "$FM_PLACEMENT_ACTIVE" = 1 ] && [ "$FM_PLACEMENT_RECORDED" = 0 ] || return 0
-  decision=$(jq -cn --arg reason "$reason" '{locks:{status:"fail",reason:$reason}}' |
-    python3 "$SCRIPT_DIR/fm-placement.py" assess "$CONFIG" "$DATA" "$FM_PLACEMENT_ID" \
-      "${HARNESS:-${HARNESS_ARG:-}}" "${MODEL:-}" "${EFFORT:-}") || return 1
+  if [ -z "$reason" ]; then
+    request=$(jq -cn --arg harness "${HARNESS:-${HARNESS_ARG:-}}" --arg model "${MODEL:-}" --arg effort "${EFFORT:-}" \
+      '{harness:$harness,model:$model,effort:$effort}') || return 1
+    decision=$(jq -cn --arg task "$FM_PLACEMENT_ID" --argjson request "$request" \
+      '{task:$task,request:$request,checks:{},failed:[],admitted:false,
+        terminal:"spawn ended before placement for a non-capacity reason"}') || return 1
+  else
+    decision=$(jq -cn --arg reason "$reason" '{locks:{status:"fail",reason:$reason}}' |
+      python3 "$SCRIPT_DIR/fm-placement.py" assess "$CONFIG" "$DATA" "$FM_PLACEMENT_ID" \
+        "${HARNESS:-${HARNESS_ARG:-}}" "${MODEL:-}" "${EFFORT:-}") || return 1
+  fi
   fm_placement_publish "$decision" || return 1
 }
 
