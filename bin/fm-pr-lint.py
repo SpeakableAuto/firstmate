@@ -19,10 +19,11 @@ Live proof is a link declaration, not independent verification of the outcome.
 Briefs additionally refuse research/study/audit/inventory/review findings caps:
 top N, N best/key/most important, best N, and at most/up to N findings. Numeric and
 spelled-out numbers through twenty are recognized (one-twelve, fifteen, twenty).
-Bug/error/fix work in the Task preamble or Captain's intent follows the source gate
-exemption; such words in Firstmate spec do not. Only Captain's intent can authorize
+Bug/error/fix work in Captain's intent follows the source gate exemption; words
+in the Task preamble or Firstmate spec do not. Only Captain's intent can authorize
 a cap, by a direct request: "Zac asked for the top 3", "Zac wants the best five",
-or "Zac requested the 3 best".
+or "Zac requested the 3 best". A withdrawal cue in that sentence or the next
+(but now, no longer, instead, every item, all of them, withdrawn, not) cancels it.
 The first Task preamble and Captain's intent / Firstmate spec are checked, not
 Verification or the surrounding worker instructions. An uncapped brief need not
 contain coverage/page wording to pass. PR bodies do not use this depth check.
@@ -72,9 +73,8 @@ CODE_CATEGORIES = {
 
 # Mirror the gate linked by kitchen rule 23, including fix-task and count exclusions:
 # https://github.com/SpeakableAuto/claude-config/pull/81
-# Firstmate additionally scopes authorization to captain intent and the fix-task
-# exemption to the Task preamble and captain intent (never the spec), and only
-# accepts a direct, current request for the cap.
+# Firstmate scopes both authorization and the fix-task exemption to captain intent,
+# and only accepts a direct request not withdrawn in the same or next sentence.
 NUMBER = r'(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)'
 FINDINGS = r'(?:ideas?|items?|findings?|options?|techniques?|recommendations?|points?|things?|tips?|ways?|lessons?|picks?|examples?|sources?|tools?|competitors?|features?|takeaways?|insights?)'
 RESEARCH = re.compile(
@@ -89,6 +89,16 @@ CAP = re.compile(
 CAP_REQUEST = re.compile(
     r'\bzac (?:asked|wants|requested)\s+(?:for\s+)?(?:only\s+)?(?:the\s+)?'
     r'(?:\btop[\s-]*' + NUMBER + r'|\b' + NUMBER + r'\s+best|\bbest[\s-]*' + NUMBER + r')\b', re.I)
+CAP_WITHDRAWAL = re.compile(
+    r'\b(?:but\s+now|no\s+longer|instead|every\s+item|all\s+of\s+them|withdrawn|not)\b', re.I)
+
+
+def current_cap_request(intent):
+    """An attributed cap request cannot outlive an adjacent withdrawal."""
+    sentences = re.split(r'(?<=[.!?])\s+|\n+', intent)
+    return any(CAP_REQUEST.search(sentence)
+               and not CAP_WITHDRAWAL.search(' '.join(sentences[index:index + 2]))
+               for index, sentence in enumerate(sentences))
 
 
 def research_depth_capped(text):
@@ -103,8 +113,8 @@ def research_depth_capped(text):
         if heading == "captain's intent":
             intent.append(body)
     narrative, intent = '\n'.join(task), '\n'.join(intent)
-    return (RESEARCH.search(narrative) and not FIX_TASK.search(parts[0] + '\n' + intent)
-            and CAP.search(narrative) and not CAP_REQUEST.search(intent))
+    return (RESEARCH.search(narrative) and not FIX_TASK.search(intent)
+            and CAP.search(narrative) and not current_cap_request(intent))
 
 
 def code_span(cell):

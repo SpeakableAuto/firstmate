@@ -99,6 +99,34 @@ class Linter(unittest.TestCase):
         for spec in ('Write the report; record any command errors you hit.', 'Fix lint failures before the PR.'):
             self.assert_depth_refused(self.brief('Research pstack and return the top 5 ideas we can borrow.', spec))
 
+    def test_research_depth_preamble_cannot_exempt(self):
+        body = self.brief('Research pstack and return the top 5 ideas we can borrow.')
+        for before, after in (
+            ('isolated staging is unavailable.', 'report only; no live system to check for errors.'),
+            ('Goal: incomplete evidence is caught before use.', 'Goal: fix gaps in our understanding.'),
+            ('Carve-outs: none', 'Carve-outs: none\nCarve-out review: payments | No fixes to any payment operations.'),
+            ('Staff-facing: no', 'Staff-facing: no\nStaff-facing review: no bug fixes to staff workflows.'),
+        ):
+            with self.subTest(after=after):
+                self.assert_depth_refused(body.replace(before, after))
+        for intent in ('Fix the top 3 bugs from the audit report.',
+                       'Review of the change: fix the top 3 lint errors.'):
+            result = self.run_lint(self.brief(intent), '--kind', 'brief')
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_research_depth_withdrawn_requests(self):
+        for cue in ('but now wants every item', 'no longer wants a cap', 'instead wants complete coverage',
+                    'include every item', 'include all of them', 'that request is withdrawn', 'not a cap any more'):
+            for separator in (' ', '. ', '.\n'):
+                with self.subTest(cue=cue, separator=separator):
+                    intent = 'Research pstack and return the top 5 ideas. Zac asked for the top 5 last week'+separator+cue+'.'
+                    self.assert_depth_refused(self.brief(intent))
+        for intent in ('Research the market. Zac asked for the top 3 competitors only.',
+                       'Research the market. Zac wants the best five. Write the report.',
+                       'Research the market. Zac requested the 3 best.\nDeliver the report page.'):
+            result = self.run_lint(self.brief(intent), '--kind', 'brief')
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_research_depth_scaffold(self):
         home = self.root/'depth-home'
         (home/'config').mkdir(parents=True)
