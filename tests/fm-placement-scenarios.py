@@ -1,6 +1,6 @@
 """Replay placement failure conditions through admission and queue entrypoints.
 
-Only machine measurements, vendor quota, and backlog probing are fixtures.
+Machine measurements, endpoint observations, vendor quota, and backlog probing are fixtures.
 The disabled-gate control omits the opt-in machine profile before admission,
 exercising the production unconfigured-home bypass, not a mock admission result.
 """
@@ -32,6 +32,17 @@ class PlacementScenarios(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'],
                         REAL_PYTHON=sys.executable, FM_TEST_NOW=str(NOW),
                         FM_TEST_DRIVE=str(self.drive), FM_TEST_DRIVE_UP='1')
+        self.tool('tmux', """case "$1" in
+list-windows)
+  for meta in "$FM_HOME/state/"*.meta; do
+    [ -f "${meta%.meta}.live" ] || continue
+    basename "$meta" .meta
+  done;;
+display-message)
+  [ "${@: -1}" != '#{pane_current_command}' ] || printf 'codex';;
+*) exit 1;;
+esac
+""")
         self.tool('df', 'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 99999999 1 41943040 1%% /\\n"\n')
         self.tool('quota-axi', '''printf '%s\\n' '{"schemaVersion":5,"providers":[{"provider":"codex","state":{"stale":false},"windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":62,"runway":{"status":"through_reset"}}]}}]}'
 ''')
@@ -80,8 +91,45 @@ with patch.object(m.time,'time',return_value=int(os.environ['FM_TEST_NOW'])), pa
         self.write(home / 'config/crew-dispatch.json', dict(rules=[dict(when='fixture task fit', use=[dict(harness='codex', model='test', effort='high')])]))
         (home / 'data/backlog.md').write_text('## Queued\n')
         for i in range(count):
-            (home / f'state/occupant-{i}.meta').write_text('kind=ship\nharness=codex\nbackend=unverifiable\nwindow=unknown\n')
+            self.live(home, f'occupant-{i}')
         return home
+
+    @staticmethod
+    def live(home, name):
+        (home / f'state/{name}.meta').write_text(f'kind=ship\nharness=codex\nbackend=tmux\nwindow=fixture:{name}\n')
+        (home / f'state/{name}.live').touch()
+
+    def crew_count(self, home):
+        script = '''SCRIPT_DIR=$1/bin
+STATE=$FM_STATE_OVERRIDE FM_PLACEMENT_ID=candidate
+. "$SCRIPT_DIR/fm-backend.sh"
+. "$SCRIPT_DIR/fm-claude-admission-lib.sh"
+. "$SCRIPT_DIR/fm-placement-lib.sh"
+absence=$(fm_control_endpoint_absence_verdict tmux fixture:parked-0)
+[ "${absence%%$'\t'*}" = unproven ] || exit 1
+fm_placement_count
+'''
+        result = subprocess.run(['bash', '-c', script, 'count', str(ROOT)], env=self.env_for(home), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return int(result.stdout)
+
+    def test_live_only_crew_count(self):
+        home = self.home('heavy', True)
+        self.task(home, 'candidate', 'website')
+        for i in range(65):
+            name = f'parked-{i}'
+            (home / f'state/{name}.meta').write_text(f'kind=ship\nbackend=tmux\nwindow=fixture:{name}\nstatus={"paused" if i % 2 else "done"}\n')
+        count = self.crew_count(home)
+        result = self.admit(home, 'candidate')
+        reason = self.ledger(home)['decisions'][-1]['checks']['room']['reason']
+        self.assertEqual((count, result.returncode), (0, 0), f'65 absent endpoints must not consume crew capacity: {reason}')
+        self.assertIn('crew=0/4', reason)
+        for i in range(4):
+            self.live(home, f'live-{i}')
+            self.assertEqual(self.crew_count(home), i + 1)
+            result = self.admit(home, 'candidate')
+            self.assertEqual(result.returncode == 0, i < 3, result.stderr)
+        self.assertIn('count=4, cap=4', self.ledger(home)['decisions'][-1]['checks']['room']['reason'])
 
     @staticmethod
     def write(path, value):

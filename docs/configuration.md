@@ -1291,6 +1291,9 @@ A light-machine example:
 ```
 
 The light-machine cap may be raised to three after measuring its room; the heavy-machine cap cannot exceed four.
+The crew cap counts only recorded endpoints positively classified alive by the existing backend liveness owner, excluding the launching task and persistent secondmates.
+Retained paused/done records and unproven, unreadable, ambiguous, missing, dead or gone endpoints do not consume crew capacity, including recently exited endpoints.
+Missing memory, disk or quota evidence still refuses placement through its named check; endpoint recovery and duplicate-launch guards keep their separate evidence requirements.
 Workload names are exact configuration values, never inferred from hostnames.
 The drive, when specified, must be an actual mount with no symlink substitution, and a temporary create/unlink must succeed there and in every `required_drive_dirs` entry.
 Required directories must already exist as real directories beneath that mount; placement never creates them or falls back to internal storage.
@@ -1306,7 +1309,7 @@ If safe return cannot be proved, the copy is preserved and the refusal reports i
 Relaunches never return their recorded copy.
 Memory evidence comes from `memory_pressure -Q` and `sysctl vm.swapusage` on macOS, or `MemAvailable` and swap usage in `/proc/meminfo` on Linux.
 Missing measurements refuse placement.
-`bin/fm-placement.sh effective` prints the effective placement limits, disk floor, Claude admission limits, quota freshness allowance, retry cadence, wait-age threshold, launch grace, and slot seam without starting work.
+`bin/fm-placement.sh effective` prints the effective placement limits, disk floor, Claude admission limits, quota freshness allowance, retry cadence, wait-age threshold, and slot seam without starting work.
 The existing disk-guard configuration and its default floor remain authoritative; placement uses its read-only `--check-room` entrypoint and never clears caches.
 
 Intake writes `data/<task-id>/placement.json` beside the brief:

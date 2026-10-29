@@ -10,6 +10,9 @@
 # docs/configuration.md. fm-worktree-slots.sh room <project> owns slot room;
 # its printed reason is retained verbatim (no slot cleanup here).
 
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+
 # shellcheck source=bin/fm-backlog-lib.sh
 . "$SCRIPT_DIR/fm-backlog-lib.sh"
 
@@ -125,8 +128,7 @@ fm_placement_release() {
 }
 
 fm_placement_count() {
-  local meta backend target verdict count=0 gen started now
-  now=$(date +%s)
+  local meta backend target verdict count=0
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     [ "$meta" != "$STATE/$FM_PLACEMENT_ID.meta" ] || continue
@@ -141,14 +143,10 @@ fm_placement_count() {
         verdict=${verdict%%$'\t'*}
       fi
     fi
-    case "$verdict" in
-      dead|gone)
-        gen=$(fm_meta_get "$meta" spawn_gen)
-        started=${gen#s}; started=${started%%.*}
-        case "$started" in ''|*[!0-9]*) continue ;; esac
-        [ "$((now - started))" -lt 60 ] || continue
-        ;;
-    esac
+    # Capacity counts live crew, not retained task records or uncertainty.
+    # Endpoint recovery and duplicate-launch refusal retain their own evidence
+    # rules; a recent dead endpoint is not a capacity reservation.
+    [ "$verdict" = alive ] || continue
     count=$((count + 1))
   done
   printf '%s' "$count"

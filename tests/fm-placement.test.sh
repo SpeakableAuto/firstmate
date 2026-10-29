@@ -115,6 +115,14 @@ else
   exec "$REAL_PYTHON" "$@"
 fi
 SH
+cat > "$BIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  list-windows) [ ! -f "$FM_HOME/state/occupant.meta" ] || printf 'occupant\n' ;;
+  display-message) [ "${@: -1}" != '#{pane_current_command}' ] || printf 'codex' ;;
+  *) exit 1 ;;
+esac
+SH
 cat > "$BIN/df" <<'SH'
 #!/usr/bin/env bash
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfixture 999999999 1 999999998 1%% /\n'
@@ -150,7 +158,7 @@ printf '%s\n' "$blocked" | python3 "$TOOL" record "$STATE" task-one spawn >/dev/
 printf '# Backlog\n' > "$DATA/backlog.md"
 jq '.max_crew=1' "$CONFIG/crew-placement.json" > "$CONFIG/next"
 mv "$CONFIG/next" "$CONFIG/crew-placement.json"
-printf 'kind=ship\nharness=codex\nbackend=unverifiable\nwindow=unknown\n' > "$STATE/occupant.meta"
+printf 'kind=ship\nharness=codex\nbackend=tmux\nwindow=fixture:occupant\n' > "$STATE/occupant.meta"
 tick() {
   env PATH="$BIN:$PATH" FM_HOME="$TMP_ROOT" FM_STATE_OVERRIDE="$STATE" \
     FM_CONFIG_OVERRIDE="$CONFIG" FM_DATA_OVERRIDE="$DATA" \
@@ -390,3 +398,36 @@ RETURN
   [ -f "$STATE/.capacity-freed" ] || fail 'successful return signals capacity'
 ) || fail 'safe allocation rollback'
 pass 'rejected allocation returns only a clean, unrecorded freshly owned slot'
+
+# Count only positive liveness, regardless of status, generation or backend.
+# The existing classifier owns vendor-specific evidence; this fixture drives
+# each classification through the shared placement counting interface.
+(
+  SCRIPT_DIR="$ROOT/bin"
+  # shellcheck source=/dev/null
+  . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
+  # shellcheck source=/dev/null
+  . "$SCRIPT_DIR/fm-placement-lib.sh"
+  STATE="$TMP_ROOT/count-state"
+  FM_PLACEMENT_ID=candidate
+  mkdir -p "$STATE"
+  fm_backend_source() { [ "$1" != unsupported ]; }
+  fm_quota_pacing_agent_state() { printf '%s' "$2"; }
+  fm_control_endpoint_absence_verdict() { printf 'unproven\tabsence not established'; }
+  for verdict in unproven unreadable ambiguous missing dead gone ''; do
+    for generation in s1.0 "s$(date +%s).0"; do
+      printf 'kind=ship\nbackend=tmux\nwindow=%s\nspawn_gen=%s\n' "$verdict" "$generation" > "$STATE/worker.meta"
+      assert_equals 0 "$(fm_placement_count)" "non-live '$verdict' ($generation) never consumes crew"
+    done
+  done
+  printf 'kind=ship\nbackend=unsupported\nwindow=alive\n' > "$STATE/worker.meta"
+  assert_equals 0 "$(fm_placement_count)" 'unsupported evidence never consumes crew'
+  for backend in tmux herdr zellij orca cmux; do
+    printf 'kind=ship\nbackend=%s\nwindow=alive\nstatus=paused\n' "$backend" > "$STATE/worker.meta"
+    assert_equals 1 "$(fm_placement_count)" "$backend positively alive counts even if status says paused"
+  done
+  cp "$STATE/worker.meta" "$STATE/candidate.meta"
+  printf 'kind=secondmate\nbackend=tmux\nwindow=alive\n' > "$STATE/secondmate.meta"
+  assert_equals 1 "$(fm_placement_count)" 'candidate and secondmates excluded'
+) || exit 1
+pass 'crew count requires positive liveness across runtime backends'
