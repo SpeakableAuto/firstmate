@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Bounded pool admission, read-only inspection, and safe-reclaim refusal paths.
 set -eu
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=bin/fm-worktree-slots-lib.sh
 . "$ROOT/bin/fm-worktree-slots-lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-worktree-slots)
 fm_git_identity fmtest fmtest@example.invalid
@@ -128,7 +130,7 @@ assert_contains "$FM_WORKTREE_SLOT_ROOM_REASON" 'cannot read Treehouse pool' 'co
 pass 'unreadable pool fails closed'
 
 for risk in none dirty; do
-  POOL_VIA=link make_case "symlinked-$risk"
+  POOL_VIA="link" make_case "symlinked-$risk"
   [ "$(fm_worktree_slots_canonical_dir "$SLOT")" != "$SLOT" ] || fail 'fixture pool is not reached through a symlink'
   printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
   [ "$risk" = none ] || echo work > "$SLOT/untracked"

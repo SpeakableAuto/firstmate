@@ -54,7 +54,7 @@ if ! command -v secondmate_registry_parse_line >/dev/null 2>&1; then
   . "${BASH_SOURCE[0]%/*}/fm-secondmate-registry-lib.sh"
 fi
 
-FM_WORKTREE_SLOT_CAP_FILE=worktree-slot-cap
+FM_WORKTREE_SLOT_CAP_FILE="worktree-slot-cap"
 FM_WORKTREE_SLOT_CAP=
 FM_WORKTREE_SLOTS_ERROR=
 
@@ -346,6 +346,7 @@ fm_worktree_slot_reclaimable() {  # <index> <record-state>
 # FM_WORKTREE_SLOT_RECLAIMABLE (possible reclaim candidates; Treehouse must still prove them disposable).
 # Returns 0 for room (allow) and 1 for no room (refuse); a malformed cap or an
 # unreadable pool refuses, because an unproved bound is not room.
+# shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
 fm_worktree_slot_room() {  # <config-dir> <projects-dir> <project-dir> <record-state>
   local config=$1 projects=$2 project=$3 record_state=$4 i rc pools
   FM_WORKTREE_SLOT_ROOM_REASON=
