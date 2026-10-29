@@ -1,0 +1,11 @@
+test_n15_queue_level_beats_age (__main__.PlacementScenarios) ... ok
+test_n16_queue_fit_before_age (__main__.PlacementScenarios) ... ok
+test_s13_kitchen_drive_missing (__main__.PlacementScenarios) ... ok
+test_s14_iphone_build_0002 (__main__.PlacementScenarios) ... ok
+test_s17_capacity_queue_after_finish (__main__.PlacementScenarios) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 27.819s
+
+OK
+EXIT=0

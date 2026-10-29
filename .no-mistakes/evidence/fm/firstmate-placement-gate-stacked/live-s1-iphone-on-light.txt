@@ -1,0 +1,79 @@
+$ FM_HOME=$LAB bin/fm-spawn.sh iphone-build $LAB/projects/demo --scout --harness codex --model gpt-5.5 --effort high
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.33oU7I
+error: placement refused: fit: workload is not allowed on this machine (state/capacity.json)
+exit=1
+
+$ jq .waits state/capacity.json
+{
+  "iphone-build": {
+    "task": "iphone-build",
+    "since": 1793265452,
+    "checked": 1793265452,
+    "impact": "P1",
+    "failed": [
+      "fit"
+    ],
+    "request": {
+      "harness": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "project": "/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.33oU7I/projects/demo",
+      "relaunch": 0
+    },
+    "state": "unplaceable"
+  }
+}
+$ jq ".decisions[-1]"
+{
+  "task": "iphone-build",
+  "impact": "P1",
+  "request": {
+    "harness": "codex",
+    "model": "gpt-5.5",
+    "effort": "high",
+    "project": "/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.33oU7I/projects/demo",
+    "relaunch": 0
+  },
+  "checks": {
+    "fit": {
+      "status": "fail",
+      "reason": "workload is not allowed on this machine"
+    },
+    "room": {
+      "status": "pass",
+      "reason": "crew=0/2; free=52%; swap=7779.94 MiB"
+    },
+    "quota": {
+      "provider": "codex",
+      "accountKey": "default",
+      "model": "gpt-5.5",
+      "bounds": [
+        {
+          "scope": "all_models",
+          "status": "known",
+          "effectivePercentRemaining": 45
+        }
+      ],
+      "status": "pass",
+      "reason": "fresh selected machine/account quota"
+    },
+    "locks": {
+      "status": "pass",
+      "reason": "placement and spawn locks"
+    },
+    "slots": {
+      "status": "pass",
+      "reason": "allow: no worktree slot cap configured"
+    }
+  },
+  "failed": [
+    "fit"
+  ],
+  "admitted": false,
+  "at": 1793265452,
+  "id": "bacff962b78e4869af231acdd8d04745",
+  "mode": "spawn"
+}
+$ ls state
+.capacity-ledger.lock
+capacity.json

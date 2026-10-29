@@ -1,0 +1,12 @@
+ok - fit, room, quota, locks and missing evidence refuse bad placement
+ok - atomic queue ordering, freeing events, timed rechecks, and morning age flags
+ok - concurrent atomic records retain every decision and wait
+ok - executable retry admits after freeing event, keeps holds, and never launches
+ok - fit refusals are not rechecked and finished or removed tasks leave the queue
+ok - stale quota refuses and effective limits are inspectable
+ok - capacity waits remain watched without any live worker
+ok - real spawn refuses bad placement before allocating a worker
+ok - canonical impact and display title handling
+ok - external mount, directories, disk floor, pool root, atomic acquired-path refusal and alert recovery
+ok - rejected allocation returns only a clean, unrecorded freshly owned slot
+EXIT=0

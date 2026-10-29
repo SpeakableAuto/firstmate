@@ -1,0 +1,9 @@
+ls: /Volumes/Kitchen: No such file or directory
+$ fm-spawn.sh kitchen-iphone (heavy profile, drive=/Volumes/Kitchen, not mounted here)
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+error: placement refused: drive: drive unmounted or symlinked: /Volumes/Kitchen; treehouse-root: treehouse-root: repo-local treehouse.toml missing or symlinked (state/capacity.json)
+exit=1
+{"task":"kitchen-iphone","failed":["drive","treehouse-root"],"drive":{"status":"fail","reason":"drive unmounted or symlinked: /Volumes/Kitchen","condition":"unmounted:/Volumes/Kitchen","alert":true},"fit":{"status":"pass","reason":"workload=iphone; dispatch_rule=0"}}
+{"state":"capacity","failed":["drive","treehouse-root"]}
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.33oU7I/state/*.meta: No such file or directory

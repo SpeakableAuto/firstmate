@@ -1,0 +1,37 @@
+$ tasks-axi show review-old (backlog)
+task:
+  id: review-old
+  title: "old review (impact: P3)"
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: yes
+  hold_reason: captain decision
+
+# room freed: profile memory floor back to 15%
+$ fm-placement.sh freed && fm-placement.sh tick
+tick exit=0 (stdout above; empty = queue-only delivery)
+
+$ cat state/.wake-queue
+1793265499	1	check	capacity-ready	check: capacity-ready backend-fix: placement recheck passed; reroute through dispatch
+
+$ fm-placement.sh waits
+{"task":"backend-fix","state":"ready","impact":"P0","failed":[],"over_four_hours":false}
+{"task":"iphone-build","state":"unplaceable","impact":"P1","failed":["fit"],"over_four_hours":false}
+{"task":"review-old","state":"hold","impact":"P3","failed":["room"],"over_four_hours":false}
+
+new decisions this tick:
+{"task":"backend-fix","mode":"recheck","admitted":true,"failed":[]}
+
+$ ls state (no worker .meta may appear)
+.capacity-freed
+.capacity-ledger.lock
+.guard-watcher-stale-banner
+.wake-queue
+.wake-queue.seq
+.watcher-down
+capacity.json
+
+# second tick immediately (not due): must not re-run checks
+decisions before=4 after=4
+capacity-ready rows=1

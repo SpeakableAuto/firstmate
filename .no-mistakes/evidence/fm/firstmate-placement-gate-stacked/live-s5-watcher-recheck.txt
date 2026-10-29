@@ -1,0 +1,14 @@
+queue after drain:        3
+error: placement refused: room: memory: free=52%, swap=7763.94 MiB (state/capacity.json)
+{"state":"capacity","failed":["room"]}
+$ fm-watch.sh   (real watcher, capped at 120s)
+watcher exit=0 after 5s
+check: rearm-resurface
+$ cat state/.wake-queue
+1793265499	1	check	capacity-ready	check: capacity-ready backend-fix: placement recheck passed; reroute through dispatch
+1793265513	2	check	placement-e95538e2a7ab4bf0851d72bd98e074c7	check: placement-condition kitchen-iphone: drive unmounted or symlinked: /Volumes/Kitchen
+1793265513	3	check	placement-a49569576f114be2a35dc6c23d5c0b47	check: placement-condition kitchen-iphone: treehouse-root: repo-local treehouse.toml missing or symlinked
+1793265598	4	check	capacity-ready	check: capacity-ready backend-fix: placement recheck passed; reroute through dispatch
+1793265601	5	check	capacity-ready	check: capacity-ready watch-task: placement recheck passed; reroute through dispatch
+{"state":"ready","failed":[]}
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.33oU7I/state/*.meta: No such file or directory

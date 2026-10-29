@@ -1,0 +1,25 @@
+$ fm-spawn.sh review-old <project> --scout --harness codex --model gpt-5.5 --effort high   (profile min_free_memory_percent=95)
+error: placement refused: room: memory: free=52%, swap=7779.94 MiB (state/capacity.json)
+exit=1
+$ fm-spawn.sh backend-fix <project> --scout --harness codex --model gpt-5.5 --effort high   (profile min_free_memory_percent=95)
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  X-mode relay polling needs supervision, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+error: placement refused: room: memory: free=52%, swap=7771.94 MiB (state/capacity.json)
+exit=1
+
+$ fm-placement.sh waits   (morning-report read)
+{"task":"backend-fix","state":"capacity","impact":"P0","failed":["room"],"over_four_hours":false,"since":1793265480}
+{"task":"iphone-build","state":"unplaceable","impact":"P1","failed":["fit"],"over_four_hours":false,"since":1793265452}
+{"task":"review-old","state":"capacity","impact":"P3","failed":["room"],"over_four_hours":false,"since":1793265476}
+
+$ jq ".decisions[-1].checks.room"
+{"status":"fail","reason":"memory: free=52%, swap=7771.94 MiB"}
+$ ls state
+.capacity-ledger.lock
+.guard-watcher-stale-banner
+capacity.json
