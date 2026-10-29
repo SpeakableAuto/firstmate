@@ -180,3 +180,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 ## Disk guard
 
 [`fm-disk-guard.sh`](../bin/fm-disk-guard.sh) checks free space, cleans an explicit cache allowlist and alerts Firstmate; [local disk guard setup](disk-guard.md) covers configuration and launchd installation.
+
+## Work drive
+
+[`fm-work-drive.sh`](../bin/fm-work-drive.sh) points build output and caches at a dedicated work drive and refuses drive-bound work when it is unavailable; [`fm-internal-growth.sh`](../bin/fm-internal-growth.sh) flags daily internal-disk growth outside an allowed list.
+[Work drive setup](work-drive.md) covers configuration, verification, and launchd installation.

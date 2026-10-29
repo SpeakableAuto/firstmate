@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Behavior tests for bin/fm-work-drive.sh using disposable drives and fake tools.
+set -euo pipefail
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+TMP_ROOT=$(fm_test_tmproot fm-work-drive)
+FAKEBIN="$TMP_ROOT/fakebin"
+mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/npm" <<'SH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  'config get') cat "$HOME/npm-cache" 2>/dev/null || echo "$HOME/.npm" ;;
+  'config set') printf '%s\n' "$4" > "$HOME/npm-cache"; printf '%s\n' "$*" >> "$HOME/npm-calls" ;;
+  *) exit 1 ;;
+esac
+SH
+cat > "$FAKEBIN/defaults" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  read) cat "$HOME/xcode-dd" 2>/dev/null || exit 1 ;;
+  write) printf '%s\n' "$5" > "$HOME/xcode-dd" ;;
+  *) exit 1 ;;
+esac
+SH
+cat > "$FAKEBIN/xcrun" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$HOME/xcrun-args"
+SH
+chmod +x "$FAKEBIN"/*
+
+TARGETS="Build/DerivedData Build/Tmp Caches/npm Caches/Playwright SimulatorDevices"
+new_case() {
+  case_dir="$TMP_ROOT/$1"
+  user="$case_dir/user"
+  fm="$case_dir/fm"
+  drive="$case_dir/drive"
+  mkdir -p "$user" "$fm/config"
+  # The fresh login shell finds the fake tools only through the user's profile.
+  # shellcheck disable=SC2016 # $PATH expands when the profile is sourced.
+  printf 'export PATH=%s:$PATH\nexport KEEP_ME=1\n' "$FAKEBIN" > "$user/.bash_profile"
+  cat > "$fm/config/work-drive" <<EOF
+root=$drive
+env=PLAYWRIGHT_BROWSERS_PATH=Caches/Playwright
+npm-cache=Caches/npm
+xcode-derived-data=Build/DerivedData
+simulator-set=SimulatorDevices
+build-tmp=Build/Tmp
+shell-env-file=$user/.bash_profile
+EOF
+}
+make_drive() {
+  local rel
+  for rel in $TARGETS; do mkdir -p "$drive/$rel"; done
+}
+# FM_WORK_DRIVE_TEST_MOUNT stands in for a real mount; unset it to test refusal.
+wd() {
+  env HOME="$user" SHELL="$(command -v bash)" FM_HOME="$fm" PATH="$FAKEBIN:$PATH" \
+    FM_WORK_DRIVE_TEST_MOUNT="${mount_seam-$drive}" bash "$ROOT/bin/fm-work-drive.sh" "$@"
+}
+
+new_case missing
+mount_seam=
+set +e; out=$(wd check 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'missing drive refuses'
+assert_contains "$out" 'refused drive' 'missing drive is named'
+set +e; out=$(wd exec -- touch "$case_dir/ran" 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'exec refuses on a missing drive'
+[ ! -e "$case_dir/ran" ] || fail 'exec ran its command without the drive'
+[ ! -e "$drive" ] || fail 'a missing drive was created on internal storage'
+unset mount_seam
+pass 'missing drive refuses check and exec with no fallback'
+
+new_case unmounted
+make_drive
+mount_seam=
+set +e; out=$(wd check 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'ordinary directory refuses'
+assert_contains "$out" 'not a mounted volume' 'unmounted drive is named'
+set +e; wd exec -- touch "$case_dir/ran" >/dev/null 2>&1; rc=$?; set -e
+assert_equals 3 "$rc" 'exec refuses an unmounted drive'
+[ ! -e "$case_dir/ran" ] || fail 'exec ran on an unmounted drive'
+unset mount_seam
+pass 'a directory that is not a mount is refused'
+
+new_case targets
+make_drive
+rmdir "$drive/Caches/npm"
+mv "$drive/SimulatorDevices" "$case_dir/elsewhere"
+ln -s "$case_dir/elsewhere" "$drive/SimulatorDevices"
+set +e; out=$(wd check 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'bad targets refuse'
+assert_contains "$out" "refused npm-cache: $drive/Caches/npm is missing" 'missing target is named'
+assert_contains "$out" 'refused simulator-set' 'symlinked target is named'
+assert_contains "$out" "ok build-tmp $drive/Build/Tmp" 'healthy targets still report'
+[ ! -e "$drive/Caches/npm" ] || fail 'check created a missing target'
+if [ "$(id -u)" != 0 ]; then
+  rm "$drive/SimulatorDevices"; mkdir "$drive/SimulatorDevices" "$drive/Caches/npm"
+  chmod 0555 "$drive/Build/Tmp"
+  set +e; out=$(wd check 2>&1); rc=$?; set -e
+  chmod 0755 "$drive/Build/Tmp"
+  assert_equals 3 "$rc" 'unwritable target refuses'
+  assert_contains "$out" "refused build-tmp: $drive/Build/Tmp is not writable" 'unwritable target is named'
+fi
+pass 'missing, symlinked and unwritable targets are refused, never created'
+
+new_case exec
+make_drive
+out=$(wd check)
+assert_contains "$out" "ok drive $drive" 'healthy drive passes'
+[ -z "$(find "$drive" -name '.fm-work-drive.*')" ] || fail 'write probes left files'
+set +e
+# shellcheck disable=SC2016 # Expanded by the command exec runs.
+wd exec -- bash -c 'printf "%s\n%s\n%s\n" "$TMPDIR" "$PLAYWRIGHT_BROWSERS_PATH" "$npm_config_cache" > "$HOME/seen"; touch "$TMPDIR/work"; exit 7'
+rc=$?
+set -e
+assert_equals 7 "$rc" 'exec returns the command status'
+assert_equals "$drive/Build/Tmp/job." "$(sed -n 1p "$user/seen" | sed 's/job\..*/job./')" 'TMPDIR is a job directory on the drive'
+assert_equals "$drive/Caches/Playwright" "$(sed -n 2p "$user/seen")" 'env entries reach the command'
+assert_equals "$drive/Caches/npm" "$(sed -n 3p "$user/seen")" 'npm cache reaches the command'
+[ -z "$(ls -A "$drive/Build/Tmp")" ] || fail 'exec left its job directory behind'
+wd simctl list devices
+assert_equals "simctl --set $drive/SimulatorDevices list devices" "$(cat "$user/xcrun-args")" 'simctl uses the drive device set'
+pass 'exec and simctl run on the drive and clean up'
+
+new_case install
+make_drive
+set +e; out=$(wd verify 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'verify refuses before install'
+assert_contains "$out" 'refused fresh-shell PLAYWRIGHT_BROWSERS_PATH' 'missing shell export is named'
+cp "$user/.bash_profile" "$case_dir/profile-before"
+out=$(wd install --dry-run)
+assert_contains "$out" "export PLAYWRIGHT_BROWSERS_PATH='$drive/Caches/Playwright'" 'dry run shows the block'
+cmp -s "$user/.bash_profile" "$case_dir/profile-before" || fail 'dry run changed the profile'
+[ ! -e "$user/npm-calls" ] || fail 'dry run changed npm'
+out=$(wd install)
+assert_contains "$out" "ok fresh-shell PLAYWRIGHT_BROWSERS_PATH=$drive/Caches/Playwright" 'fresh shell sees the export'
+assert_contains "$out" "ok npm cache $drive/Caches/npm" 'npm resolves the drive cache'
+assert_contains "$out" "ok xcode derived data $drive/Build/DerivedData" 'Xcode default points at the drive'
+assert_contains "$out" 'pending placement' 'absent placement profile is reported, not passed'
+wd install >/dev/null
+assert_equals 1 "$(grep -c '^# >>> firstmate work drive >>>$' "$user/.bash_profile")" 'install is idempotent'
+grep -qx 'export KEEP_ME=1' "$user/.bash_profile" || fail 'install dropped unmanaged lines'
+pass 'install writes persistent settings that a fresh login shell inherits'
+
+printf 'HOME\nPATH\n' > "$fm/config/launch-env-allowlist"
+set +e; out=$(wd verify 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'allowlist without the name refuses'
+assert_contains "$out" 'PLAYWRIGHT_BROWSERS_PATH is not listed' 'dropped name is named'
+echo PLAYWRIGHT_BROWSERS_PATH >> "$fm/config/launch-env-allowlist"
+wd verify >/dev/null
+jq -n --arg d "$drive" '{drive:$d,required_drive_dirs:["Build/Tmp"]}' > "$fm/config/crew-placement.json"
+set +e; out=$(wd verify 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'placement missing a target refuses'
+assert_contains "$out" 'required_drive_dirs lacks Caches/npm' 'uncovered target is named'
+jq -n --arg d "$drive" --arg t "$TARGETS" '{drive:$d,required_drive_dirs:($t|split(" "))}' > "$fm/config/crew-placement.json"
+out=$(wd verify)
+assert_contains "$out" 'ok placement requires SimulatorDevices' 'matching placement passes'
+pass 'verify checks the launch allowlist and placement profile'
+
+new_case invalid
+printf 'root=%s\nenv=X=../escape\n' "$drive" > "$fm/config/work-drive"
+set +e; out=$(wd check 2>&1); rc=$?; set -e
+assert_equals 2 "$rc" 'escaping target is invalid'
+rm "$fm/config/work-drive"
+set +e; out=$(wd check 2>&1); rc=$?; set -e
+assert_equals 2 "$rc" 'missing configuration is invalid'
+pass 'invalid or missing configuration refuses before any probe'
