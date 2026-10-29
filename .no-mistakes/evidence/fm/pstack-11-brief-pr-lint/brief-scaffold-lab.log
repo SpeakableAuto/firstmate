@@ -1,0 +1,35 @@
+=== B1: lint absent -> legacy placeholder scaffold unchanged ===
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.7Wc4ec/data/t-off/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+exit=0
+2
+
+=== B2: lint on, no --task-file -> refused, nothing written ===
+refuse: brief shape; fix: supply --task-file with the completed goal, intent, spec and evidence before scaffolding
+exit=1
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.7Wc4ec/data/t-none: No such file or directory
+
+=== B3: lint on, task file missing Goal -> refused, nothing written ===
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+exit=1
+ls: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.7Wc4ec/data/t-bad: No such file or directory
+
+=== B4: lint on, complete task file -> scaffolded with Task body + PR evidence gate instruction ===
+pass: brief/PR shape; release evidence and approvals still require review
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.7Wc4ec/data/t-good/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+exit=0
+# Task
+Goal: worktree slot reuse no longer leaks a stale lock after teardown.
+NOT PROVEN WHERE USERS SEE IT: lab run only, no fleet pane.
+Carve-outs: none
+Staff-facing: no
+
+## Captain's intent
+Stop stale slot locks.
+
+## Firstmate spec
+# PR evidence shape
+Before reporting a PR ready, run `python3 /Users/mac-mini-0002/.no-mistakes/worktrees/9db47e05032d/01M64JBQ4WP8BXX3JYSCDFHW52/bin/fm-pr-lint.py --pr-url <PR-url>` and fix each refusal; the supervisor repeats this gate at readiness registration.
+
+=== B5: invalid config value -> refused ===
+refuse: brief-pr-lint config; fix: set config/brief-pr-lint to on or off
+exit=2

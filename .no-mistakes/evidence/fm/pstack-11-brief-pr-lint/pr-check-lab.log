@@ -1,0 +1,13 @@
+=== P1: lint on, real PR 41 (no Goal/declarations) -> readiness refused before any state write ===
+135004adc133ef79d89ea134ea3e1dbcd32f542b  /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.7Wc4ec/state/t-good.meta
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+refuse: carve-outs/payments; fix: include payments in Carve-outs, or add Carve-out review: payments | <specific false-positive reason>; classification does not authorize release
+refuse: staff-facing; fix: declare exactly one Staff-facing: yes or Staff-facing: no line
+exit=1
+state dir unchanged
+135004adc133ef79d89ea134ea3e1dbcd32f542b  /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.7Wc4ec/state/t-good.meta
+
+=== P2: lint on, non-GitHub forge -> explicit refusal ===
+refuse: brief-pr-lint forge; fix: use the standalone --file linter and an explicit home opt-out until this forge has a reader
+exit=1

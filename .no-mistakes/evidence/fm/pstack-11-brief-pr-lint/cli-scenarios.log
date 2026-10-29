@@ -1,0 +1,83 @@
+=== S1: real PR 41 read via gh-axi (--pr-url) ===
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+refuse: carve-outs/payments; fix: include payments in Carve-outs, or add Carve-out review: payments | <specific false-positive reason>; classification does not authorize release
+refuse: staff-facing; fix: declare exactly one Staff-facing: yes or Staff-facing: no line
+exit=1
+
+=== S2: complete body incl. escaped pipe, recorder fenced spans, second hand-check table ===
+Goal: worktree slot reuse no longer leaks a stale lock.
+NOT PROVEN WHERE USERS SEE IT: no live fleet run; lab only.
+
+Carve-outs: none
+Staff-facing: no
+
+## Verification
+| Command | Exit |
+|---|---|
+| `bash tests/fm-pr-lint.test.sh` | 0 |
+| `git log --oneline \| head -3` | 0 |
+| ``grep -n '`x`' file`` | 1 |
+| `` `tick` `` | 0 |
+
+| Check | Result |
+|---|---|
+| read diff by hand | fine |
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+
+=== S3: missing Goal line ===
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+exit=1
+
+=== S4: missing Verification section ===
+refuse: verification; fix: add a ## Verification section with recorded commands and numeric exit codes
+refuse: verification-command; fix: record each check in a Command | Exit table, with a backticked command and its actual integer exit code
+exit=1
+
+=== S5: Verification row with unbackticked command / non-numeric exit / unmatched fence / empty span ===
+row: | npm test | 0 |
+refuse: verification-command; fix: record each check in a Command | Exit table, with a backticked command and its actual integer exit code
+exit=1
+row: | `npm test` | ok |
+refuse: verification-command; fix: record each check in a Command | Exit table, with a backticked command and its actual integer exit code
+exit=1
+row: | ``npm test` | 0 |
+refuse: verification-command; fix: record each check in a Command | Exit table, with a backticked command and its actual integer exit code
+exit=1
+row: | `` | 0 |
+refuse: verification-command; fix: record each check in a Command | Exit table, with a backticked command and its actual integer exit code
+exit=1
+
+=== S6: missing carve-out classification ===
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+exit=1
+
+=== S7: "Carve-outs: none" but diff touches payments / secrets / schema paths ===
+refuse: carve-outs/payments; fix: include payments in Carve-outs, or add Carve-out review: payments | <specific false-positive reason>; classification does not authorize release
+refuse: carve-outs/logins-keys-secrets; fix: include logins-keys-secrets in Carve-outs, or add Carve-out review: logins-keys-secrets | <specific false-positive reason>; classification does not authorize release
+refuse: carve-outs/shared-database-schema; fix: include shared-database-schema in Carve-outs, or add Carve-out review: shared-database-schema | <specific false-positive reason>; classification does not authorize release
+exit=1
+
+=== S8: prose mentions Stripe refunds (eval n03 shape) with Carve-outs: none ===
+refuse: carve-outs/payments; fix: include payments in Carve-outs, or add Carve-out review: payments | <specific false-positive reason>; classification does not authorize release
+exit=1
+
+=== S9: carve-out declared -> passes ===
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+
+=== S10: staff-facing yes without Admin Update link (eval s07 shape) ===
+refuse: admin-update; fix: add Admin Update: https://<published-admin-update> | Coming soon (or Live); publish and verify the Update before release
+exit=1
+
+=== S11: staff-facing yes with Admin Update link ===
+pass: brief/PR shape; release evidence and approvals still require review
+exit=0
+
+=== S12: declarations hidden inside a code fence do not count ===
+refuse: goal; fix: put Goal: followed by a concrete outcome on the first substantive line
+refuse: live-proof; fix: add NOT PROVEN WHERE USERS SEE IT: <missing check and reason> immediately after the goal, or a Live proof: https://... evidence link in Verification
+refuse: carve-outs; fix: declare exactly one Carve-outs: line listing payments, logins-keys-secrets, shared-database-schema, or none
+refuse: staff-facing; fix: declare exactly one Staff-facing: yes or Staff-facing: no line
+exit=1
