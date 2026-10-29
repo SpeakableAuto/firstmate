@@ -9,10 +9,13 @@ The optional config/clear-unmerged-skip-repos lists owner/repo or host/owner/rep
 one per line, with # comments. Registry rows naming Michael are also excluded.
 No inference about ownership is made from an organization name.
 
-A report in data/*/report.md qualifies when its first Markdown heading starts
-with '# CLEAR' as a whole word, and its text contains the full PR URL and SHA.
-Report age uses mtime, or the latest explicit at=<epoch> if present. The clock
-starts at the later of that time and the PR creation/latest force-push/head push.
+A report in data/*/report.md names a PR when its text contains the full PR URL
+and head SHA. The latest such report (by mtime) decides: it must have a first
+Markdown heading starting with '# CLEAR' as a whole word; a later non-CLEAR
+review at the same head blocks the alert. Report time is the file mtime only;
+a future mtime is clamped to the first poll that saw it, retained while that
+mtime is unchanged. The clock starts at the later of that time and the PR
+creation/latest force-push/head push.
 GitHub often omits pushedDate; updatedAt at the first observation of each head
 is then a conservative upper bound on head-change time. This can delay the
 initial alert; subsequent unrelated PR activity does not keep resetting it.
@@ -25,7 +28,10 @@ captain holds are read through fm-tasks-axi.sh, including URL-linked backlog
 rows and tasks bound by state/*.meta pr= or a matching review task id.
 
 state/.clear-unmerged.json stores schema=1, alerted PR+head identities, observed
-head clocks, and the last diagnostic for repeat suppression. A nonblocking flock serializes checks.
+head clocks (pruned per repository after a complete PR list), clamped future
+report times, and the last diagnostic for repeat suppression. A nonblocking flock serializes checks.
+A failed project, repository or PR read is reported and skipped; the remaining
+items are still evaluated, and the failed item is never marked alerted.
 At most one new alert per pass keeps watcher output bounded; subsequent polls
 advance through the remaining candidates. Disarming retains this history.
 The entire scan is bounded to min(20, FM_CHECK_TIMEOUT-2) seconds, with a 10s
@@ -59,6 +65,9 @@ SHA = re.compile(r'(?<![a-fA-F0-9])[a-fA-F0-9]{40}(?![a-fA-F0-9])')
 
 class Unavailable(Exception):
     pass
+
+
+ITEM_ERRORS = (Unavailable, OSError, ValueError, KeyError, TypeError, IndexError, AttributeError)
 
 
 class Poll:
@@ -101,7 +110,7 @@ class Poll:
             raise Unavailable(f'{path} exceeds the 2 MiB read bound')
         return path.read_text()
 
-    def repos(self):
+    def repos(self, errors):
         skip_file = self.config/'clear-unmerged-skip-repos'
         skipped = set()
         if skip_file.exists():
@@ -121,32 +130,44 @@ class Poll:
                 raise Unavailable('invalid project registry name')
             if re.search(r'\bMichael\b', row, re.I):
                 continue
-            mode = self.run([BIN/'fm-project-mode.sh', name]).strip()
-            forge = self.run([BIN/'fm-project-mode.sh', '--forge', name]).strip()
-            if mode.split()[0] == 'local-only' or forge == 'gerrit':
+            try:
+                mode = self.run([BIN/'fm-project-mode.sh', name]).strip()
+                forge = self.run([BIN/'fm-project-mode.sh', '--forge', name]).strip()
+                if mode.split()[0] == 'local-only' or forge == 'gerrit':
+                    continue
+                remote = self.run(['git', '-C', self.projects/name, 'remote', 'get-url', 'origin']).strip()
+                match = re.fullmatch(r'(?:https?://|ssh://git@|git@)([A-Za-z0-9.-]+)[:/]('+SLUG+'/'+SLUG+r')(?:\.git)?/?', remote)
+                if not match:
+                    raise Unavailable(f'unsupported origin for {name}; a GitHub origin is required')
+            except (Unavailable, IndexError) as error:
+                errors.append(f'{name}: {error}')
                 continue
-            remote = self.run(['git', '-C', self.projects/name, 'remote', 'get-url', 'origin']).strip()
-            match = re.fullmatch(r'(?:https?://|ssh://git@|git@)([A-Za-z0-9.-]+)[:/]('+SLUG+'/'+SLUG+r')(?:\.git)?/?', remote)
-            if not match:
-                raise Unavailable(f'unsupported origin for {name}; a GitHub origin is required')
             host, repo = match.groups()
             repo = repo.removesuffix('.git')
             if repo.lower() not in skipped and (host+'/'+repo).lower() not in skipped:
                 repos.add((host.lower(), repo))
         return sorted(repos)
 
-    def reports(self):
-        reports = []
+    def reports(self, record):
+        reports, previous, clamped = [], record.get('clamped', {}), {}
         for path in sorted(self.data.glob('*/report.md')):
             if len(reports) > 10000:
-                raise Unavailable('report scan exceeds 10000 CLEAR reports')
+                raise Unavailable('report scan exceeds 10000 reports')
             text = self.read(path)
-            heading = re.search(r'^#{1,6} .+$', LINT.prose(text), re.M)
-            if not heading or not re.match(r'^# CLEAR(?:\s|$)', heading[0]):
+            urls = set(URL.findall(text))
+            if not urls:
                 continue
-            stamps = re.findall(r'\bat=([0-9]+)\b', text)
-            stamp = max(map(int, stamps)) if stamps else path.stat().st_mtime
-            reports.append((path, set(URL.findall(text)), {s.lower() for s in SHA.findall(text)}, stamp))
+            heading = re.search(r'^#{1,6} .+$', LINT.prose(text), re.M)
+            clear = bool(heading and re.match(r'^# CLEAR(?:\s|$)', heading[0]))
+            mtime = path.stat().st_mtime
+            seen = previous.get(str(path))
+            if seen and seen['mtime'] == mtime:
+                clamped[str(path)] = seen
+            elif mtime > self.now:
+                clamped[str(path)] = {'mtime': mtime, 'at': self.now}
+            stamp = clamped[str(path)]['at'] if str(path) in clamped else mtime
+            reports.append((path, urls, {s.lower() for s in SHA.findall(text)}, stamp, clear))
+        record['clamped'] = clamped
         return reports
 
     def holds(self):
@@ -247,9 +268,13 @@ class Poll:
             raise Unavailable('forge returned invalid PR identity')
         if url in held_urls:
             return None
-        matches = [(p, stamp) for p, urls, shas, stamp in reports
+        matches = [(stamp, not clear, p) for p, urls, shas, stamp, clear in reports
                    if url in urls and sha in shas and p.parent.name not in held_ids]
         if not matches:
+            return None
+        # The latest review at this head decides; a re-review resets the grace period.
+        clear_time, blocked, path = max(matches)
+        if blocked:
             return None
         body = pr['body']
         declared = re.findall(r'^Carve-outs:\s*([^\n]*)$', LINT.prose(body), re.M | re.I)
@@ -270,8 +295,6 @@ class Poll:
             paths = [node['path'] for node in files['nodes']]
             if LINT.carve_out_signals(body, paths):
                 return None
-        # Take the latest matching report: a re-review resets the grace period.
-        path, clear_time = max(matches, key=lambda match: match[1])
         age = int(self.now - max(clear_time, head_time))
         if age <= 7200:
             return None
@@ -335,31 +358,46 @@ def check():
         record = json.loads(poll.read(record_path)) if record_path.exists() else {'schema': 1, 'alerted': [], 'error': ''}
         if not isinstance(record, dict) or record.get('schema') != 1 or not isinstance(record.get('alerted'), list):
             raise Unavailable('invalid clear-unmerged history; preserve it and repair the record')
+        errors = []
         try:
-            repos = poll.repos()
-            if not repos:
-                return
-            reports = poll.reports()
-            held_ids, held_urls = poll.holds()
+            repos = poll.repos(errors)
+            reports = poll.reports(record) if repos else []
+            held_ids, held_urls = poll.holds() if repos else (set(), set())
             candidate = None
+            heads = record.setdefault('heads', {})
             for host, repo in repos:
-                for pr in poll.prs(host, repo):
-                    poll.remaining()
-                    head_time = poll.head_time(pr, record)
-                    found = poll.candidate(pr, reports, held_ids, held_urls, head_time)
+                try:
+                    prs = poll.prs(host, repo)
+                except ITEM_ERRORS as error:
+                    errors.append(str(error))
+                    continue
+                prefix = f'https://{host}/{repo}/pull/'.lower()
+                listed = {pr.get('url') for pr in prs}
+                for url in [u for u in heads if u.lower().startswith(prefix) and u not in listed]:
+                    del heads[url]
+                for pr in prs:
+                    try:
+                        poll.remaining()
+                        head_time = poll.head_time(pr, record)
+                        found = poll.candidate(pr, reports, held_ids, held_urls, head_time)
+                    except ITEM_ERRORS as error:
+                        errors.append(str(error))
+                        continue
                     if found and found[0] not in record['alerted'] and candidate is None:
                         candidate = found
-            record['error'] = ''
             if candidate:
                 # Output precedes the receipt: failed persistence can repeat an
                 # alert but cannot silently suppress an alert never produced.
                 print(candidate[1], flush=True)
                 record['alerted'].append(candidate[0])
-        except (Unavailable, OSError, ValueError, KeyError, TypeError, IndexError, AttributeError) as error:
-            note = 'CLEAR unmerged check unavailable: '+' '.join(str(error).split())
+        except ITEM_ERRORS as error:
+            errors.append(str(error))
+        note = ''
+        if errors:
+            note = 'CLEAR unmerged check unavailable: '+'; '.join(' '.join(e.split()) for e in dict.fromkeys(errors))
             if note != record.get('error'):
                 print(note, flush=True)
-            record['error'] = note
+        record['error'] = note
         save(record_path, record)
 
 

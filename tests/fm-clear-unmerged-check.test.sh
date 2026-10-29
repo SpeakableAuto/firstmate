@@ -66,8 +66,8 @@ print((h/'tasks').read_text())
         p.write_text(content)
         os.utime(p, (epoch, epoch))
 
-    def forge(self, more=False):
-        response = dict(data=dict(repository=dict(pullRequests=dict(nodes=[self.pr],pageInfo=dict(hasNextPage=more)))))
+    def forge(self, more=False, prs=None):
+        response = dict(data=dict(repository=dict(pullRequests=dict(nodes=prs or [self.pr],pageInfo=dict(hasNextPage=more)))))
         encoded = base64.b64encode(json.dumps(response).encode()).decode()
         chunks = [encoded[i:i+1000] for i in range(0,len(encoded),1000)]
         (self.home/'forge').write_text('chunks['+str(len(chunks))+']{part}:\n'+''.join('  '+chunk+'\n' for chunk in chunks))
@@ -183,11 +183,60 @@ print((h/'tasks').read_text())
         self.forge()
         self.assertIn(URL, self.run_check())
 
-    def test_explicit_report_time_and_new_review(self):
-        self.report('# CLEAR [at='+str(NOW-7140)+']\n'+URL+' '+SHA, NOW-10000)
-        self.assertEqual(self.run_check(), '')
-        self.report('# CLEAR [at='+str(NOW-7260)+']\n'+URL+' '+SHA, NOW)
+    def test_quoted_at_stamp_does_not_move_clock(self):
+        self.report('# CLEAR\nresolved [at='+str(NOW-100)+']\n'+URL+' '+SHA, NOW-7260)
         self.assertIn(URL, self.run_check())
+        (self.home/'state/.clear-unmerged.json').unlink()
+        self.report('# CLEAR\nresolved [at='+str(NOW-10000)+']\n'+URL+' '+SHA, NOW-7140)
+        self.assertEqual(self.run_check(), '')
+
+    def test_future_mtime_clamps_to_first_poll(self):
+        self.report('# CLEAR\n'+URL+' '+SHA, NOW+5000)
+        self.assertEqual(self.run_check(), '')
+        self.env['FM_CLEAR_UNMERGED_NOW'] = str(NOW+7200)
+        self.assertEqual(self.run_check(), '')
+        self.env['FM_CLEAR_UNMERGED_NOW'] = str(NOW+7201)
+        self.assertIn('age=7201s', self.run_check())
+
+    def test_later_non_clear_review_blocks(self):
+        later = self.home/'data/review2/report.md'
+        later.parent.mkdir()
+        later.write_text('# Changes requested\n'+URL+' '+SHA)
+        os.utime(later, (NOW-7230, NOW-7230))
+        self.assertEqual(self.run_check(), '')
+        os.utime(later, (NOW-7300, NOW-7300))
+        self.assertIn(URL, self.run_check())
+
+    def test_bad_pr_or_project_does_not_silence_others(self):
+        bad = json.loads(json.dumps(self.pr))
+        bad['url'] = 'https://github.com/example/demo/pull/6'
+        bad['body'] = 'Carve-outs: maybe'
+        self.forge(prs=[bad, self.pr])
+        self.report('# CLEAR\n'+bad['url']+' '+URL+' '+SHA, NOW-7260)
+        subprocess.run(['git', 'init', '-q', str(self.home/'projects/other')], check=True)
+        subprocess.run(['git', '-C', str(self.home/'projects/other'), 'remote', 'add', 'origin', '/srv/other.git'], check=True)
+        (self.home/'data/projects.md').write_text('- demo [no-mistakes] - demo\n- other [no-mistakes] - other\n')
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertIn('pull/6 has invalid Carve-outs', out)
+        self.assertIn('other:', out)
+        self.assertNotIn('pull/6', json.loads((self.home/'state/.clear-unmerged.json').read_text())['alerted'][0])
+
+    def test_closed_pr_heads_pruned_after_complete_list(self):
+        self.run_check()
+        state = self.home/'state/.clear-unmerged.json'
+        self.assertIn(URL, json.loads(state.read_text())['heads'])
+        (self.home/'forge-error').touch()
+        self.run_check()
+        self.assertIn(URL, json.loads(state.read_text())['heads'])
+        (self.home/'forge-error').unlink()
+        other = json.loads(json.dumps(self.pr))
+        other['url'] = 'https://github.com/example/demo/pull/8'
+        self.forge(prs=[other])
+        self.run_check()
+        record = json.loads(state.read_text())
+        self.assertEqual(list(record['heads']), [other['url']])
+        self.assertIn(URL+'@'+SHA, record['alerted'])
 
     def test_missing_paths_and_malformed_declaration_refuse(self):
         self.pr['body'] = 'Improve monitoring'
