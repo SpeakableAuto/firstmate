@@ -1,0 +1,11 @@
+## S9: real fm-spawn.sh scout at cap 2 with 2 protected slots (1 leased, 1 dirty) -> refused before allocation
+$ FM_HOME=$LAB bin/fm-spawn.sh cap-scout $LAB/projects/demo --scout --harness claude --backend tmux
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.2jOkQi
+Claude quota: cached reading 190s old
+error: refusing spawn: worktree slot cap 2 reached: 2 slots held (pools: demo-9b0640 2); 0 possible reclaim candidates (Treehouse merge proof still required)
+exit=
+1
+3
+treehouse-state.json
+treehouse-state.lock
+pool state unchanged: no new slot allocated

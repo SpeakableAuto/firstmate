@@ -1,0 +1,45 @@
+## real treehouse v2.1.1; pool under /var (symlink to /private/var)
+## S1: no cap file -> allow
+$ bash bin/fm-worktree-slots.sh room /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.2jOkQi/projects/demo
+allow: no worktree slot cap configured
+exit=0
+## S2: cap=4, 3 slots held -> allow
+$ bash bin/fm-worktree-slots.sh room /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.2jOkQi/projects/demo
+allow: worktree slot cap 4: 3 slots held
+exit=0
+## S3: cap=3 at capacity -> refuse with pool counts
+$ bash bin/fm-worktree-slots.sh room /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.2jOkQi/projects/demo
+refuse: worktree slot cap 3 reached: 3 slots held (pools: demo-9b0640 3); 2 possible reclaim candidates (Treehouse merge proof still required)
+exit=1
+pool state unchanged by room check
+## S4: malformed cap -> refuse
+$ bash bin/fm-worktree-slots.sh room /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.2jOkQi/projects/demo
+refuse: worktree slot cap unreadable: config/worktree-slot-cap must hold one positive integer (at most 9 digits) followed by one newline
+exit=1
+## S5: reclaim --dry-run changes nothing
+$ bash bin/fm-worktree-slots.sh reclaim --dry-run
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/1/demo: treehouse reports it leased
+candidate (Treehouse merge proof still required): /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/2/demo
+candidate (Treehouse merge proof still required): /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/3/demo
+exit=0
+1
+2
+3
+treehouse-state.json
+treehouse-state.lock
+## S6: reclaim (real treehouse safe destroy)
+$ bash bin/fm-worktree-slots.sh reclaim
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/1/demo: treehouse reports it leased
+reclaimed: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/2/demo
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/3/demo: treehouse kept it: did not destroy 3 (unmerged); re-run with --include-unlanded
+exit=0
+1
+3
+treehouse-state.json
+treehouse-state.lock
+1     leased       /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/1/demo  (held by lab)
+3     available    /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/3/demo
+## S7: room after reclaim
+$ bash bin/fm-worktree-slots.sh room /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.2jOkQi/projects/demo
+allow: worktree slot cap 3: 2 slots held
+exit=0

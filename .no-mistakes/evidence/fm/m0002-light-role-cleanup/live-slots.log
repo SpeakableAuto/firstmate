@@ -1,0 +1,79 @@
+=== S1: no config/worktree-slot-cap (opt-out) ===
+leased slot A: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project
+
+$ bash <wt>/bin/fm-worktree-slots.sh room /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/projects/project
+allow: no worktree slot cap configured
+[exit 0]
+
+=== S2: cap 1, one returned merged slot -> refuse, dry-run, reclaim via real treehouse, allow ===
+
+$ bash <wt>/bin/fm-worktree-slots.sh room /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/projects/project
+refuse: worktree slot cap 1 reached: 1 slots held (pools: project-1f61d1 1); 1 possible reclaim candidates (Treehouse merge proof still required)
+[exit 1]
+
+$ bash <wt>/bin/fm-worktree-slots.sh reclaim --dry-run
+candidate (Treehouse merge proof still required): /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project
+[exit 0]
+after dry-run: slot A still exists
+
+$ bash <wt>/bin/fm-worktree-slots.sh reclaim
+reclaimed: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project
+[exit 0]
+after reclaim: slot A removed from disk
+/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/projects/project  6896a51 [main]
+
+$ bash <wt>/bin/fm-worktree-slots.sh room /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/projects/project
+allow: worktree slot cap 1: 0 slots held
+[exit 0]
+
+=== S3 (adversarial): unmerged committed work in returned slot -> kept ===
+leased slot B: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project
+slot B returned (unleased) but on unmerged commit
+
+$ bash <wt>/bin/fm-worktree-slots.sh room /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/projects/project
+refuse: worktree slot cap 1 reached: 1 slots held (pools: project-1f61d1 1); 1 possible reclaim candidates (Treehouse merge proof still required)
+[exit 1]
+
+$ bash <wt>/bin/fm-worktree-slots.sh reclaim
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project: treehouse kept it: did not destroy 1 (unmerged); re-run with --include-unlanded
+[exit 0]
+slot B kept (commit unlanded)
+
+$ bash <wt>/bin/fm-worktree-slots.sh room /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/projects/project
+refuse: worktree slot cap 1 reached: 1 slots held (pools: project-1f61d1 1); 1 possible reclaim candidates (Treehouse merge proof still required)
+[exit 1]
+
+=== S4 (adversarial): leased (in-use) slot -> kept, admission refused ===
+leased slot C (still leased): /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project
+
+$ bash <wt>/bin/fm-worktree-slots.sh room /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/projects/project
+refuse: worktree slot cap 1 reached: 1 slots held (pools: project-1f61d1 1); 0 possible reclaim candidates (Treehouse merge proof still required)
+[exit 1]
+
+$ bash <wt>/bin/fm-worktree-slots.sh reclaim
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project: treehouse reports it leased
+[exit 0]
+slot C kept
+
+=== S5 (adversarial): dirty returned slot -> kept ===
+
+$ bash <wt>/bin/fm-worktree-slots.sh reclaim
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project: worktree has uncommitted changes
+[exit 0]
+slot C kept with untracked file
+
+=== S6 (adversarial): a task record names the slot -> kept ===
+
+$ bash <wt>/bin/fm-worktree-slots.sh reclaim
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project: task task-live records it as its worktree
+[exit 0]
+slot C kept while recorded
+
+$ bash <wt>/bin/fm-worktree-slots.sh reclaim
+reclaimed: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/trees/.treehouse/project-1f61d1/1/project
+[exit 0]
+slot C removed once record gone
+
+$ bash <wt>/bin/fm-worktree-slots.sh room /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.VjN8iS/projects/project
+allow: worktree slot cap 1: 0 slots held
+[exit 0]

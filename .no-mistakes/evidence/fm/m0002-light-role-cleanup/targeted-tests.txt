@@ -1,0 +1,35 @@
+== tests/fm-worktree-slots.test.sh
+exit=0
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.d6Q9Ex/recorded/pool/1/project: task active records it as its worktree
+ok - recorded slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.d6Q9Ex/leased/pool/1/project: treehouse reports it leased
+ok - leased slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.d6Q9Ex/old-tool/pool/1/project: treehouse kept it: this treehouse has no safe-by-default destroy, so nothing was removed
+ok - old Treehouse cannot destroy slots
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.d6Q9Ex/contended/pool/1/project: another slot allocation or return holds its project lock
+ok - contended project lock keeps slot
+ok - unreadable pool fails closed
+reclaimed: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.d6Q9Ex/symlinked-none/real-pool/1/project
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.d6Q9Ex/symlinked-dirty/real-pool/1/project: worktree has uncommitted changes
+ok - symlinked pool root: recorded spelling reclaims, protected slot kept
+== tests/fm-spawn-worktree-settle.test.sh
+exit=0
+ok - slot cap refuses spawn before endpoint allocation and keeps recorded work
+ok - a pane stuck on the primary checkout fails loudly at the deadline
+# all fm-spawn-worktree-settle tests passed
+== tests/fm-teardown.test.sh
+exit=127
+== tests/fm-teardown.test.sh (PATH with ~/.local/bin for tasks-axi)
+ok - slot removal requires opted-in merge proof or completed scout; pushed-only and force keep slots
+ok - local-only worktree with work merged into local main is torn down (no regression)
+ok - squash-merged + deleted-branch worktree (PR merged) is torn down (the fix)
+ok - squash-merged PR accepts a local HEAD that is an ancestor of the final PR head
+ok - teardown discovers a merged PR by branch name and tears down when no pr= was ever recorded
+ok - squash-merged PR accepts replayed unpushed local patches contained in the PR head
+ok - merged PR does not allow teardown after a later local commit
+ok - squash-merged task whose local branch followed the pipeline rebase is torn down
+ok - squash-merged same-path different content still refuses
+ok - squash-merged rebased local still refuses a genuinely unlanded follow-up commit
+ok - squash-merged stale local still refuses when the forge is unreachable
+ok - a process exiting during identity lookup does not block teardown
+ok - the run abort and the leaked-process reap both complete before the destructive worktree return

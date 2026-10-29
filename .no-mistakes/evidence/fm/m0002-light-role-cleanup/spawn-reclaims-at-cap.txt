@@ -1,0 +1,19 @@
+## S10: real fm-spawn.sh scout at cap 2 with 1 leased + 1 clean merged idle slot -> reclaims and admits
+before:
+1
+3
+treehouse-state.json
+treehouse-state.lock
+spawn exit=1
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.2jOkQi
+Claude quota: cached reading 206s old
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/1/demo: treehouse reports it leased
+reclaimed: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.2jOkQi/pools/.treehouse/demo-9b0640/3/demo
+/Users/mac-mini-0002/.no-mistakes/worktrees/9db47e05032d/01M62Z67H9ZZ4390602HMFXE4K/bin/backends/tmux.sh: line 77: tmux: command not found
+/Users/mac-mini-0002/.no-mistakes/worktrees/9db47e05032d/01M62Z67H9ZZ4390602HMFXE4K/bin/backends/tmux.sh: line 99: tmux: command not found
+/Users/mac-mini-0002/.no-mistakes/worktrees/9db47e05032d/01M62Z67H9ZZ4390602HMFXE4K/bin/backends/tmux.sh: line 103: tmux: command not found
+after:
+1
+treehouse-state.json
+treehouse-state.lock
+1 leased=true owner_pid=0

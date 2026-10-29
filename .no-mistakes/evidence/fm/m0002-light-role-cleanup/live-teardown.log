@@ -1,0 +1,49 @@
+######## merged
+real treehouse slot: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.rDzhtY/trees/.treehouse/firstmate-e8dae1/1/firstmate
+slot HEAD: a67a28b no-mistakes(document): Document titled Claude separator support
+/Users/mac-mini-0002/.no-mistakes/evidence/01M62Z67H9ZZ4390602HMFXE4K/live-teardown.sh: line 48: tmux: command not found
+slots before: 1
+room before:  refuse: worktree slot cap 1 reached: 1 slots held (pools: firstmate-e8dae1 1); 0 possible reclaim candidates (Treehouse merge proof still required)
+$ fm-teardown.sh task-x1 
+teardown: removed worktree slot /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.rDzhtY/trees/.treehouse/firstmate-e8dae1/1/firstmate after its PR merge was proved
+error: tmux window firstmate:fm-task-x1 could not be read after its close, so whether it survived is unknown
+error: the tmux endpoint firstmate:fm-task-x1 for task-x1 could not be closed, so it may still be live.
+error: stopping this cleanup without removing the task's records, so the record naming firstmate:fm-task-x1 is still here to reconcile from.
+error: that retention is not durable across a session start: if this task carries a backlog transition, the next session replays its pending close and removes the retained record, so reconcile the surviving endpoint yourself rather than trusting the retention.
+error: rerun teardown once the close can succeed, or rerun with --force to discard this task's records deliberately.
+[teardown exit 1]
+RESULT: slot removed from disk
+/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.rDzhtY/projects/firstmate  bbe83e4 [zac-runtime]
+room after:   allow: worktree slot cap 1: 0 slots held
+######## unmerged-pr
+real treehouse slot: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.6gjJWj/trees/.treehouse/firstmate-e8dae1/1/firstmate
+slot HEAD: 21d3b2a local-only work not in PR 40
+/Users/mac-mini-0002/.no-mistakes/evidence/01M62Z67H9ZZ4390602HMFXE4K/live-teardown.sh: line 48: tmux: command not found
+slots before: 1
+room before:  refuse: worktree slot cap 1 reached: 1 slots held (pools: firstmate-e8dae1 1); 0 possible reclaim candidates (Treehouse merge proof still required)
+$ fm-teardown.sh task-x1 
+error: tmux window firstmate:fm-task-x1 could not be read after its close, so whether it survived is unknown
+error: the tmux endpoint firstmate:fm-task-x1 for task-x1 could not be closed, so it may still be live.
+error: stopping this cleanup without removing the task's records, so the record naming firstmate:fm-task-x1 is still here to reconcile from.
+error: that retention is not durable across a session start: if this task carries a backlog transition, the next session replays its pending close and removes the retained record, so reconcile the surviving endpoint yourself rather than trusting the retention.
+error: rerun teardown once the close can succeed, or rerun with --force to discard this task's records deliberately.
+[teardown exit 1]
+RESULT: slot still on disk
+/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.6gjJWj/projects/firstmate                             bbe83e4 [zac-runtime]
+/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.6gjJWj/trees/.treehouse/firstmate-e8dae1/1/firstmate  bbe83e4 (detached HEAD)
+room after:   refuse: worktree slot cap 1 reached: 1 slots held (pools: firstmate-e8dae1 1); 0 possible reclaim candidates (Treehouse merge proof still required)
+######## force
+real treehouse slot: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.nzLaad/trees/.treehouse/firstmate-e8dae1/1/firstmate
+slot HEAD: a67a28b no-mistakes(document): Document titled Claude separator support
+/Users/mac-mini-0002/.no-mistakes/evidence/01M62Z67H9ZZ4390602HMFXE4K/live-teardown.sh: line 48: tmux: command not found
+slots before: 1
+room before:  refuse: worktree slot cap 1 reached: 1 slots held (pools: firstmate-e8dae1 1); 0 possible reclaim candidates (Treehouse merge proof still required)
+$ fm-teardown.sh task-x1 --force
+error: tmux window firstmate:fm-task-x1 could not be read after its close, so whether it survived is unknown
+error: the tmux endpoint firstmate:fm-task-x1 for task-x1 could not be closed, so it may still be live.
+error: --force authorizes continuing past a close that failed, so this cleanup proceeds toward removing the task's records; reconcile firstmate:fm-task-x1 yourself, because nothing here can still be relied on to name it.
+[teardown exit 0]
+RESULT: slot still on disk
+/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.nzLaad/projects/firstmate                             bbe83e4 [zac-runtime]
+/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.nzLaad/trees/.treehouse/firstmate-e8dae1/1/firstmate  bbe83e4 (detached HEAD)
+room after:   refuse: worktree slot cap 1 reached: 1 slots held (pools: firstmate-e8dae1 1); 1 possible reclaim candidates (Treehouse merge proof still required)
