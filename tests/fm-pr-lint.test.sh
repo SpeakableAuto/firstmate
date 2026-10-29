@@ -164,6 +164,53 @@ class Linter(unittest.TestCase):
         emitted = (home/'data/depth-authorized/brief.md').read_text()
         self.assertEqual(self.run_lint(emitted, '--kind', 'brief').returncode, 0)
 
+    def test_research_depth_scaffold_review_regressions(self):
+        home = self.root/'review-home'
+        (home/'config').mkdir(parents=True)
+        (home/'config/brief-pr-lint').write_text('on\n')
+        env = dict(os.environ, FM_HOME=str(home))
+        for key in ('FM_ROOT_OVERRIDE', 'FM_CONFIG_OVERRIDE', 'FM_DATA_OVERRIDE', 'FM_STATE_OVERRIDE'):
+            env.pop(key, None)
+        cases = [
+            ('Research pstack and return the top 5 ideas we can borrow. Zac asked for the top 3 competitors.', '', False),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 5 ideas from those competitors.', False),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 5 competitors.', False),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 3 ideas.', False),
+            ('Research pstack. Zac asked for the top 3.', 'Return the top 3 ideas.', False),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 3 competitors.', True),
+            ('Research pstack. Zac asked for the top three competitors.', 'Return the best 2 competitors.', True),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return at most 2 competitors.', True),
+            ('Research pstack. Zac asked for the top3 COMPETITORS.', 'Return the best 1 competitor.', True),
+            ('Research pstack. Zac asked for the top 3 competitors.', 'Return the top 3 competitors and the top 2 ideas.', False),
+            ('Research pstack. Zac asked for the top 3 competitors. Zac requested the 2 best ideas.',
+             'Return the best 3 competitors and the top 2 ideas.', True),
+            ('Research error patterns in customer reports and return the top 5 findings.', '', False),
+            ('Audit bug reports and return the top 5 lessons.', '', False),
+            ('Research regression patterns and return the top 5 findings.', '', False),
+            ('Research failing tests and return the top 5 findings.', '', False),
+            ('Research lint errors and return the top 5 findings.', '', False),
+            ('Research how to fix bugs and return the top 5 findings.', '', False),
+            ('Do not fix the top 3 bugs from the audit report. Research the top 5 findings.', '', False),
+            ('Fix the top 3 bugs from the audit report.', '', True),
+            ('Repair the top 3 failing tests from the audit report.', '', True),
+            ('Review of the change: resolve the top 3 lint errors.', '', True),
+            ('Fix the top 3 bugs from the audit report. Research the top 5 findings.', '', False),
+            ('Fix the top 3 bugs from the audit report.', 'Research the top 5 findings.', False),
+        ]
+        for index, (intent, spec, allowed) in enumerate(cases):
+            with self.subTest(intent=intent, spec=spec):
+                name = 'review-'+str(index)
+                task = self.root/'review-task.md'
+                task.write_text(self.brief(intent, spec))
+                result = subprocess.run(['bash', str(ROOT/'bin/fm-brief.sh'), name, 'demo',
+                                         '--scout', '--task-file', str(task)],
+                                        env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0 if allowed else 1, result.stdout+result.stderr)
+                self.assertEqual((home/'data'/name/'brief.md').exists(), allowed)
+                if not allowed:
+                    self.assertIn('refuse: research-depth; fix:', result.stderr)
+                    self.assertIn('complete coverage', result.stderr)
+
     def test_complete(self):
         r = self.run_lint(GOOD)
         self.assertEqual(r.returncode, 0, r.stderr)

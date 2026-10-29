@@ -2,10 +2,10 @@
 
 ## 30 October 2026: refuse unrequested research findings caps
 
-PR: https://github.com/SpeakableAuto/firstmate/pull/44; stacked on fm/pstack-11-brief-pr-lint and depends on https://github.com/SpeakableAuto/firstmate/pull/43, so it must land afterward.
+PR: https://github.com/SpeakableAuto/firstmate/pull/44; targets zac-runtime after https://github.com/SpeakableAuto/firstmate/pull/43 merged.
 The optional brief check now refuses capped research, study, audit, inventory and review tasks with a fix naming complete coverage and the deliverable page.
-An explicit cap request in captain intent is accepted; a claim in the implementation specification cannot supply that authority.
-Fix-task exemptions come only from captain intent; required preamble declarations and the specification cannot disable the depth check.
+An explicit cap request in captain intent permits only the same subject and no more than the requested count; a claim in the implementation specification cannot supply that authority.
+Only imperative fix, repair or resolve instructions for capped defects in captain intent are exempt; research about bugs or errors is checked; required preamble declarations and the specification cannot disable the depth check.
 A cap request explicitly withdrawn or overridden in the same or next sentence no longer authorizes a limit; ordinary "not" or "instead" wording keeps it.
 Uncapped briefs, PR-body checks and absent/off homes retain their existing behavior.
 Watch for conservative text matching: this is a scaffold-time check, not enforcement of every later manual edit or finished report.
