@@ -115,15 +115,21 @@ class Linter(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_research_depth_withdrawn_requests(self):
-        for cue in ('but now wants every item', 'no longer wants a cap', 'instead wants complete coverage',
-                    'include every item', 'include all of them', 'that request is withdrawn', 'not a cap any more'):
+        for cue in ('but now wants every item', 'no longer wants a cap', 'he has since asked for depth',
+                    'he withdrew it', 'that request is withdrawn', 'he changed his mind', 'they changed their mind',
+                    'he now wants every finding', 'he instead wants all findings', 'include every item',
+                    'include all of them', 'give the full list'):
             for separator in (' ', '. ', '.\n'):
                 with self.subTest(cue=cue, separator=separator):
                     intent = 'Research pstack and return the top 5 ideas. Zac asked for the top 5 last week'+separator+cue+'.'
                     self.assert_depth_refused(self.brief(intent))
         for intent in ('Research the market. Zac asked for the top 3 competitors only.',
                        'Research the market. Zac wants the best five. Write the report.',
-                       'Research the market. Zac requested the 3 best.\nDeliver the report page.'):
+                       'Research the market. Zac requested the 3 best.\nDeliver the report page.',
+                       'Research the market. Zac asked for the top 3 competitors. Do not include resellers.',
+                       'Research the market. Zac asked for the top 3 competitors, not every reseller.',
+                       'Research the market. Zac asked for the top 3 competitors (not resellers).',
+                       'Research the market. Zac wants the best five. Use a page instead of chat.'):
             result = self.run_lint(self.brief(intent), '--kind', 'brief')
             self.assertEqual(result.returncode, 0, result.stderr)
 
