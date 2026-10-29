@@ -355,6 +355,7 @@ expect_code 0 "$?" 'external placement checks'
 # another task records. Only the Treehouse return command is replaced here.
 (
   SCRIPT_DIR="$ROOT/bin"
+  # shellcheck source=bin/fm-placement-lib.sh
   . "$SCRIPT_DIR/fm-placement-lib.sh"
   FM_PLACEMENT_ID=reject-test
   RETURN_PROJECT="$TMP_ROOT/return-project"

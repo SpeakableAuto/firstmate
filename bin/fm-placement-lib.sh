@@ -48,6 +48,7 @@ fm_placement_publish() {
   recorded=$(printf '%s\n' "$decision" | python3 "$SCRIPT_DIR/fm-placement.py" "$operation" "$STATE" "$FM_PLACEMENT_ID" "$mode") || return 1
   FM_PLACEMENT_RECORDED=1
   FM_PLACEMENT_DECISION=$recorded
+  # shellcheck disable=SC2034 # read by fm-spawn.sh after sourcing
   FM_PLACEMENT_ROOT=$(printf '%s\n' "$recorded" | jq -r '.checks["treehouse-root"].root // ""') || return 1
   fm_placement_alerts || return 1
   if ! printf '%s\n' "$recorded" | jq -e '.admitted' >/dev/null; then
