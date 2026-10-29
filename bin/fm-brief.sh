@@ -225,7 +225,7 @@ for a in "$@"; do
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
-    --task-file) want_value=task-file ;;
+    --task-file) want_value="task-file" ;;
     --task-file=*) TASK_FILE=${a#--task-file=} ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
