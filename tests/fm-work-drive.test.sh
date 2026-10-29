@@ -127,6 +127,7 @@ make_drive
 set +e; out=$(wd verify 2>&1); rc=$?; set -e
 assert_equals 3 "$rc" 'verify refuses before install'
 assert_contains "$out" 'refused fresh-shell PLAYWRIGHT_BROWSERS_PATH' 'missing shell export is named'
+chmod 0600 "$user/.bash_profile"
 cp "$user/.bash_profile" "$case_dir/profile-before"
 out=$(wd install --dry-run)
 assert_contains "$out" "export PLAYWRIGHT_BROWSERS_PATH='$drive/Caches/Playwright'" 'dry run shows the block'
@@ -140,6 +141,7 @@ assert_contains "$out" 'pending placement' 'absent placement profile is reported
 wd install >/dev/null
 assert_equals 1 "$(grep -c '^# >>> firstmate work drive >>>$' "$user/.bash_profile")" 'install is idempotent'
 grep -qx 'export KEEP_ME=1' "$user/.bash_profile" || fail 'install dropped unmanaged lines'
+[ -n "$(find "$user/.bash_profile" -perm 0600)" ] || fail 'install changed the file mode'
 pass 'install writes persistent settings that a fresh login shell inherits'
 
 printf 'HOME\nPATH\n' > "$fm/config/launch-env-allowlist"

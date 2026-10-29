@@ -251,6 +251,12 @@ write_shell_env() {
     fi
   fi
   tmp=$(mktemp "$dir/.fm-work-drive-env.XXXXXXXX") || return 1
+  # Copying first carries the file's mode; the rewrite below keeps it.
+  if [ -e "$file" ]; then
+    cp -p -- "$file" "$tmp" || { rm -f -- "$tmp"; return 1; }
+  else
+    chmod 0644 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fi
   {
     if [ -e "$file" ]; then
       awk -v b="$BLOCK_BEGIN" -v e="$BLOCK_END" '
@@ -260,11 +266,6 @@ write_shell_env() {
     fi
     render_block
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  if [ -e "$file" ]; then
-    chmod "$(stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file")" "$tmp" || { rm -f -- "$tmp"; return 1; }
-  else
-    chmod 0644 "$tmp" || { rm -f -- "$tmp"; return 1; }
-  fi
   mv -f -- "$tmp" "$file"
 }
 run_install() {
