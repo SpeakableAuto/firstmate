@@ -405,6 +405,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 # leases).
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
+# shellcheck source=bin/fm-worktree-slots-lib.sh
+. "$SCRIPT_DIR/fm-worktree-slots-lib.sh"
 # Role partition: forced teardown discards work, and the supervision branch
 # never discards anything - only an ordinary landed-work teardown is branch
 # territory (contract: bin/fm-lease-lib.sh).
@@ -2313,55 +2315,8 @@ teardown_live_slot_path() {
   canonical_existing_dir "$WT"
 }
 
-collect_local_firstmate_states() {
-  local record_state=$1 root home reg line child known existing i=0
-  local -a homes
-  TREEHOUSE_OWNER_STATES=("$record_state")
-  root=$(fm_firstmate_root_home "$FM_HOME") || {
-    echo "REFUSED: cannot resolve the root Firstmate home; nothing was changed" >&2
-    return 1
-  }
-  homes=("$root")
-  while [ "$i" -lt "${#homes[@]}" ]; do
-    home=${homes[$i]}
-    i=$((i + 1))
-    known=0
-    for existing in "${TREEHOUSE_OWNER_STATES[@]}"; do
-      [ "$existing" != "$home/state" ] || known=1
-    done
-    [ "$known" = 1 ] || TREEHOUSE_OWNER_STATES+=("$home/state")
-    reg="$home/data/secondmates.md"
-    [ ! -e "$reg" ] && [ ! -L "$reg" ] && continue
-    [ -f "$reg" ] && [ ! -L "$reg" ] || {
-      echo "REFUSED: local Firstmate registry is unsafe at $reg; nothing was changed" >&2
-      return 1
-    }
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        "- "*)
-          secondmate_registry_parse_line "$line" || {
-            echo "REFUSED: malformed local Firstmate registry entry in $reg; nothing was changed" >&2
-            return 1
-          }
-          [ "$SECONDMATE_REGISTRY_REMOTE" -eq 0 ] || continue
-          child=$(canonical_existing_dir "$SECONDMATE_REGISTRY_HOME") || {
-            echo "REFUSED: registered local Firstmate home is unavailable: $SECONDMATE_REGISTRY_HOME; nothing was changed" >&2
-            return 1
-          }
-          known=0
-          for existing in "${homes[@]}"; do
-            [ "$existing" != "$child" ] || known=1
-          done
-          [ "$known" = 1 ] || homes+=("$child")
-          ;;
-      esac
-    done < "$reg"
-  done
-}
-
 require_exclusive_worktree_slot_record() {
-  local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
-  local slot state_dir other other_id field other_path other_slot
+  local record_meta=$1 record_id=$2 record_state=$3 worktree=$4 slot rc=0
   slot=$(canonical_existing_dir "$worktree") || return 0
   # A slot whose owner claim names another task was reassigned, so this record's
   # teardown is records-only and touches nothing under it; another record naming
@@ -2369,28 +2324,15 @@ require_exclusive_worktree_slot_record() {
   # block the claimant's own teardown behind it.
   fm_treehouse_slot_owner_state "$slot" "$record_id"
   [ "$FM_TREEHOUSE_SLOT_OWNER" != other ] || return 0
-  collect_local_firstmate_states "$record_state" || return 1
-  for state_dir in "${TREEHOUSE_OWNER_STATES[@]}"; do
-    for other in "$state_dir"/*.meta; do
-      [ -f "$other" ] && [ ! -L "$other" ] || continue
-      # Identity, not spelling: the same record reached through a differently
-      # resolved state dir (e.g. a symlinked $FM_HOME) is still this record. A
-      # differently named hardlink is another task's record, so the name must
-      # match too.
-      [ "${other##*/}" = "${record_meta##*/}" ] && [ "$other" -ef "$record_meta" ] && continue
-      other_id=$(basename "$other" .meta)
-      for field in worktree home; do
-        other_path=$(fm_meta_get "$other" "$field")
-        [ -n "$other_path" ] || continue
-        other_slot=$(canonical_existing_dir "$other_path") || continue
-        [ "$other_slot" = "$slot" ] || continue
-        echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded $field." >&2
-        echo "Returning that pool slot would kill $other_id's processes and reset its copy, so nothing was changed - not even with --force." >&2
-        echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
-        return 1
-      done
-    done
-  done
+  fm_worktree_slot_record_named "$slot" "$record_state" "$record_meta" || rc=$?
+  case "$rc" in
+    1) return 0 ;;
+    2) return 1 ;;
+  esac
+  echo "REFUSED: task $record_id's recorded worktree $slot is also task $FM_WORKTREE_SLOT_RECORD_ID's recorded $FM_WORKTREE_SLOT_RECORD_FIELD." >&2
+  echo "Returning that pool slot would kill $FM_WORKTREE_SLOT_RECORD_ID's processes and reset its copy, so nothing was changed - not even with --force." >&2
+  echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $FM_WORKTREE_SLOT_RECORD_ID), then re-run teardown." >&2
+  return 1
 }
 
 require_exclusive_task_worktree_slot() {
@@ -3598,6 +3540,21 @@ elif [ "$KIND" != secondmate ] && ! teardown_owns_worktree; then
   :
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+  # Merge-proved slot removal (bin/fm-worktree-slots-lib.sh owns the contract):
+  # only on a home with config/worktree-slot-cap, never under --force, and only
+  # for a scout whose report gate passed or a PR task whose merge pr_is_merged
+  # proves now, while the branch still names the work. The subshell keeps the
+  # proof from touching PR_URL.
+  TEARDOWN_SLOT_REMOVE=0
+  if [ "$FORCE" != "--force" ] && fm_worktree_slot_cap_read "$CONFIG" 2>/dev/null \
+     && [ -n "$FM_WORKTREE_SLOT_CAP" ]; then
+    if [ "$KIND" = scout ]; then
+      TEARDOWN_SLOT_REMOVE=1
+    elif [ "$KIND" = ship ] && [ "$MODE" != local-only ] && [ "$branch" != HEAD ] \
+         && ( pr_is_merged "$branch" ) >/dev/null 2>&1; then
+      TEARDOWN_SLOT_REMOVE=1
+    fi
+  fi
   if [ "$branch" != "HEAD" ]; then
     if git -C "$WT" checkout --detach -q 2>/dev/null; then
       git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
@@ -3623,6 +3580,15 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # unclaimed until its next holder claims it, and leaves the claim in place
   # whenever the return did not actually happen.
   fm_treehouse_slot_owner_release "$WT" "$ID"
+  # Still under the project lock taken for the return. A kept slot stays in the
+  # pool exactly as before, so a failed removal never fails the teardown.
+  if [ "$TEARDOWN_SLOT_REMOVE" = 1 ]; then
+    if fm_worktree_slot_remove_returned "$PROJ" "$WT" "$STATE" "$META"; then
+      echo "teardown: removed worktree slot $WT after its $([ "$KIND" = scout ] && echo "scout report" || echo "PR merge") was proved"
+    else
+      echo "teardown: kept worktree slot $WT in the pool: $FM_WORKTREE_SLOT_KEPT_REASON" >&2
+    fi
+  fi
 fi
 
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
