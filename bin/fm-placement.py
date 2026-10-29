@@ -267,6 +267,8 @@ def assess(config, data, task, harness, model, effort):
                 raise ValueError("min_free_memory_percent must be >0..100")
             if type(swap_cap) not in (int, float) or not math.isfinite(swap_cap) or not 0 <= swap_cap < 1048576:
                 raise ValueError("max_swap_mib invalid")
+            if evidence.get("crew_liveness"):
+                raise ValueError(evidence["crew_liveness"])
             count = evidence.get("crew_count")
             if type(count) is not int or count < 0 or count >= cap:
                 raise ValueError(f"crew cap: count={count}, cap={cap}")

@@ -128,26 +128,29 @@ fm_placement_release() {
 }
 
 fm_placement_count() {
-  local meta backend target verdict count=0
+  local meta backend target verdict gen started now count=0
+  now=$(date +%s)
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     [ "$meta" != "$STATE/$FM_PLACEMENT_ID.meta" ] || continue
     [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
     backend=$(fm_backend_of_meta "$meta")
     target=$(fm_backend_target_of_meta "$meta")
+    gen=$(fm_meta_get "$meta" spawn_gen)
+    started=${gen#s}; started=${started%%.*}
+    case "$started" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$((now - started))" -lt 60 ]; then count=$((count + 1)); continue; fi ;;
+    esac
     verdict=unreadable
     if fm_backend_source "$backend"; then
       verdict=$(fm_quota_pacing_agent_state "$backend" "$target")
-      if [ "$verdict" = missing ]; then
-        verdict=$(fm_control_endpoint_absence_verdict "$backend" "$target")
-        verdict=${verdict%%$'\t'*}
-      fi
     fi
-    # Capacity counts live crew, not retained task records or uncertainty.
-    # Endpoint recovery and duplicate-launch refusal retain their own evidence
-    # rules; a recent dead endpoint is not a capacity reservation.
-    [ "$verdict" = alive ] || continue
-    count=$((count + 1))
+    case "$verdict" in
+      alive) count=$((count + 1)) ;;
+      missing|dead|gone) ;;
+      *) printf 'crew liveness unreadable: %s' "${backend:-unknown}"; return 2 ;;
+    esac
   done
   printf '%s' "$count"
 }
@@ -189,7 +192,7 @@ fm_placement_quota() { # <harness> <model> <effort>; Claude guard handled by cal
 }
 
 fm_placement_check() {
-  local harness=$1 model=$2 effort=$3 quota=$4 disk=fail slots=fail locks=fail count evidence decision memory slot_reason
+  local harness=$1 model=$2 effort=$3 quota=$4 disk=fail slots=fail locks=fail count liveness evidence decision memory slot_reason
   [ "$FM_PLACEMENT_ACTIVE" = 1 ] || return 0
   [ "$FM_PLACEMENT_LOCK_HELD" != 1 ] || locks=pass
   if FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-disk-guard.sh" --check-room >/dev/null 2>&1; then disk=pass; fi
@@ -199,7 +202,11 @@ fm_placement_check() {
   elif slot_reason=$("$SCRIPT_DIR/fm-worktree-slots.sh" room "${PROJ_ABS:-${PROJ:-}}" 2>&1); then
     slots=pass
   fi
-  count=$(fm_placement_count) || count=null
+  liveness=''
+  if ! count=$(fm_placement_count); then
+    liveness=$count
+    count=null
+  fi
   memory=$(python3 "$SCRIPT_DIR/fm-placement.py" memory) || memory='{}'
   FM_PLACEMENT_QUOTA_DETAIL=$(jq -cn --arg status "$quota" --arg account "${CLAUDE_QUOTA_IDENTITY:-}" \
     '{status:$status,reason:"selected account admission",account:$account}') || return 1
@@ -207,10 +214,10 @@ fm_placement_check() {
     quota=fail
     if fm_placement_quota "$harness" "$model" "$effort"; then quota=pass; fi
   fi
-  evidence=$(jq -cn --argjson quota "$FM_PLACEMENT_QUOTA_DETAIL" --arg disk "$disk" --arg slots "$slots" --arg locks "$locks" --argjson count "$count" --argjson memory "$memory" \
+  evidence=$(jq -cn --argjson quota "$FM_PLACEMENT_QUOTA_DETAIL" --arg disk "$disk" --arg slots "$slots" --arg locks "$locks" --argjson count "$count" --arg liveness "$liveness" --argjson memory "$memory" \
     --arg project "${PROJ_ABS:-${PROJ:-}}" --arg reason "$slot_reason" '
     {quota:$quota,disk:{status:$disk},
-     project:$project,slots:{status:$slots,reason:$reason},locks:{status:$locks,reason:"placement and spawn locks"},crew_count:$count,memory:$memory}') || return 1
+     project:$project,slots:{status:$slots,reason:$reason},locks:{status:$locks,reason:"placement and spawn locks"},crew_count:$count,memory:$memory} + (if $liveness == "" then {} else {crew_liveness:$liveness} end)') || return 1
   decision=$(printf '%s\n' "$evidence" | python3 "$SCRIPT_DIR/fm-placement.py" assess "$CONFIG" "$DATA" "$FM_PLACEMENT_ID" "$harness" "$model" "$effort") || return 1
   fm_placement_publish "$decision"
 }

@@ -34,6 +34,7 @@ class PlacementScenarios(unittest.TestCase):
                         FM_TEST_DRIVE=str(self.drive), FM_TEST_DRIVE_UP='1')
         self.tool('tmux', """case "$1" in
 list-windows)
+  if [ -f "$FM_HOME/tmux-unreadable" ]; then echo 'server busy' >&2; exit 1; fi
   for meta in "$FM_HOME/state/"*.meta; do
     [ -f "${meta%.meta}.live" ] || continue
     basename "$meta" .meta
@@ -129,6 +130,25 @@ fm_placement_count
             self.assertEqual(self.crew_count(home), i + 1)
             result = self.admit(home, 'candidate')
             self.assertEqual(result.returncode == 0, i < 3, result.stderr)
+        self.assertIn('count=4, cap=4', self.ledger(home)['decisions'][-1]['checks']['room']['reason'])
+
+    def test_unreadable_crew_liveness_refuses_room(self):
+        home = self.home('heavy', True, count=4)
+        self.task(home, 'candidate', 'website')
+        (home / 'tmux-unreadable').touch()
+        result = self.admit(home, 'candidate')
+        room = self.ledger(home)['decisions'][-1]['checks']['room']
+        self.assertNotEqual(result.returncode, 0, 'unreadable liveness must not admit')
+        self.assertEqual((room['status'], room['reason']), ('fail', 'crew liveness unreadable: tmux'))
+
+    def test_recent_launch_counts_toward_crew(self):
+        home = self.home('heavy', True, count=3)
+        self.task(home, 'candidate', 'website')
+        launched = int(__import__('time').time()) - 10
+        (home / 'state/fresh.meta').write_text(f'kind=ship\nbackend=tmux\nwindow=fixture:fresh\nspawn_gen=s{launched}.1.1\n')
+        self.assertEqual(self.crew_count(home), 4)
+        result = self.admit(home, 'candidate')
+        self.assertNotEqual(result.returncode, 0, 'a crew launched 10 s ago must hold its slot')
         self.assertIn('count=4, cap=4', self.ledger(home)['decisions'][-1]['checks']['room']['reason'])
 
     @staticmethod

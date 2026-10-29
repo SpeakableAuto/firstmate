@@ -46,7 +46,7 @@ case "${1:-}" in
     jq -n --argjson profile "$profile" --argjson disk "$disk" --argjson claude "$limits" \
       --arg slots "$slots" --arg age "${QUOTA_AXI_MAX_AGE:-15m}" --argjson enabled "$enabled" \
       '{enabled:$enabled,placement:$profile,disk:$disk,claude:$claude,slot_seam:$slots,quota_max_age:$age,
-        recheck_seconds:900,wait_alert_seconds:14400}'
+        recheck_seconds:900,wait_alert_seconds:14400,launch_grace_seconds:60}'
     exit ;;
   freed) touch "$STATE/.capacity-freed"; exit ;;
   tick) ;;
