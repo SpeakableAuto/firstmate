@@ -386,6 +386,22 @@ Completion refuses to report success until the item is closed, and session start
 
 When a spawn is interrupted after launch delivery began, its exit path re-reads the paired task record and the backlog row under the same per-task lock as the commit, repairs a row the commit believed it had moved, and reports only what was verified or honestly attempted, never intent phrased as outcome ([`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-backlog-atomicity.test.sh`](../tests/fm-backlog-atomicity.test.sh)).
 
+### Finish-first admission (`config/crew-slot-cap`)
+
+Fresh ship and scout spawns check backlog order through [`bin/fm-finish-first.sh`](../bin/fm-finish-first.sh) before allocating their endpoint or worktree.
+Unheld, unblocked open work at a higher priority leads, and older work leads within the same priority.
+Lower numeric priorities lead; a missing priority means 3, a missing date sorts before dated work, and equal dates retain backlog row order.
+An In-flight item may resume without becoming a new start.
+Captain obligations, public follow-ups and persistent secondmates are not work items in this check.
+The same backlog applicability rules as lifecycle transitions apply, including the manual-backend and absent-backlog exemptions.
+
+An optional positive decimal integer in `config/crew-slot-cap` bounds open In-flight work at twice that many crew slots.
+It counts held and blocked In-flight work too, and does not count parked task records or worktrees.
+A new start at the bound is refused with a named item to finish; higher priority changes queue order but does not expand the WIP bound.
+Absent means no WIP bound; malformed configuration refuses admission.
+This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
+[`tests/fm-finish-first.test.sh`](../tests/fm-finish-first.test.sh) exercises the policy using tasks-axi and a redacted operational backlog shape.
+
 ### Which backlog receives a transition
 
 Automatic transitions run from the configured data directory's parent, letting that home's effective tasks-axi configuration address its selected adapter while keeping relative scout-report links rooted there.
