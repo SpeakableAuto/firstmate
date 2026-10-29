@@ -471,6 +471,7 @@ fm_worktree_slot_remove_returned() {  # <project-dir> <slot> <record-state> <own
     FM_WORKTREE_SLOT_KEPT_REASON="treehouse kept it: $(printf '%s\n' "$FM_WORKTREE_SLOT_DESTROY_OUTPUT" | grep -v '^[[:space:]]*$' | tail -1)"
     return 1
   fi
+  [ ! -f "$record_state/capacity.json" ] || touch "$record_state/.capacity-freed"
 }
 
 # Reclaim up to <limit> disposable candidates (0 = all) from the scan already in the
@@ -516,6 +517,7 @@ fm_worktree_slots_reclaim() {  # <record-state> <held-lock> <apply|dry-run> <lim
     rc=0
     fm_worktree_slot_reclaimable "$i" "$record_state" || rc=$?
     if [ "$rc" = 0 ] && fm_worktree_slot_destroy "$project" "$slot"; then
+      [ ! -f "$record_state/capacity.json" ] || touch "$record_state/.capacity-freed"
       printf 'reclaimed: %s\n' "$slot"
       FM_WORKTREE_SLOT_RECLAIMED=$((FM_WORKTREE_SLOT_RECLAIMED + 1))
     elif [ "$rc" = 0 ]; then

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Capacity queue read/recheck entrypoint (never launches a worker).
 # Usage: fm-placement.sh effective | waits | tick | freed
-# effective prints configured limits, defaults, cadence and optional slot seam.
+# effective prints configured limits, defaults, cadence and slot seam.
 # waits prints the morning-report JSON, priority/age ordered, including >4h flags.
 # tick rechecks after a freeing fingerprint change and no later than 900 seconds
 # while the ordinary watcher runs. Successful rechecks enqueue capacity-ready
@@ -26,13 +26,13 @@ STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 . "$SCRIPT_DIR/fm-placement-lib.sh"
 case "${1:-}" in
   --help|-h) sed -n '2,10s/^# //p' "$0"; exit 0 ;;
-  waits) exec python3 "$SCRIPT_DIR/fm-placement.py" waits "$STATE" ;;
+  waits) backlog_json "$DATA/backlog.md" | python3 "$SCRIPT_DIR/fm-placement.py" ordered "$STATE"; exit ;;
   effective)
     profile=null
     enabled=false
     if [ -e "$CONFIG/crew-placement.json" ] || [ -L "$CONFIG/crew-placement.json" ]; then
       enabled=true
-      profile=$(jq '{version,workloads,max_crew,min_free_memory_percent,max_swap_mib,drive}' "$CONFIG/crew-placement.json") || exit 1
+      profile=$(jq '{version,workloads,max_crew,min_free_memory_percent,max_swap_mib,drive,required_drive_dirs,data_volume}' "$CONFIG/crew-placement.json") || exit 1
     fi
     [ ! -e "$STATE/capacity.json" ] || enabled=true
     settings='{}'
@@ -40,7 +40,7 @@ case "${1:-}" in
     limits=$(fm_claude_admission_limits "$settings" '' '') || exit 1
     disk=$(FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-disk-guard.sh" --print-config) || exit 1
     slots=not-installed
-    [ ! -e "$SCRIPT_DIR/fm-worktree-room.sh" ] || slots="$SCRIPT_DIR/fm-worktree-room.sh"
+    [ ! -e "$SCRIPT_DIR/fm-worktree-slots.sh" ] || slots="$SCRIPT_DIR/fm-worktree-slots.sh"
     jq -n --argjson profile "$profile" --argjson disk "$disk" --argjson claude "$limits" \
       --arg slots "$slots" --arg age "${QUOTA_AXI_MAX_AGE:-15m}" --argjson enabled "$enabled" \
       '{enabled:$enabled,placement:$profile,disk:$disk,claude:$claude,slot_seam:$slots,quota_max_age:$age,
@@ -53,8 +53,9 @@ esac
 [ -f "$STATE/capacity.json" ] || exit 0
 fm_lock_try_acquire "$STATE/.capacity-recheck.lock" || exit 0
 trap 'fm_placement_release; fm_lock_release "$STATE/.capacity-recheck.lock"' EXIT
+fm_placement_alerts || exit 1
 [ -n "$(python3 "$SCRIPT_DIR/fm-placement.py" due "$STATE")" ] || exit 0
-rows=$(python3 "$SCRIPT_DIR/fm-placement.py" waits "$STATE") || exit 1
+rows=$(backlog_json "$DATA/backlog.md" | python3 "$SCRIPT_DIR/fm-placement.py" ordered "$STATE") || exit 1
 while IFS= read -r row; do
   id=$(printf '%s\n' "$row" | jq -r '.task')
   RELAUNCH=$(printf '%s\n' "$row" | jq -r '.request.relaunch // 0')

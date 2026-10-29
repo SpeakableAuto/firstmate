@@ -43,6 +43,11 @@ def atomic(path, value):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(name, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -50,6 +55,128 @@ def atomic(path, value):
 
 def result(passed, reason):
     return {"status": "pass" if passed else "fail", "reason": reason}
+
+
+def failure(reason, condition):
+    return dict(result(False, reason), condition=condition, alert=True)
+
+
+def real_directory(path):
+    return path.is_absolute() and path.is_dir() and str(path.resolve()) == str(path)
+
+
+def write_probe(path):
+    fd, probe = tempfile.mkstemp(prefix=".fm-placement-", dir=path)
+    try:
+        os.close(fd)
+    finally:
+        os.unlink(probe)
+
+
+def external_checks(profile, project, worktree=None):
+    """No directory creation and no internal fallback; probes remove only themselves."""
+    drive = profile.get("drive")
+    if drive is None:
+        return {}
+    checks = {}
+    path = Path(drive)
+    mounted = real_directory(path) and path.is_mount()
+    checks["drive"] = (result(True, f"real mount: {path}") if mounted else
+                       failure(f"drive unmounted or symlinked: {path}", f"unmounted:{path}"))
+    dirs = profile.get("required_drive_dirs")
+    if not isinstance(dirs, list) or not dirs or not all(isinstance(d, str) and d for d in dirs):
+        checks["drive-dirs"] = failure("required_drive_dirs absent or invalid", "missing-directory-list")
+    elif mounted:
+        for relative in dirs:
+            target = path / relative
+            key = f"drive-dir:{relative}"
+            if Path(relative).is_absolute() or ".." in Path(relative).parts or not real_directory(target):
+                checks[key] = failure(f"required directory missing or symlinked: {target}", f"missing:{target}")
+                continue
+            try:
+                write_probe(target)
+                checks[key] = result(True, f"write probe cleaned: {target}")
+            except OSError:
+                checks[key] = failure(f"required directory unwritable: {target}", f"unwritable:{target}")
+        try:
+            write_probe(path)
+        except OSError:
+            checks["drive"] = failure(f"drive unwritable: {path}", f"unwritable:{path}")
+    volume = profile.get("data_volume")
+    if not isinstance(volume, dict):
+        checks["data-disk"] = failure("data_volume measurement configuration absent", "missing-data-volume")
+    else:
+        try:
+            internal = Path(volume["path"])
+            floor = volume["min_free_gib"]
+            if type(floor) not in (int, float) or not math.isfinite(floor) or floor <= 0:
+                raise ValueError("invalid data_volume.min_free_gib")
+            if not real_directory(internal):
+                raise ValueError("data volume path missing or symlinked")
+            stat = os.statvfs(internal)
+            free = stat.f_bavail * stat.f_frsize / (1024 ** 3)
+            checks["data-disk"] = (result(True, f"{internal}: {free:.3f} GiB >= {floor:g} GiB") if free >= floor else
+                                   failure(f"data volume below floor: {internal}: {free:.3f} GiB < {floor:g} GiB",
+                                           f"below-floor:{internal}"))
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            checks["data-disk"] = failure(f"data volume measurement absent: {error}", "missing-data-measurement")
+    checks["treehouse-root"] = treehouse_root(profile, project, worktree)
+    return checks
+
+
+def treehouse_root(profile, project, worktree=None):
+    if profile.get("drive") is None:
+        return result(True, "external pool not required")
+    try:
+        project = Path(project)
+        config = project / "treehouse.toml"
+        if not config.is_file() or config.is_symlink():
+            raise ValueError("repo-local treehouse.toml missing or symlinked")
+        # Python 3.9 remains supported. Accept a narrow literal top-level
+        # configuration, refusing complex TOML rather than guessing its root.
+        settings = {}
+        for line in config.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("["):
+                break
+            match = re.fullmatch(r"([A-Za-z_][A-Za-z_0-9-]*)\s*=\s*(.*)", line)
+            if not match:
+                raise ValueError("unsupported top-level Treehouse configuration")
+            key, raw = match.groups()
+            if key in settings:
+                raise ValueError("duplicate Treehouse setting")
+            if key in ("root", "worktree_path"):
+                literal = re.fullmatch(r"('([^']*)'|\"(?:[^\"\\]|\\.)*\")\s*(?:#.*)?", raw)
+                if not literal:
+                    raise ValueError("Treehouse root/layout must be a literal string")
+                settings[key] = literal[2] if raw.startswith("'") else json.loads(literal[1])
+            elif '\"\"\"' in raw or "'''" in raw:
+                raise ValueError("multiline Treehouse configuration is unsupported")
+            else:
+                settings[key] = raw
+        declared = settings.get("root")
+        if not isinstance(declared, str) or not declared:
+            raise ValueError("repo-local Treehouse root absent")
+        # Require an absolute literal: no HOME, environment, or relative fallback.
+        root = Path(declared)
+        drive = Path(profile["drive"])
+        if not real_directory(root) or not root.is_relative_to(drive):
+            raise ValueError("Treehouse root missing, symlinked, or outside required drive")
+        if (root / ".treehouse").is_symlink():
+            raise ValueError("Treehouse pool is symlinked")
+        # Reject custom layouts: Treehouse may restore existing slot paths too,
+        # so acquired path verification remains mandatory even for this layout.
+        if settings.get("worktree_path"):
+            raise ValueError("custom worktree_path cannot prove external allocation")
+        if worktree is not None:
+            target = Path(worktree)
+            if not real_directory(target) or target == root or not target.is_relative_to(root):
+                raise ValueError("acquired worktree is outside the real external pool")
+        return dict(result(True, f"external Treehouse root: {root}"), root=str(root))
+    except (OSError, ValueError, TypeError) as error:
+        return failure(f"treehouse-root: {error}", f"treehouse-root:{project}:{error}")
 
 
 def command(*args):
@@ -76,7 +203,9 @@ def assess(config, data, task, harness, model, effort):
     evidence = json.load(sys.stdin)
     checks = {name: result(False, "absent evidence") for name in ("fit", "room", "quota", "locks")}
     request = {"harness": harness, "model": model, "effort": effort}
-    decision = {"task": task, "priority": "P2", "request": request, "checks": checks}
+    impact = evidence.get("impact")
+    decision = {"task": task, "impact": impact if impact in ("P0", "P1", "P2", "P3") else "P2",
+                "request": request, "checks": checks}
     for name in ("quota", "locks"):
         value = evidence.get(name)
         if isinstance(value, dict) and value.get("status") in ("pass", "fail"):
@@ -88,9 +217,6 @@ def assess(config, data, task, harness, model, effort):
             raise ValueError("machine profile and task classification must be objects")
         if profile.get("version") != 1 or work.get("version") != 1:
             raise ValueError("placement version must be 1")
-        if work.get("priority") not in ("P0", "P1", "P2", "P3"):
-            raise ValueError("priority must be P0-P3")
-        decision["priority"] = work["priority"]
         brief = data / task / "brief.md"
         if hashlib.sha256(brief.read_bytes()).hexdigest() != work.get("brief_sha256"):
             raise ValueError("task classification is not bound to current brief")
@@ -145,21 +271,16 @@ def assess(config, data, task, harness, model, effort):
             disk = evidence.get("disk", {})
             if disk.get("status") != "pass":
                 raise ValueError("disk floor absent or failed")
-            drive = profile.get("drive")
-            if drive is not None:
-                path = Path(drive)
-                if not path.is_absolute() or str(path.resolve()) != str(path) or not path.is_mount():
-                    raise ValueError("required drive is not a real mount")
-                # An actual create/unlink proves the selected account can write.
-                fd, probe = tempfile.mkstemp(prefix=".fm-placement-", dir=path)
-                os.close(fd)
-                os.unlink(probe)
-            slot = evidence.get("slots", {})
-            if slot.get("status") not in ("pass", "not-installed"):
-                raise ValueError("worktree room seam failed")
-            checks["room"] = result(True, f"crew={count}/{cap}; free={free:g}%; swap={swap:g} MiB; slots={slot['status']}")
+            checks["room"] = result(True, f"crew={count}/{cap}; free={free:g}%; swap={swap:g} MiB")
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             checks["room"] = result(False, str(error))
+        checks["slots"] = evidence.get("slots", result(False, "slots evidence absent"))
+        if checks["slots"].get("status") == "not-installed":
+            checks["slots"] = result(False, "slot room seam absent")
+        try:
+            checks.update(external_checks(profile, evidence.get("project", "")))
+        except (ValueError, TypeError, OSError) as error:
+            checks["drive"] = failure(f"external placement configuration invalid: {error}", "invalid-external-config")
     decision["failed"] = [key for key, value in checks.items() if value["status"] != "pass"]
     decision["admitted"] = not decision["failed"]
     return decision
@@ -172,12 +293,30 @@ def ledger(state, operation, task=None, mode=None):
         path = state / "capacity.json"
         value = read(path) if path.exists() else {"version": 1, "decisions": [], "waits": {}}
         now = int(time.time())
-        if operation == "record":
+        if operation in ("record", "amend"):
             decision = json.load(sys.stdin)
             if decision.get("task") != task or mode not in ("spawn", "recheck"):
                 raise ValueError("invalid decision identity")
-            decision.update(at=now, id=uuid.uuid4().hex, mode=mode)
-            value["decisions"].append(decision)
+            if operation == "amend":
+                matches = [i for i, row in enumerate(value["decisions"])
+                           if row["id"] == decision.get("id") and row["task"] == task]
+                if len(matches) != 1:
+                    raise ValueError("original decision absent or ambiguous")
+                decision["updated_at"] = now
+                value["decisions"][matches[0]] = decision
+            else:
+                decision.update(at=now, id=uuid.uuid4().hex, mode=mode)
+                value["decisions"].append(decision)
+            alerts = value.setdefault("alerts", {})
+            for key, check in decision["checks"].items():
+                identity = key
+                if key in ("treehouse-root", "acquired-worktree"):
+                    identity += ":" + decision["request"].get("project", task)
+                if check.get("alert") and check["status"] != "pass":
+                    if alerts.get(identity, {}).get("condition") != check["condition"]:
+                        alerts[identity] = dict(check, token=uuid.uuid4().hex, pending=True, task=task)
+                elif check["status"] == "pass":
+                    alerts.pop(identity, None)
             old = value["waits"].get(task, {})
             if decision.get("hold"):
                 value["waits"].pop(task, None)
@@ -186,7 +325,7 @@ def ledger(state, operation, task=None, mode=None):
             else:
                 value["waits"][task] = {
                     "task": task, "since": now if old.get("state") == "hold" else old.get("since", now), "checked": now,
-                    "priority": decision["priority"], "failed": decision["failed"],
+                    "impact": decision["impact"], "failed": decision["failed"],
                     "request": decision["request"],
                     "state": "ready" if decision["admitted"] else "capacity",
                 }
@@ -197,10 +336,22 @@ def ledger(state, operation, task=None, mode=None):
                 value["waits"][task].update(state="hold", hold=mode)
                 atomic(path, value)
             return True
-        if operation == "waits":
-            return sorted((dict(row, over_four_hours=row["state"] != "hold" and now - row["since"] > 14400)
+        if operation == "alerts":
+            return [dict(alert, key=key) for key, alert in value.get("alerts", {}).items() if alert["pending"]]
+        if operation == "ack-alert":
+            alert = value.get("alerts", {}).get(task)
+            if alert and alert["token"] == mode:
+                alert["pending"] = False
+                atomic(path, value)
+            return True
+        if operation in ("waits", "ordered"):
+            impacts = {}
+            if operation == "ordered":
+                impacts = {row["id"]: row.get("impact") or "P2" for row in json.load(sys.stdin)["records"]}
+            return sorted((dict(row, impact=impacts.get(row["task"], row.get("impact", "P2")),
+                                over_four_hours=row["state"] != "hold" and now - row["since"] > 14400)
                            for row in value["waits"].values()),
-                          key=lambda row: (row["priority"], row["since"], row["task"]))
+                          key=lambda row: (row["impact"], row["since"], row["task"]))
         if not value["waits"]:
             return False
         # Metadata removals cover teardown/auto-retire. Lock and explicit slot
@@ -224,6 +375,9 @@ def main():
     if operation == "memory":
         free, swap = memory()
         output = {"free_percent": free, "swap_mib": swap}
+    elif operation == "worktree":
+        config, project, worktree = args
+        output = treehouse_root(read(Path(config) / "crew-placement.json"), project, worktree)
     elif operation == "assess":
         config, data, task, harness, model, effort = args
         output = assess(Path(config), Path(data), task, harness, model, effort)

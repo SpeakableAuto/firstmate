@@ -1271,7 +1271,9 @@ A heavy-machine example:
   "max_crew": 4,
   "min_free_memory_percent": 15,
   "max_swap_mib": 1024,
-  "drive": "/Volumes/Kitchen"
+  "drive": "/Volumes/Kitchen",
+  "required_drive_dirs": ["Build/DerivedData", "Build/Tmp", "Caches/npm", "Caches/Playwright", "SimulatorDevices", "Logs/Codex"],
+  "data_volume": {"path": "/System/Volumes/Data", "min_free_gib": 10}
 }
 ```
 
@@ -1290,10 +1292,21 @@ A light-machine example:
 
 The light-machine cap may be raised to three after measuring its room; the heavy-machine cap cannot exceed four.
 Workload names are exact configuration values, never inferred from hostnames.
-The drive, when specified, must be an actual mount with no symlink substitution, and a temporary create/unlink must succeed there.
+The drive, when specified, must be an actual mount with no symlink substitution, and a temporary create/unlink must succeed there and in every `required_drive_dirs` entry.
+Required directories must already exist as real directories beneath that mount; placement never creates them or falls back to internal storage.
+A drive profile also requires `data_volume.path` and a positive `data_volume.min_free_gib`; live available bytes on that filesystem must meet the configured floor.
+Missing measurements, missing or unwritable directories, unmounted drives and insufficient internal Data space each produce a named refusal.
+The capacity ledger retains each condition and sends one ordinary wake when it first fails, with another allowed only after recovery or a different condition.
+
+Drive profiles require a repository-local, non-symlinked `treehouse.toml` with an absolute literal top-level `root` naming an existing real directory under the drive.
+Quoted string values and ordinary top-level assignments are supported; complex root syntax, multiline assignments and custom `worktree_path` layouts are refused.
+Placement pins `TREEHOUSE_ROOT` and removes `TREEHOUSE_WORKTREE_PATH` for allocation, then checks the acquired worktree's real path under the pool before launching a worker.
+A wrong allocation amends the same atomic decision to a named refusal and closes only the fresh endpoint; a clean, freshly claimed, unrecorded Treehouse slot is returned through Treehouse's normal guarded return.
+If safe return cannot be proved, the copy is preserved and the refusal reports it for inspection.
+Relaunches never return their recorded copy.
 Memory evidence comes from `memory_pressure -Q` and `sysctl vm.swapusage` on macOS, or `MemAvailable` and swap usage in `/proc/meminfo` on Linux.
 Missing measurements refuse placement.
-`bin/fm-placement.sh effective` prints the effective placement limits, disk floor, Claude admission limits, quota freshness allowance, retry cadence, wait-age threshold, launch grace, and optional slot seam without starting work.
+`bin/fm-placement.sh effective` prints the effective placement limits, disk floor, Claude admission limits, quota freshness allowance, retry cadence, wait-age threshold, launch grace, and slot seam without starting work.
 The existing disk-guard configuration and its default floor remain authoritative; placement uses its read-only `--check-room` entrypoint and never clears caches.
 
 Intake writes `data/<task-id>/placement.json` beside the brief:
@@ -1303,7 +1316,6 @@ Intake writes `data/<task-id>/placement.json` beside the brief:
   "version": 1,
   "workload": "backend",
   "requires_drive": false,
-  "priority": "P0",
   "dispatch_rule": 0,
   "brief_sha256": "<SHA-256 of brief.md>"
 }
@@ -1319,16 +1331,18 @@ Other harnesses must prove a fresh, positive applicable quota bound for their se
 The placement lock spans checks, provisioning, and launch publication or rollback.
 Each attempt atomically publishes its complete fit, room, quota, and locks verdict together with any refusal wait in `state/capacity.json`, which is also the capacity log.
 Existing spawn/task-set/project allocation locks retain their ownership.
-An optional executable `bin/fm-worktree-room.sh <project>` contributes a read-only slot-room verdict: exit zero passes, any other exit refuses room.
-Until that independent seam is installed, the record explicitly says `slots=not-installed`; placement does not count, reclaim, or clean worktree slots.
-The seam's owner signals a reclaim through `bin/fm-placement.sh freed`.
+`bin/fm-worktree-slots.sh room <project>` contributes the named `slots` verdict with its printed reason retained verbatim.
+Spawn retains the slot owner's safe reclaim step before placement's final check; a persistent refusal queues the task instead of exiting without a decision.
+The slot owner signals successful reclaim and merge-proved slot removal through the same `.capacity-freed` event consumed by `bin/fm-placement.sh freed`.
 
 The ordinary watcher rechecks capacity waits on crew metadata/lock changes, explicit slot-reclaim signals, and at least every 900 seconds while the watcher is running.
-It orders requests by P0 through P3, oldest first within each priority.
+It orders requests by the canonical backlog `(impact: P0)` through `(impact: P3)`, oldest first within each level.
+Missing impact defaults to P2; legacy `(priority: N)` and task-classification fields never override impact.
+The read-only backlog parser strips impact metadata from display titles, and each queue read uses the current backlog impact.
 Rechecks preserve the original wait age, apply current machine/account checks, and raise an ordinary `capacity-ready` wake for Firstmate to reroute through dispatch; they never launch a worker or grant new authority.
 Backlog captain/external holds suspend admission checks until the row is queued and unheld again.
 Capacity waits keep ordinary supervision alive even with no live workers.
-Morning reports can read `bin/fm-placement.sh waits`, a JSON view of the same ledger with named failing checks, wait state, priority, age origin, and `over_four_hours` flags for unresolved capacity waits.
+Morning reports can read `bin/fm-placement.sh waits`, a JSON view of the same ledger with named failing checks, wait state, impact, age origin, and `over_four_hours` flags for unresolved capacity waits.
 Script headers own command and ledger mechanics; `tests/fm-placement.test.sh` exercises refusal, atomic publication, ordering, and the executable retry path.
 
 ## Claude crew admission

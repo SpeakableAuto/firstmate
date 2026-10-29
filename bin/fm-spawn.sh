@@ -3291,7 +3291,7 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
       fm_worktree_slots_reclaim "$STATE" "$SPAWN_TREEHOUSE_PROJECT_LOCK" apply \
         "$((FM_WORKTREE_SLOT_HELD - FM_WORKTREE_SLOT_CAP + 1))" || true
     fi
-    if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
+    if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE" && [ "$FM_PLACEMENT_ACTIVE" != 1 ]; then
       echo "error: refusing spawn: $FM_WORKTREE_SLOT_ROOM_REASON" >&2
       exit 1
     fi
@@ -4519,7 +4519,12 @@ elif [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  if [ -n "${FM_PLACEMENT_ROOT:-}" ]; then
+    placement_root_quoted=${FM_PLACEMENT_ROOT//\'/\'\\\'\'}
+    spawn_send_text_line "$WT_TARGET" "env -u TREEHOUSE_WORKTREE_PATH TREEHOUSE_ROOT='$placement_root_quoted' treehouse get"
+  else
+    spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  fi
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
@@ -4599,6 +4604,18 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     fi
     SPAWN_SLOT_CLAIMED=1
   fi
+fi
+if ! fm_placement_worktree "$PROJ_ABS" "$WT"; then
+  # No worker has started. Close only the endpoint this fresh spawn created;
+  # the ordinary abort path releases its claim under the project lock.
+  if [ "$RELAUNCH" = 0 ]; then
+    rovo_endpoint_cleanup
+    if [ "$BACKEND" != orca ]; then
+      fm_placement_return_rejected "$PROJ_ABS" "$WT" ||
+        echo "warning: rejected allocation retained: safe return could not be proved for $WT" >&2
+    fi
+  fi
+  exit 1
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
