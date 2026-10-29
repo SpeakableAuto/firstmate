@@ -425,7 +425,7 @@ EOF
 # when the fold later advances the cursor. Prints nothing when nothing is
 # unread, which is the common case.
 print_unread_status_section() {
-  local snapshot=${1:-} unread task line shown=0
+  local snapshot=${1:-} unread task line warning shown=0
 
   if [ -n "$snapshot" ]; then
     unread=$(scan_unread_surface_snapshot "$STATE" "$snapshot") || return 1
@@ -437,11 +437,13 @@ print_unread_status_section() {
   while IFS=$(printf '\t') read -r task line; do
     [ -n "$task" ] || continue
     [ -n "$line" ] || continue
+    warning=$(status_checkpoint_warning "$line")
     line="$task $line"
     if [ "$shown" -eq 0 ]; then
       printf 'UNREAD STATUS (new since last drain, not re-printed after this presentation):\n' || return 1
     fi
     printf '%s\n' "$line" || return 1
+    if [ -n "$warning" ]; then printf '%s %s\n' "$task" "$warning" || return 1; fi
     shown=$((shown + 1))
   done <<EOF
 $unread
