@@ -473,8 +473,11 @@ fm_backlog_row_probe() {  # <data-dir> <id>
 # output line in FM_BACKLOG_TRANSITION_ERROR on failure. The home boundary is
 # authorized through fm_backlog_source_present first; fm_backlog_tasks_axi owns
 # how the selected adapter is addressed (ADDRESSING above).
+# shellcheck source=bin/fm-flow-history-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-flow-history-lib.sh"
+
 fm_backlog_mutate() {  # <data-dir> <verb> <id> [flag...]
-  local data authorized_data=$1 verb=$2 id=$3 out command_status source_status
+  local data authorized_data=$1 verb=$2 id=$3 out command_status source_status flow_token
   if ! data=$(fm_backlog_data_absolute "$1"); then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
     return 1
@@ -487,12 +490,19 @@ fm_backlog_mutate() {  # <data-dir> <verb> <id> [flag...]
   fm_backlog_tasks_axi_addressing "$data"
   source_status=$?
   [ "$source_status" -eq 0 ] || return "$source_status"
+  if ! fm_flow_begin "$data" "$verb" "$id"; then
+    FM_BACKLOG_TRANSITION_ERROR="flow history could not record $verb $id; backlog unchanged"
+    return 1
+  fi
+  flow_token=$FM_FLOW_TOKEN
   if [ -n "$FM_BACKLOG_AXI_FILE" ]; then
     out=$(cd "$FM_BACKLOG_AXI_ROOT" 2>/dev/null && fm_tasks_axi "$verb" "$id" "$@" --file "$FM_BACKLOG_AXI_FILE" 2>&1)
   else
     out=$(cd "$FM_BACKLOG_AXI_ROOT" 2>/dev/null && fm_tasks_axi "$verb" "$id" "$@" 2>&1)
   fi
   command_status=$?
+  # A missing receipt leaves the attempt open, so the report says unknown.
+  fm_flow_finish "$data" "$flow_token" "$verb" "$id" "$command_status" "$out" || true
   [ "$command_status" -ne 0 ] || return 0
   FM_BACKLOG_TRANSITION_ERROR=$(printf '%s\n' "$out" | sed -n '1p')
   if [ -z "$FM_BACKLOG_TRANSITION_ERROR" ]; then
