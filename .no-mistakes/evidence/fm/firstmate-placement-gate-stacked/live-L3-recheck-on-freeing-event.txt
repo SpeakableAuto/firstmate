@@ -1,0 +1,35 @@
+Fri Oct 30 09:09:41 AEST 2026
+1793315381
+decisions before: 2
+$ fm-placement.sh freed; fm-placement.sh tick   (memory still short)
+error: placement refused: room: memory: free=47%, swap=5368.31 MiB (state/capacity.json)
+exit=0
+decisions after: 3
+[{"task":"iphone-task","admitted":false,"failed":["fit"],"mode":"spawn"},{"task":"backend-task","admitted":false,"failed":["room"],"mode":"spawn"},{"task":"backend-task","admitted":false,"failed":["room"],"mode":"recheck"}]
+$ wake queue:
+.
+..
+.capacity-freed
+.capacity-ledger.lock
+.last-watcher-beat
+capacity.json
+(eval):8: no matches found: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.uTyiTX/state/*wake*
+
+# memory floor lowered to 15% (room frees up)
+$ fm-placement.sh freed; fm-placement.sh tick
+exit=0
+decisions after: 4
+[{"task":"iphone-task","admitted":false,"failed":["fit"],"mode":"spawn"},{"task":"backend-task","admitted":false,"failed":["room"],"mode":"spawn"},{"task":"backend-task","admitted":false,"failed":["room"],"mode":"recheck"},{"task":"backend-task","admitted":true,"failed":[],"mode":"recheck"}]
+$ waits
+{"task":"iphone-task","state":"unplaceable","failed":["fit"],"over_four_hours":false}
+{"task":"backend-task","state":"ready","failed":[],"over_four_hours":false}
+$ state dir (no .meta = no worker launched)
+.
+..
+.capacity-freed
+.capacity-ledger.lock
+.last-watcher-beat
+.wake-queue
+.wake-queue.seq
+.watcher-down
+capacity.json

@@ -1,0 +1,12 @@
+decisions: 4
+$ fm-placement.sh tick  (no freeing event, <900s since last recheck)
+exit=0 stdout=[]
+decisions: 4  (unchanged = not due)
+# backdate ledger last_recheck by 901s to stand in for 15 minutes elapsing
+$ fm-placement.sh tick
+exit=0 stdout=[]
+decisions: 5
+{"task":"backend-task","admitted":true,"mode":"recheck"}
+$ wake queue
+1793315384	1	check	capacity-ready	check: capacity-ready backend-task: placement recheck passed; reroute through dispatch
+1793315400	2	check	capacity-ready	check: capacity-ready backend-task: placement recheck passed; reroute through dispatch

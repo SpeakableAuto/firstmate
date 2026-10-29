@@ -1,0 +1,72 @@
+$ fm-spawn.sh iphone-task <proj> --scout --harness codex --model gpt-5.5 --effort high   (light profile)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.uTyiTX
+error: placement refused: fit: workload is not allowed on this machine (state/capacity.json)
+exit=1
+
+$ ls state
+.
+..
+.capacity-ledger.lock
+.last-watcher-beat
+capacity.json
+
+$ jq .waits state/capacity.json
+{
+  "iphone-task": {
+    "task": "iphone-task",
+    "since": 1793315363,
+    "checked": 1793315363,
+    "impact": "P0",
+    "failed": [
+      "fit"
+    ],
+    "request": {
+      "harness": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "project": "/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.uTyiTX/proj",
+      "relaunch": 0
+    },
+    "state": "unplaceable"
+  }
+}
+$ last decision checks
+{
+  "task": "iphone-task",
+  "admitted": false,
+  "failed": [
+    "fit"
+  ],
+  "checks": {
+    "fit": {
+      "status": "fail",
+      "reason": "workload is not allowed on this machine"
+    },
+    "room": {
+      "status": "pass",
+      "reason": "crew=0/2; free=47%; swap=5376.31 MiB"
+    },
+    "quota": {
+      "provider": "codex",
+      "accountKey": "default",
+      "model": "gpt-5.5",
+      "bounds": [
+        {
+          "scope": "all_models",
+          "status": "known",
+          "effectivePercentRemaining": 31
+        }
+      ],
+      "status": "pass",
+      "reason": "fresh selected machine/account quota"
+    },
+    "locks": {
+      "status": "pass",
+      "reason": "placement and spawn locks"
+    },
+    "slots": {
+      "status": "pass",
+      "reason": "allow: no worktree slot cap configured"
+    }
+  }
+}

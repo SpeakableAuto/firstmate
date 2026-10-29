@@ -1,0 +1,9 @@
+# memory floor set to 99% (machine has ~47% free)
+$ fm-spawn.sh backend-task ...
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.uTyiTX
+error: placement refused: room: memory: free=47%, swap=5368.31 MiB (state/capacity.json)
+exit=1
+0
+$ fm-placement.sh waits
+[{"task":"iphone-task","since":1793315363,"checked":1793315363,"impact":"P0","failed":["fit"],"request":{"harness":"codex","model":"gpt-5.5","effort":"high","project":"/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.uTyiTX/proj","relaunch":0},"state":"unplaceable","over_four_hours":false},{"task":"backend-task","since":1793315372,"checked":1793315372,"impact":"P1","failed":["room"],"request":{"harness":"codex","model":"gpt-5.5","effort":"high","project":"/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.uTyiTX/proj","relaunch":0},"state":"capacity","over_four_hours":false}]
+exit=0
