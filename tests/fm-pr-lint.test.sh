@@ -58,8 +58,7 @@ class Linter(unittest.TestCase):
 
     def test_research_depth_cap_variants(self):
         for activity in ('Research', 'Study', 'Audit', 'Learn from', 'Inventory', 'Review of'):
-            for cap in ('top-3 ideas', 'best 10 ideas', 'a few ideas', 'shortlist of 5 ideas',
-                        'five key findings', 'maximum of 3 useful recommendations'):
+            for cap in ('top-3 ideas', 'best 10 ideas', 'five key findings', 'maximum of 3 useful recommendations'):
                 with self.subTest(activity=activity, cap=cap):
                     self.assert_depth_refused(self.brief(f'{activity} the tool and return {cap}.'))
         self.assert_depth_refused(self.brief('Understand the tool.', 'Research it and return the top 5 ideas.'))
@@ -73,6 +72,7 @@ class Linter(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assert_depth_refused(self.brief('Research the tool and return the top 3.', mention))
         for mention in ('Zac asked not to cap at the top 3.',
+                        'Zac asked about the top 5 last week but now wants every item.',
                         '<!-- Zac asked for the top 3. -->',
                         '```text\nZac asked for the top 3.\n```'):
             self.assert_depth_refused(self.brief('Research the tool and return the top 3.\n'+mention))
@@ -81,7 +81,9 @@ class Linter(unittest.TestCase):
 
     def test_research_depth_scope(self):
         for intent in ('Build a UI listing the top 5 bookings.', 'Research the tool without limiting findings.',
-                       'Learn from the tool and inventory every option.'):
+                       'Learn from the tool and inventory every option.',
+                       'Research the API and include a few examples of each endpoint.',
+                       'Research the vendors and draw up a shortlist of 5 options.'):
             result = self.run_lint(self.brief(intent), '--kind', 'brief')
             self.assertEqual(result.returncode, 0, result.stderr)
         body = self.brief('Research the tool and return the top 5 ideas.')
@@ -94,6 +96,8 @@ class Linter(unittest.TestCase):
         body += '\n## Verification\nZac asked for the top 5.\n'
         self.assert_depth_refused(body)
         self.assert_depth_refused('# Worker role\n# Task\n'+self.brief('Research the tool and return the top 5 ideas.')+'# Rules\nFix bugs.\n')
+        for spec in ('Write the report; record any command errors you hit.', 'Fix lint failures before the PR.'):
+            self.assert_depth_refused(self.brief('Research pstack and return the top 5 ideas we can borrow.', spec))
 
     def test_research_depth_scaffold(self):
         home = self.root/'depth-home'
