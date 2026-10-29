@@ -743,6 +743,7 @@ A correction edits only the wrong text: do not run \`$FM_ROOT/bin/fm-ensure-agen
 ${PRIVATE_WORKFLOW_BEFORE_DOD}$DOD
 EOF
 if [ "$LINT_ON" -eq 1 ] && [ "$MODE" != local-only ]; then
+  # shellcheck disable=SC2016 # Emit literal Markdown backticks, never execute the example.
   printf '\n# PR evidence shape\nBefore reporting a PR ready, run `python3 %s/bin/fm-pr-lint.py --pr-url <PR-url>` and fix each refusal; the supervisor repeats this gate at readiness registration.\n' "$FM_ROOT" >> "$BRIEF"
 fi
 append_brief_include
