@@ -4452,6 +4452,80 @@ test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
 test_local_only_truly_unpushed_refuses
+# Actual teardown entry point, with disposable Git fixtures and a narrow fake
+# of Treehouse's return/destroy interface. Never addresses a developer pool.
+test_merge_proved_slot_removal() {
+  local variant case_dir head rc slot
+  for variant in merged pushed-unmerged absent force scout; do
+    case_dir=$(make_case "slot-remove-$variant")
+    slot="$case_dir/pool/1/project"
+    mkdir -p "$case_dir/pool/1"
+    git -C "$case_dir/project" worktree move "$case_dir/wt" "$slot"
+    ln -s "$slot" "$case_dir/wt"
+    printf '{"worktrees":[{"path":"%s"}]}\n' "$slot" > "$case_dir/pool/treehouse-state.json"
+    write_meta "$case_dir" no-mistakes ship
+    printf '2\n' > "$case_dir/config/worktree-slot-cap"
+    wt_commit_file "$case_dir" feature.txt hello feature
+    head=$(git -C "$slot" rev-parse HEAD)
+    add_gh_pr_merged_for_head "$case_dir" "$head"
+    case "$variant" in
+      pushed-unmerged)
+        add_fork_with_pushed_branch "$case_dir"
+        printf '#!/usr/bin/env bash\nexit 1\n' > "$case_dir/fakebin/gh"
+        ;;
+      absent) rm "$case_dir/config/worktree-slot-cap" ;;
+      scout)
+        write_meta "$case_dir" scout scout
+        mkdir -p "$case_dir/data/task-x1"
+        echo 'Completed investigation.' > "$case_dir/data/task-x1/report.md"
+        FM_HOME="$case_dir" FM_ROOT_OVERRIDE="$ROOT" \
+          "$ROOT/bin/fm-captain-hold.sh" complete task-x1 --none >/dev/null \
+          || fail 'scout fixture completion inventory'
+        ;;
+    esac
+    cat > "$case_dir/fakebin/treehouse" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+if [ "$*" = 'destroy --help' ]; then echo '--include-unlanded'; exit 0; fi
+printf '%s\n' "$*" >> "$FM_SLOT_TEST_LOG"
+case "$1" in
+  return)
+    git -C "$3" reset --hard -q main
+    git -C "$3" clean -fdq
+    ;;
+  destroy)
+    [ "$#" = 3 ] && [ "$3" = --yes ] || exit 99
+    git -C "$FM_SLOT_TEST_PROJECT" worktree remove "$2"
+    ;;
+  *) exit 99 ;;
+esac
+EOF
+    chmod +x "$case_dir/fakebin/treehouse"
+    rc=0
+    if [ "$variant" = force ]; then
+      FM_HOME="$case_dir" FM_SLOT_TEST_LOG="$case_dir/treehouse.log" FM_SLOT_TEST_PROJECT="$case_dir/project" \
+        run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    else
+      FM_HOME="$case_dir" FM_SLOT_TEST_LOG="$case_dir/treehouse.log" FM_SLOT_TEST_PROJECT="$case_dir/project" \
+        run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    fi
+    expect_code 0 "$rc" "slot removal $variant: $(cat "$case_dir/stderr")"
+    case "$variant" in
+      merged|scout)
+        [ ! -d "$slot" ] || fail "$variant slot not removed: $(cat "$case_dir/stderr")"
+        assert_grep 'destroy ' "$case_dir/treehouse.log" "$variant did not call safe destroy"
+        ;;
+      *)
+        [ -d "$slot" ] || fail "$variant slot removed without eligible merge proof"
+        ! grep -q '^destroy ' "$case_dir/treehouse.log" || fail "$variant called destroy"
+        ;;
+    esac
+  done
+  pass 'slot removal requires opted-in merge proof or completed scout; pushed-only and force keep slots'
+}
+
+test_merge_proved_slot_removal
+
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses

@@ -221,6 +221,28 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
   pass "a pane stuck on the primary checkout fails loudly at the deadline"
 }
 
+test_slot_cap_refuses_before_endpoint_allocation() {
+  local rec id out status
+  id=slot-cap-refusal
+  rec=$(make_settle_case slot-cap "$id" 0)
+  read_settle_record "$rec"
+  printf '1\n' > "$HOME_DIR/config/worktree-slot-cap"
+  # A recorded pool slot fills the cap. Admission must preserve it even when
+  # no process currently inhabits it; no Treehouse command may run here.
+  printf '{"worktrees":[{"path":"%s"}]}\n' "$WT_DIR" > "$(dirname "$(dirname "$WT_DIR")")/treehouse-state.json"
+  printf 'worktree=%s\n' "$WT_DIR" > "$HOME_DIR/state/existing.meta"
+  out=$(run_settle_spawn "$id")
+  status=$?
+  [ "$status" -ne 0 ] || fail "slot cap allowed spawn: $out"
+  assert_contains "$out" 'worktree slot cap 1 reached' 'cap refusal reason'
+  [ ! -e "$COUNTFILE" ] || fail 'refused spawn polled an allocated endpoint'
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail 'refused spawn published metadata'
+  [ -d "$WT_DIR" ] || fail 'recorded worktree removed'
+  pass 'slot cap refuses spawn before endpoint allocation and keeps recorded work'
+}
+
+test_slot_cap_refuses_before_endpoint_allocation
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_read
 test_transient_primary_checkout_is_not_accepted
