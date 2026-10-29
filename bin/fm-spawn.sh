@@ -657,6 +657,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 # shellcheck source=bin/fm-quota-pacing-lib.sh
 . "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
+# shellcheck source=bin/fm-placement-lib.sh
+. "$SCRIPT_DIR/fm-placement-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -1451,6 +1453,8 @@ spawn_abort_cleanup() {
   if [ "$QUOTA_PACING_ADMISSION_LOCK_HELD" = 1 ]; then
     fm_lock_release "$QUOTA_PACING_ADMISSION_LOCK" || true
   fi
+  fm_placement_abort 'spawn ended before complete placement evidence' || true
+  fm_placement_release || true
   return "$status"
 }
 trap spawn_abort_cleanup EXIT
@@ -1648,6 +1652,9 @@ spawn_require_relocated_queued_work() {
     exit 1
   fi
 }
+if [ "$KIND" != secondmate ]; then
+  fm_placement_begin "$ID" || exit 1
+fi
 if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_CONTROL_LOCK="$STATE/.control-$ID.lock"
   control_owner=$(cat "$SPAWN_CONTROL_LOCK/pid" 2>/dev/null || true)
@@ -2636,6 +2643,7 @@ fi
 # All Claude crew admission paths, including raw launches and relaunches, pass
 # this gate before allocating a worktree or endpoint. The lock survives until
 # EXIT cleanup, so another admission sees the finished launch or its rollback.
+PLACEMENT_QUOTA=unknown
 if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
   if [ "$RAW_LAUNCH" = 1 ] \
      && { [ "$RAW_LAUNCH_IDENTITY_SAFE" != 1 ] || [ "$HARNESS" != claude ]; }; then
@@ -2650,9 +2658,17 @@ if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
   CLAUDE_ADMISSION_LOCK="$STATE/.claude-admission.lock"
   fm_lock_acquire_wait "$CLAUDE_ADMISSION_LOCK" || exit 1
   CLAUDE_ADMISSION_LOCK_HELD=1
-  fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" "$MODEL" || exit 1
+  if fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" "$MODEL"; then
+    PLACEMENT_QUOTA=pass
+  else
+    fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" fail || true
+    exit 1
+  fi
 elif [ "$QUOTA_PACING_APPLIES" = 1 ]; then
-  fm_quota_pacing_admission_check "$CONFIG" "$STATE" "$ID" "$HARNESS" "$MODEL" || exit 1
+  if ! fm_quota_pacing_admission_check "$CONFIG" "$STATE" "$ID" "$HARNESS" "$MODEL"; then
+    fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" fail || true
+    exit 1
+  fi
 fi
 
 secondmate_registry_value() {
@@ -3281,6 +3297,7 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
     fi
   fi
 fi
+fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" "$PLACEMENT_QUOTA" || exit 1
 [ -f "$BRIEF" ] || {
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
   exit 1

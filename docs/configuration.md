@@ -1255,6 +1255,82 @@ The file is a dispatch view, refreshed when the resolver runs, rather than a con
 An account's queue is cleared when its reset timestamp changes, and accounts absent from the current pool are removed.
 Only a final `no rankable eligible candidate` result caused by pacing with a known reset adds a task to the queue; approval, ambiguity, unknown pacing evidence, and non-pacing refusals do not.
 
+## Crew placement (config/crew-placement.json)
+
+Install this private per-home profile to enable code-enforced placement for ship and scout launches, including relaunches and individual members of a batch.
+Unconfigured template homes keep their existing launch behavior; once the home has a capacity ledger, removing the profile fails closed rather than disabling the gate.
+Persistent secondmates retain their existing provisioning contract.
+Do not copy a machine profile to another machine without checking its capabilities and limits.
+
+A heavy-machine example:
+
+```json
+{
+  "version": 1,
+  "workloads": ["heavy", "iphone", "website", "large-tests"],
+  "max_crew": 4,
+  "min_free_memory_percent": 15,
+  "max_swap_mib": 1024,
+  "drive": "/Volumes/Kitchen"
+}
+```
+
+A light-machine example:
+
+```json
+{
+  "version": 1,
+  "workloads": ["review", "replay", "scout", "backend", "plane"],
+  "max_crew": 2,
+  "min_free_memory_percent": 15,
+  "max_swap_mib": 512,
+  "drive": null
+}
+```
+
+The light-machine cap may be raised to three after measuring its room; the heavy-machine cap cannot exceed four.
+Workload names are exact configuration values, never inferred from hostnames.
+The drive, when specified, must be an actual mount with no symlink substitution, and a temporary create/unlink must succeed there.
+Memory evidence comes from `memory_pressure -Q` and `sysctl vm.swapusage` on macOS, or `MemAvailable` and swap usage in `/proc/meminfo` on Linux.
+Missing measurements refuse placement.
+`bin/fm-placement.sh effective` prints the effective placement limits, disk floor, Claude admission limits, quota freshness allowance, retry cadence, wait-age threshold, launch grace, and optional slot seam without starting work.
+The existing disk-guard configuration and its default floor remain authoritative; placement uses its read-only `--check-room` entrypoint and never clears caches.
+
+Intake writes `data/<task-id>/placement.json` beside the brief:
+
+```json
+{
+  "version": 1,
+  "workload": "backend",
+  "requires_drive": false,
+  "priority": "P0",
+  "dispatch_rule": 0,
+  "brief_sha256": "<SHA-256 of brief.md>"
+}
+```
+
+The classification must name the actual work and the zero-based matched rule in `crew-dispatch.json`; changing the brief requires renewing its classification.
+Missing classification, a disallowed workload, a required drive absent from the machine profile, or a selected harness/model/effort outside that rule refuses fit.
+An iPhone build therefore cannot use the light example, and Plane work cannot use the heavy example.
+The typed resolver keeps matched-rule candidates ahead of default fallbacks in placement-enabled homes, prefers admitted Claude candidates within the same fit class, and only then applies the existing quota selection policy.
+Claude's live account admission and minimum 40% session floor remain owned by the following section.
+Other harnesses must prove a fresh, positive applicable quota bound for their selected account through the existing quota snapshot reader; unknown evidence refuses placement.
+
+The placement lock spans checks, provisioning, and launch publication or rollback.
+Each attempt atomically publishes its complete fit, room, quota, and locks verdict together with any refusal wait in `state/capacity.json`, which is also the capacity log.
+Existing spawn/task-set/project allocation locks retain their ownership.
+An optional executable `bin/fm-worktree-room.sh <project>` contributes a read-only slot-room verdict: exit zero passes, any other exit refuses room.
+Until that independent seam is installed, the record explicitly says `slots=not-installed`; placement does not count, reclaim, or clean worktree slots.
+The seam's owner signals a reclaim through `bin/fm-placement.sh freed`.
+
+The ordinary watcher rechecks capacity waits on crew metadata/lock changes, explicit slot-reclaim signals, and at least every 900 seconds while the watcher is running.
+It orders requests by P0 through P3, oldest first within each priority.
+Rechecks preserve the original wait age, apply current machine/account checks, and raise an ordinary `capacity-ready` wake for Firstmate to reroute through dispatch; they never launch a worker or grant new authority.
+Backlog captain/external holds suspend admission checks until the row is queued and unheld again.
+Capacity waits keep ordinary supervision alive even with no live workers.
+Morning reports can read `bin/fm-placement.sh waits`, a JSON view of the same ledger with named failing checks, wait state, priority, age origin, and `over_four_hours` flags for unresolved capacity waits.
+Script headers own command and ledger mechanics; `tests/fm-placement.test.sh` exercises refusal, atomic publication, ordering, and the executable retry path.
+
 ## Claude crew admission
 
 `fm-spawn.sh` enforces directly classified Claude ship and scout admission, including explicit, raw, batch, and relaunch paths, independently of typed dispatch resolution; raw executable basenames in the shared `claude*` harness family receive the same guard and count.

@@ -2737,6 +2737,12 @@ while :; do
   program_wake=$(fm_program_reconcile_tick "$STATE") || exit 1
   [ -z "$program_wake" ] || wake "$program_wake"
 
+  # Capacity retries share this watcher and its durable wake transport.
+  if [ -f "$STATE/capacity.json" ]; then
+    capacity_wake=$("$SCRIPT_DIR/fm-placement.sh" tick) || capacity_wake='check: capacity-recheck failed'
+    [ -z "$capacity_wake" ] || wake "$capacity_wake"
+  fi
+
   # Parent-owned secondmate pending-reply reconciliation: resolve correlated
   # parent reports, observe backend busy/idle turn completion, send one recovery
   # repost after grace, and escalate once if the recovery turn is also missed.
