@@ -6,7 +6,9 @@
 # tick rechecks after a freeing fingerprint change and no later than 900 seconds
 # while the ordinary watcher runs. Successful rechecks enqueue capacity-ready
 # through the existing wake queue; firstmate reroutes through normal dispatch.
-# Captain/external holds and non-queued backlog items never enter rechecks.
+# Captain/external holds and non-queued backlog items never enter rechecks;
+# done or missing backlog rows leave the queue, and unplaceable (fit-refused)
+# waits stay listed for rerouting but are never rechecked here.
 # freed marks a slot reclaim event for the next watcher tick.
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,7 +27,7 @@ STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 # shellcheck source=bin/fm-placement-lib.sh
 . "$SCRIPT_DIR/fm-placement-lib.sh"
 case "${1:-}" in
-  --help|-h) sed -n '2,10s/^# //p' "$0"; exit 0 ;;
+  --help|-h) sed -n '2,12s/^# //p' "$0"; exit 0 ;;
   waits) backlog_json "$DATA/backlog.md" | python3 "$SCRIPT_DIR/fm-placement.py" ordered "$STATE"; exit ;;
   effective)
     profile=null
@@ -59,13 +61,23 @@ rows=$(backlog_json "$DATA/backlog.md" | python3 "$SCRIPT_DIR/fm-placement.py" o
 while IFS= read -r row; do
   id=$(printf '%s\n' "$row" | jq -r '.task')
   RELAUNCH=$(printf '%s\n' "$row" | jq -r '.request.relaunch // 0')
-  # The backlog remains the authority; unknown or missing rows stay untouched.
-  fm_backlog_row_probe "$DATA" "$id" || continue
+  # The backlog remains the authority: missing or terminal rows leave the queue,
+  # unreadable rows stay untouched until the next tick.
+  if ! fm_backlog_row_probe "$DATA" "$id"; then
+    [ "$FM_BACKLOG_ROW_RESULT" != not_found ] \
+      || python3 "$SCRIPT_DIR/fm-placement.py" drop "$STATE" "$id" >/dev/null || exit 1
+    continue
+  fi
+  if [ "${FM_BACKLOG_ROW_STATE%% *}" = "done" ]; then
+    python3 "$SCRIPT_DIR/fm-placement.py" drop "$STATE" "$id" >/dev/null || exit 1
+    continue
+  fi
   if [ "$FM_BACKLOG_ROW_STATE" != 'queued no no' ] \
      && { [ "$RELAUNCH" != 1 ] || [ "$FM_BACKLOG_ROW_STATE" != 'in_flight no no' ]; }; then
     python3 "$SCRIPT_DIR/fm-placement.py" hold "$STATE" "$id" "${FM_BACKLOG_ROW_HOLD_KIND:-external}" >/dev/null || exit 1
     continue
   fi
+  [ "$(printf '%s\n' "$row" | jq -r '.state')" != unplaceable ] || continue
   [ "$RELAUNCH" = 1 ] || [ ! -e "$STATE/$id.meta" ] || continue
   FM_PLACEMENT_ACTIVE=0 FM_PLACEMENT_RECORDED=0 FM_PLACEMENT_MODE=recheck
   fm_placement_begin "$id" || continue
@@ -103,7 +115,6 @@ while IFS= read -r row; do
   fi
   if fm_placement_check "$harness" "$model" "$effort" "$quota"; then
     fm_wake_append check capacity-ready "check: capacity-ready $id: placement recheck passed; reroute through dispatch" || exit 1
-    printf 'check: capacity-ready %s\n' "$id"
   fi
   fm_placement_release
 done < <(printf '%s\n' "$rows" | jq -c '.[]')

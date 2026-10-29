@@ -1453,7 +1453,7 @@ spawn_abort_cleanup() {
   if [ "$QUOTA_PACING_ADMISSION_LOCK_HELD" = 1 ]; then
     fm_lock_release "$QUOTA_PACING_ADMISSION_LOCK" || true
   fi
-  fm_placement_abort 'spawn ended before complete placement evidence' || true
+  fm_placement_abort "${FM_PLACEMENT_REFUSAL:-}" || true
   fm_placement_release || true
   return "$status"
 }
@@ -1669,6 +1669,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   elif fm_lock_try_acquire "$SPAWN_CONTROL_LOCK"; then
     SPAWN_CONTROL_LOCK_HELD=1
   else
+    FM_PLACEMENT_REFUSAL="control lock held for task $ID"
     echo "error: another lifecycle action is already running for task $ID" >&2
     exit 1
   fi
@@ -1702,6 +1703,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
+    FM_PLACEMENT_REFUSAL='task-set lock held by another operation'
     echo "error: this home's task set is locked by another operation (a forced teardown is enumerating or removing its tasks); refusing to create task $ID rather than racing it" >&2
     exit 1
   fi
@@ -1746,6 +1748,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
 fi
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
 if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
+  FM_PLACEMENT_REFUSAL="spawn lock held for task $ID"
   echo "error: another spawn is already creating task $ID" >&2
   exit 1
 fi
@@ -3277,6 +3280,7 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
+    FM_PLACEMENT_REFUSAL="Treehouse project lock held for $PROJ_ABS"
     echo "error: another Treehouse slot allocation or return is in progress for $PROJ_ABS; refusing to race it" >&2
     exit 1
   fi

@@ -5,12 +5,15 @@ Usage: fm-placement.py assess CONFIG DATA ID HARNESS MODEL EFFORT
        fm-placement.py memory
        fm-placement.py record STATE ID [spawn|recheck]
        fm-placement.py waits STATE
+       fm-placement.py drop STATE ID
        fm-placement.py due STATE
 memory reads fresh operating-system memory/swap evidence; assess consumes JSON
 evidence on stdin and prints a complete decision.
 record consumes that decision; one replace publishes the decision and its wait
 in state/capacity.json, under an exclusive ledger lock. This is the capacity log.
-waits prints P0-P3, oldest-first waits, with over_four_hours computed at read time.
+waits prints P0-P3, oldest-first waits, with over_four_hours computed at read time
+for capacity waits only. A fit refusal is 'unplaceable' (never a capacity wait);
+a terminal decision or drop removes the wait.
 due emits 'due' on a 900-second cadence or a changed resource fingerprint;
 it never launches work. The watcher owns rechecks and normal wake delivery.
 """
@@ -210,13 +213,15 @@ def assess(config, data, task, harness, model, effort):
         value = evidence.get(name)
         if isinstance(value, dict) and value.get("status") in ("pass", "fail"):
             checks[name] = value
+    machine = None
     try:
         profile = read(config / "crew-placement.json")
+        if not isinstance(profile, dict) or profile.get("version") != 1:
+            raise ValueError("machine profile must be a version 1 object")
+        machine = profile
         work = read(data / task / "placement.json")
-        if not isinstance(profile, dict) or not isinstance(work, dict):
-            raise ValueError("machine profile and task classification must be objects")
-        if profile.get("version") != 1 or work.get("version") != 1:
-            raise ValueError("placement version must be 1")
+        if not isinstance(work, dict) or work.get("version") != 1:
+            raise ValueError("task classification must be a version 1 object")
         brief = data / task / "brief.md"
         if hashlib.sha256(brief.read_bytes()).hexdigest() != work.get("brief_sha256"):
             raise ValueError("task classification is not bound to current brief")
@@ -248,7 +253,7 @@ def assess(config, data, task, harness, model, effort):
         checks["fit"] = result(True, f"workload={workload}; dispatch_rule={rule}")
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
         checks["fit"] = result(False, str(error))
-        profile = None
+    profile = machine
     if profile is not None:
         try:
             cap = profile["max_crew"]
@@ -318,7 +323,7 @@ def ledger(state, operation, task=None, mode=None):
                 elif check["status"] == "pass":
                     alerts.pop(identity, None)
             old = value["waits"].get(task, {})
-            if decision.get("hold"):
+            if decision.get("hold") or decision.get("terminal"):
                 value["waits"].pop(task, None)
             elif decision["admitted"] and mode == "spawn":
                 value["waits"].pop(task, None)
@@ -327,13 +332,18 @@ def ledger(state, operation, task=None, mode=None):
                     "task": task, "since": now if old.get("state") == "hold" else old.get("since", now), "checked": now,
                     "impact": decision["impact"], "failed": decision["failed"],
                     "request": decision["request"],
-                    "state": "ready" if decision["admitted"] else "capacity",
+                    "state": "ready" if decision["admitted"] else
+                             "unplaceable" if "fit" in decision["failed"] else "capacity",
                 }
             atomic(path, value)
             return decision
         if operation == "hold":
             if task in value["waits"]:
                 value["waits"][task].update(state="hold", hold=mode)
+                atomic(path, value)
+            return True
+        if operation == "drop":
+            if value["waits"].pop(task, None) is not None:
                 atomic(path, value)
             return True
         if operation == "alerts":
@@ -349,7 +359,7 @@ def ledger(state, operation, task=None, mode=None):
             if operation == "ordered":
                 impacts = {row["id"]: row.get("impact") or "P2" for row in json.load(sys.stdin)["records"]}
             return sorted((dict(row, impact=impacts.get(row["task"], row.get("impact", "P2")),
-                                over_four_hours=row["state"] != "hold" and now - row["since"] > 14400)
+                                over_four_hours=row["state"] in ("capacity", "ready") and now - row["since"] > 14400)
                            for row in value["waits"].values()),
                           key=lambda row: (row["impact"], row["since"], row["task"]))
         if not value["waits"]:

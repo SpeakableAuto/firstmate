@@ -86,8 +86,10 @@ fm_supervision_status() {
   fi
 
   # Future checks retain the tokenless watcher; explicit user pauses do not.
-  # Placement waits need a watcher even when the last live worker has exited.
-  if [ -f "$state/capacity.json" ] && ! jq -e '.waits | length == 0' "$state/capacity.json" >/dev/null 2>&1; then
+  # Placement waits need a watcher even when the last live worker has exited;
+  # unplaceable (fit-refused) waits are never rechecked, so they need none.
+  if [ -f "$state/capacity.json" ] \
+     && ! jq -e '[.waits[] | select(.state != "unplaceable")] | length == 0' "$state/capacity.json" >/dev/null 2>&1; then
     FM_SUP_NEEDED=true
   fi
   # shellcheck disable=SC2034 # Public status consumed by guard/stop adapters.

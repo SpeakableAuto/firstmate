@@ -1324,12 +1324,16 @@ Intake writes `data/<task-id>/placement.json` beside the brief:
 The classification must name the actual work and the zero-based matched rule in `crew-dispatch.json`; changing the brief requires renewing its classification.
 Missing classification, a disallowed workload, a required drive absent from the machine profile, or a selected harness/model/effort outside that rule refuses fit.
 An iPhone build therefore cannot use the light example, and Plane work cannot use the heavy example.
-The typed resolver keeps matched-rule candidates ahead of default fallbacks in placement-enabled homes, prefers admitted Claude candidates within the same fit class, and only then applies the existing quota selection policy.
+The typed resolver keeps matched-rule candidates ahead of default fallbacks in placement-enabled homes, then lets the existing quota selection policy (soonest paced window, spendPriority and its near-tie band) decide within that fit class; an admitted Claude candidate wins only when that quota comparison is an exact or near tie.
 Claude's live account admission and minimum 40% session floor remain owned by the following section.
 Other harnesses must prove a fresh, positive applicable quota bound for their selected account through the existing quota snapshot reader; unknown evidence refuses placement.
 
 The placement lock spans checks, provisioning, and launch publication or rollback.
 Each attempt atomically publishes its complete fit, room, quota, and locks verdict together with any refusal wait in `state/capacity.json`, which is also the capacity log.
+Room is measured even when fit fails, so the log names only the checks that actually failed.
+A fit refusal (disallowed workload, missing required drive, model outside the matched rule, or stale brief binding) is recorded with wait state `unplaceable`: it is not a capacity wait, is never rechecked or flagged as a bottleneck, and stays listed so Firstmate can reroute it to a fitting machine.
+Only room, quota (allowance), and locks refusals become `capacity` waits.
+A spawn that exits before placement for a non-capacity reason (argument, brief, or delivery-contract validation, for example) records a terminal decision and leaves no wait.
 Existing spawn/task-set/project allocation locks retain their ownership.
 `bin/fm-worktree-slots.sh room <project>` contributes the named `slots` verdict with its printed reason retained verbatim.
 Spawn retains the slot owner's safe reclaim step before placement's final check; a persistent refusal queues the task instead of exiting without a decision.
@@ -1339,10 +1343,13 @@ The ordinary watcher rechecks capacity waits on crew metadata/lock changes, expl
 It orders requests by the canonical backlog `(impact: P0)` through `(impact: P3)`, oldest first within each level.
 Missing impact defaults to P2; legacy `(priority: N)` and task-classification fields never override impact.
 The read-only backlog parser strips impact metadata from display titles, and each queue read uses the current backlog impact.
-Rechecks preserve the original wait age, apply current machine/account checks, and raise an ordinary `capacity-ready` wake for Firstmate to reroute through dispatch; they never launch a worker or grant new authority.
+Rechecks preserve the original wait age, apply current machine/account checks, and append one ordinary `capacity-ready` row to the durable wake queue for Firstmate to reroute through dispatch; they never launch a worker or grant new authority.
+A failing recheck wakes the supervisor once per distinct error, then at most every 900 seconds.
 Backlog captain/external holds suspend admission checks until the row is queued and unheld again.
-Capacity waits keep ordinary supervision alive even with no live workers.
-Morning reports can read `bin/fm-placement.sh waits`, a JSON view of the same ledger with named failing checks, wait state, impact, age origin, and `over_four_hours` flags for unresolved capacity waits.
+A wait whose backlog row is done or no longer exists leaves the queue.
+Capacity and hold waits keep ordinary supervision alive even with no live workers; unplaceable waits do not.
+Firstmate's morning report reads `bin/fm-placement.sh waits` (run from the home, for example `FM_HOME=<home> <home>/bin/fm-placement.sh waits`): a JSON array of the same ledger, ordered P0-P3 then oldest first, where each row carries `task`, `state` (`capacity`, `ready`, `hold`, or `unplaceable`), `failed` (the named failing checks), `impact`, `since`, `checked`, `request`, and `over_four_hours` (true only for a `capacity` or `ready` wait older than four hours).
+The per-attempt decision with each check's reason is the matching entry in `state/capacity.json` `.decisions`.
 Script headers own command and ledger mechanics; `tests/fm-placement.test.sh` exercises refusal, atomic publication, ordering, and the executable retry path.
 
 ## Claude crew admission
