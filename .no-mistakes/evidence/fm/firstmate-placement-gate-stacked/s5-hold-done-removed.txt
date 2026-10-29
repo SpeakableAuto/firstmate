@@ -1,0 +1,47 @@
+$ tasks-axi hold backend-scout --reason "captain decision pending" --kind captain --file $LAB/data/backlog.md
+ok: hold backend-scout -> held (captain)
+task:
+  id: backend-scout
+  title: "Backend scout (impact: P0)"
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: yes
+  hold_reason: captain decision pending
+  hold_kind: captain
+  hold_until: "-"
+  kind: task
+  repo: "-"
+  priority: "-"
+  created: "-"
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+help[2]:
+  - Run `tasks-axi unhold backend-scout --file=/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV/data/backlog.md` to resume dispatch
+  - Run `tasks-axi ready --include-held --file=/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV/data/backlog.md` to review paused work
+exit=0
+- [ ] backend-scout - Backend scout (impact: P0) (hold: captain decision pending) (hold-kind: captain)
+$ bin/fm-placement.sh tick
+exit=0
+decisions per task: {"backend-scout":4,"iphone-build":1}  (held task not re-assessed)
+{"task":"backend-scout","state":"hold","hold":"captain","over_four_hours":false}
+{"task":"iphone-build","state":"unplaceable","hold":null,"over_four_hours":false}
+$ tasks-axi rm iphone-build ; tasks-axi done backend-scout
+ok: removed iphone-build
+help[1]:
+  - Run `tasks-axi list --file=/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV/data/backlog.md` to see remaining tasks
+rm exit=0
+ok: done backend-scout -> Done
+help[1]:
+  - Run `tasks-axi ready --file=/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV/data/backlog.md` to dispatch work unblocked by this
+done exit=0
+## Queued
+## In flight
+## Done
+- [x] backend-scout - Backend scout (impact: P0) (done 2026-10-29)
+$ bin/fm-placement.sh tick
+exit=0
+$ bin/fm-placement.sh waits
+[]

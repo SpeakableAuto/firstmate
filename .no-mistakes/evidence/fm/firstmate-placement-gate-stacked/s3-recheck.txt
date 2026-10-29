@@ -1,0 +1,22 @@
+decisions per task before: {"backend-scout":1,"iphone-build":1}
+$ bin/fm-placement.sh tick   # room still full (real swap)
+error: placement refused: room: memory: free=59%, swap=8237.62 MiB (state/capacity.json)
+exit=0
+decisions per task: {"backend-scout":2,"iphone-build":1}
+{"task":"backend-scout","state":"capacity","failed":["room"]}
+{"task":"iphone-build","state":"unplaceable","failed":["fit","room"]}
+$ bin/fm-placement.sh tick   # immediately again, nothing changed
+exit=0
+decisions per task: {"backend-scout":2,"iphone-build":1}  (no busy poll)
+--- operator frees room: raise max_swap_mib to 20000, then signal a freeing event
+$ bin/fm-placement.sh freed
+exit=0
+$ bin/fm-placement.sh tick
+exit=0 stdout=[]
+decisions per task: {"backend-scout":3,"iphone-build":1}
+{"task":"backend-scout","state":"ready","failed":[]}
+{"task":"iphone-build","state":"unplaceable","failed":["fit","room"]}
+$ cat state/.wake-queue
+1793260372	1	check	capacity-ready	check: capacity-ready backend-scout: placement recheck passed; reroute through dispatch
+$ ls state/*.meta
+(eval):15: no matches found: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV/state/*.meta

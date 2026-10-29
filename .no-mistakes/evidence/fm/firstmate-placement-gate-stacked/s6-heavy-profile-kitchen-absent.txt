@@ -1,0 +1,18 @@
+$ ls /Volumes
+ASAP MEDIA
+Macintosh HD
+$ bin/fm-spawn.sh website-build $LAB/proj --scout --harness codex --model gpt-5.5 --effort high   # heavy profile, Kitchen drive absent
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV
+error: placement refused: drive: drive unmounted or symlinked: /Volumes/Kitchen; treehouse-root: treehouse-root: repo-local treehouse.toml missing or symlinked (state/capacity.json)
+exit=1
+$ bin/fm-placement.sh waits
+{"task":"website-build","state":"capacity","failed":["drive","treehouse-root"]}
+$ named checks in decision:
+{"drive":"drive unmounted or symlinked: /Volumes/Kitchen","treehouse-root":"treehouse-root: repo-local treehouse.toml missing or symlinked"}
+$ bin/fm-placement.sh effective
+{"enabled":true,"max_crew":4,"drive":"/Volumes/Kitchen","disk_floor_gib":15,"claude_floor":40,"recheck_seconds":900,"wait_alert_seconds":14400,"slot_seam":"/Users/mac-mini-0002/.no-mistakes/worktrees/9db47e05032d/01M63959HA9XX0V0EE31YT9K85/bin/fm-worktree-slots.sh"}
+$ wake queue
+1793260372	1	check	capacity-ready	check: capacity-ready backend-scout: placement recheck passed; reroute through dispatch
+1793260492	2	check	placement-3fd618d36bcd4b10b344c771c4125691	check: placement-condition website-build: drive unmounted or symlinked: /Volumes/Kitchen
+1793260492	3	check	placement-90bc2060b595457dba10ec129fd377f8	check: placement-condition website-build: treehouse-root: repo-local treehouse.toml missing or symlinked
+(eval):15: no matches found: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV/state/*.meta

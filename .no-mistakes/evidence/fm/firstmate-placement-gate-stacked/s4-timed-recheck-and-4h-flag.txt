@@ -1,0 +1,11 @@
+--- room tightens again (max_swap_mib back to 512); no freeing event; ledger clock pinned 901s back to simulate 15 minutes passing
+$ bin/fm-placement.sh tick
+error: placement refused: room: memory: free=59%, swap=8237.62 MiB (state/capacity.json)
+exit=0
+decisions per task: {"backend-scout":4,"iphone-build":1}
+{"task":"backend-scout","state":"capacity","failed":["room"]}
+{"task":"iphone-build","state":"unplaceable","failed":["fit","room"]}
+--- both waits pinned 5 hours old (since -= 18000) to exercise the >4h morning-report flag
+$ bin/fm-placement.sh waits
+{"task":"backend-scout","state":"capacity","impact":"P0","failed":["room"],"over_four_hours":true}
+{"task":"iphone-build","state":"unplaceable","impact":"P1","failed":["fit","room"],"over_four_hours":false}

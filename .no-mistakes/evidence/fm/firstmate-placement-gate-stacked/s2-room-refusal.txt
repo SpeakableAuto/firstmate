@@ -1,0 +1,9 @@
+$ memory now:
+{"free_percent":59.0,"swap_mib":8245.62}
+$ bin/fm-spawn.sh backend-scout $LAB/proj --scout --harness codex --model gpt-5.5 --effort high
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV
+error: placement refused: room: memory: free=59%, swap=8245.62 MiB (state/capacity.json)
+exit=1
+$ bin/fm-placement.sh waits
+{"task":"backend-scout","state":"capacity","impact":"P0","failed":["room"],"over_four_hours":false}
+{"task":"iphone-build","state":"unplaceable","impact":"P1","failed":["fit","room"],"over_four_hours":false}

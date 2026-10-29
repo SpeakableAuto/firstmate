@@ -1,0 +1,4 @@
+$ FM_HOME=$LAB bin/fm-spawn.sh iphone-build $LAB/proj --scout --harness codex --model gpt-5.5 --effort high
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.rKjRsV
+error: placement refused: fit: workload is not allowed on this machine; room: memory: free=59%, swap=8253.62 MiB (state/capacity.json)
+exit=1

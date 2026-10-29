@@ -1,0 +1,7 @@
+ok - placements are charged across separate calls inside the charge window
+ok - placement charges apply only to the selected profile's quota scopes
+ok - a never-send match withholds only its own brief in a batch
+ok - bounded Claude cache recovery ranks recent evidence, preserves candidate order, and discloses age
+ok - placement selection keeps task fit, ranks by quota, and gives Claude only ties above its floor
+# all fm-dispatch-resolve tests passed
+exit=

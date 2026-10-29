@@ -1,0 +1,22 @@
+$ FM_HOME=$LAB bin/fm-placement.sh waits
+[
+  {
+    "task": "iphone-build",
+    "since": 1793260335,
+    "checked": 1793260335,
+    "impact": "P1",
+    "failed": [
+      "fit",
+      "room"
+    ],
+    "request": {
+      "harness": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "project": "/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.rKjRsV/proj",
+      "relaunch": 0
+    },
+    "state": "unplaceable",
+    "over_four_hours": false
+  }
+]
