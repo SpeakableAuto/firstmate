@@ -3778,6 +3778,13 @@ else
   fi
 fi
 
+# Read backlog admission while the fresh-spawn task-set lock is held. The
+# helper is independent of placement, and every supported runtime passes here.
+if [ "$BACKLOG_TRANSITION" = 1 ] && [ "$RELAUNCH" -eq 0 ]; then
+  FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_DATA_OVERRIDE="$DATA" \
+    bash "$SCRIPT_DIR/fm-finish-first.sh" "$ID" || exit 1
+fi
+
 if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
   SPAWN_META_LOCK=$(fm_meta_lock_path "$STATE/$ID.meta") || exit 1
   fm_lock_acquire_wait "$SPAWN_META_LOCK"
@@ -5333,13 +5340,6 @@ if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
   fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK"
 fi
-if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
-  # The record is published, so this task is now part of the set a teardown
-  # enumerates and locks per task. The set lock is only needed across that
-  # publication.
-  SPAWN_TASK_SET_LOCK_HELD=0
-  fm_lock_release "$SPAWN_TASK_SET_LOCK"
-fi
 "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
@@ -5802,6 +5802,11 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
   exit "$SPAWN_DEFERRED_SIGNAL_STATUS"
 fi
 fm_lock_release "$SPAWN_META_LOCK"
+if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
+  # Admission counted backlog rows; release only after the In-flight commit.
+  SPAWN_TASK_SET_LOCK_HELD=0
+  fm_lock_release "$SPAWN_TASK_SET_LOCK"
+fi
 SPAWN_META_LOCK_HELD=0
 
 SPAWN_DELIVERY=
