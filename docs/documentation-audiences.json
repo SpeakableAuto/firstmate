@@ -26,6 +26,7 @@
   "readmeSetupTargets": [
     "docs/configuration.md",
     "docs/disk-guard.md",
+    "docs/work-drive.md",
     "docs/wedge-alarm.md",
     "docs/supervisor-watchdog.md",
     "docs/tmux-backend.md",
@@ -584,6 +585,10 @@
     },
     {
       "path": "docs/disk-guard.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/work-drive.md",
       "audience": "operator-current"
     },
     {
