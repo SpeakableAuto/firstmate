@@ -52,11 +52,14 @@ depth=3
 scan=/Users/me
 scan=/opt/homebrew
 allow=/Users/me/firstmate
-allow=/Users/me/Library/Mail
+exclude=/Users/me/Library/Mail
+exclude=/Users/me/Documents
 ```
 
 Each `scan=` path must be on `volume`; `du -x` keeps each measurement on that volume, so the work drive is never counted.
 List under `allow=` only folders that are meant to live internally, such as the Firstmate home, always-on services, and application data.
+On macOS, opening a privacy-protected folder such as Mail, Messages, Documents, or Desktop from a background job can block for a long time, so list those folders under `exclude=`; the check never opens an excluded folder.
+A run that exceeds `timeout_seconds` is stopped and reported as a failed measurement rather than left hanging.
 Run `FM_HOME=/absolute/firstmate bin/fm-internal-growth.sh --dry-run` first to see the measurement without writing state.
 The first real run records the baseline; later runs compare with it and queue one Firstmate check wake per new episode.
 Each run appends one JSON line to `state/internal-growth/log.jsonl` with free space, the used-space change, and any flagged folders.

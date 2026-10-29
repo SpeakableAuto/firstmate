@@ -5,14 +5,20 @@
 #   volume=/System/Volumes/Data   required; free space is read from it
 #   scan=/Users/me                repeatable, required; must be on that volume
 #   allow=/Users/me/firstmate     repeatable; growth at or below it is ignored
+#   exclude=/Users/me/Library/Mail  repeatable; never opened or measured
 #   threshold_gib=1               default 1
 #   depth=3                       folder depth below each scan path, default 3
 #   min_baseline_hours=20         default 20; 0 rolls the baseline every run
+#   timeout_seconds=1800          whole-run measurement budget, default 1800
 # Paths are plain absolute paths; overlapping scan paths and unknown keys refuse.
 # Each run measures folder sizes with `du -xk -d <depth>`, staying on the internal
 # volume, and compares them with the stored baseline. Growth of an allowed folder
 # is subtracted from its ancestors, and only the deepest folder whose remaining
 # growth exceeds the threshold is flagged. The first run only records a baseline.
+# A subtree containing an excluded folder is listed entry by entry so the
+# excluded folder is never opened; exclude folders whose access can block, such
+# as macOS privacy-protected folders. A measurement over the budget is killed
+# and reported as a failed measurement.
 # The baseline rolls forward when it is at least min_baseline_hours old, so extra
 # runs within a day compare against the same day-old baseline.
 # One Firstmate check wake names every newly flagged folder. A flagged folder is

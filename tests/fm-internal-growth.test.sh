@@ -11,6 +11,8 @@ mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/du" <<'SH'
 #!/usr/bin/env bash
 [ ! -e "$DU_FIXTURE.fail" ] || { echo 'du: fixture failure' >&2; exit 1; }
+[ ! -e "$DU_FIXTURE.slow" ] || exec sleep 5
+printf '%s\n' "$*" >> "$DU_FIXTURE.calls"
 shift
 if [ "$1" = -d ]; then
   depth=$2 scan=$3
@@ -120,6 +122,30 @@ sizes a=$((4 * GIB))
 run_check
 assert_equals 1 "$(wakes)" 'the next run retries the alert'
 pass 'an alert that cannot be queued is retried next run'
+
+new_case exclude
+mkdir -p "$scan/a" "$scan/protected"
+echo "exclude=$scan/protected" >> "$fm/config/internal-growth"
+sizes a=1
+run_check
+sizes a=$((2 * GIB))
+run_check
+assert_equals 1 "$(wakes)" 'growth beside an excluded folder still alerts'
+assert_equals "$scan/a" "$(last_log | jq -r '.flagged[0].path')" 'the growing sibling is flagged'
+assert_contains "$(cat "$case_dir/du.calls")" "-xk -d 1 $scan/a" 'the scan was split around the excluded folder'
+case "$(cat "$case_dir/du.calls")" in *"$scan/protected"*) fail 'an excluded folder was measured' ;; esac
+pass 'excluded folders are never measured'
+
+new_case slow
+sizes a=1
+echo timeout_seconds=1 >> "$fm/config/internal-growth"
+touch "$case_dir/du.slow"
+started=$(date +%s)
+set +e; run_check 2>/dev/null; rc=$?; set -e
+[ $(($(date +%s) - started)) -lt 5 ] || fail 'a slow measurement was not cut off'
+assert_equals 1 "$rc" 'a measurement over budget exits 1'
+assert_contains "$(cat "$fm/state/.wake-queue")" 'du exceeded the 1 second budget' 'over-budget measurement alerts'
+pass 'a measurement over its budget is killed and alerts'
 
 new_case dry
 sizes a=1

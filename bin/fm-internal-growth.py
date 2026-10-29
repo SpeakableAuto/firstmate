@@ -6,6 +6,7 @@ Usage: fm-internal-growth.py <config> <state-dir> <wake-script> [--dry-run]
 """
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,7 @@ def read_config(path):
         print(f"internal growth check not configured: {path}", file=sys.stderr)
         sys.exit(2)
     cfg = {"volume": None, "threshold_gib": 1, "depth": 3, "min_baseline_hours": 20,
-           "scan": [], "allow": []}
+           "timeout_seconds": 1800, "scan": [], "allow": [], "exclude": []}
     with open(path, encoding="utf-8") as handle:
         for raw in handle:
             line = raw.rstrip("\n")
@@ -40,12 +41,12 @@ def read_config(path):
                 fail_config(line)
             if key == "volume":
                 cfg["volume"] = value
-            elif key in ("threshold_gib", "depth", "min_baseline_hours"):
+            elif key in ("threshold_gib", "depth", "min_baseline_hours", "timeout_seconds"):
                 zero_ok = key == "min_baseline_hours" and value == "0"
                 if not value.isdigit() or (value.startswith("0") and not zero_ok) or int(value) > 1048576:
                     fail_config(line)
                 cfg[key] = int(value)
-            elif key in ("scan", "allow"):
+            elif key in ("scan", "allow", "exclude"):
                 cfg[key].append(value)
             else:
                 fail_config(line)
@@ -53,7 +54,7 @@ def read_config(path):
         fail_config("volume must be an absolute path")
     if not cfg["scan"]:
         fail_config("at least one scan= path is required")
-    for path in cfg["scan"] + cfg["allow"]:
+    for path in cfg["scan"] + cfg["allow"] + cfg["exclude"]:
         if not plain_abs(path):
             fail_config(f"not a plain absolute path: {path}")
     for a in cfg["scan"]:
@@ -72,8 +73,26 @@ def free_kib(volume):
     return stat.f_bavail * stat.f_frsize // 1024
 
 
-def du(args):
-    proc = subprocess.run(["du", "-xk"] + args, capture_output=True, text=True, check=False)
+class Budget:
+    """One wall-clock allowance for every du call in a run."""
+
+    def __init__(self, seconds):
+        self.seconds = seconds
+        self.deadline = time.monotonic() + seconds
+
+    def remaining(self, path):
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise RuntimeError(f"measurement exceeded {self.seconds} seconds at {path}")
+        return left
+
+
+def du(args, budget):
+    try:
+        proc = subprocess.run(["du", "-xk"] + args, capture_output=True, text=True,
+                              check=False, timeout=budget.remaining(args[-1]))
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f"du exceeded the {budget.seconds} second budget at {args[-1]}") from error
     sizes = {}
     for line in proc.stdout.splitlines():
         size, sep, path = line.partition("\t")
@@ -82,24 +101,60 @@ def du(args):
     return sizes
 
 
-def measure(cfg):
+def measure_tree(path, depth, device, cfg, budget, sizes, unreadable):
+    """Measure path; record it and its descendants down to depth; return KiB.
+
+    A subtree holding an excluded folder is split by listing its entries, so
+    the excluded folder itself is never opened.
+    """
+    if not any(e != path and under(e, path) for e in cfg["exclude"]):
+        found = du(["-d", str(max(depth, 0)), path] if depth >= 0 else ["-s", path], budget)
+        if path not in found:
+            if path in cfg["scan"]:
+                raise RuntimeError(f"du produced no total for {path}")
+            # An unreadable folder inside a split scan counts as empty and is logged.
+            unreadable.append(path)
+            return 0
+        if depth >= 0:
+            sizes.update(found)
+        return found[path]
+    total = os.lstat(path).st_blocks * 512 // 1024
+    with os.scandir(path) as entries:
+        for entry in entries:
+            child = os.path.join(path, entry.name)
+            if child in cfg["exclude"]:
+                continue
+            stat = entry.stat(follow_symlinks=False)
+            if stat.st_dev != device:
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                total += measure_tree(child, depth - 1, device, cfg, budget, sizes, unreadable)
+            else:
+                total += stat.st_blocks * 512 // 1024
+    if depth >= 0:
+        sizes[path] = total
+    return total
+
+
+def measure(cfg, unreadable):
     """Folder sizes in KiB on the internal volume, keyed by path."""
     device = os.stat(cfg["volume"]).st_dev
+    budget = Budget(cfg["timeout_seconds"])
     sizes = {}
     for scan in cfg["scan"]:
         if not os.path.isdir(scan) or os.path.islink(scan):
             raise RuntimeError(f"scan path missing or symlinked: {scan}")
         if os.stat(scan).st_dev != device:
             raise RuntimeError(f"scan path is not on {cfg['volume']}: {scan}")
-        found = du(["-d", str(cfg["depth"]), scan])
-        if scan not in found:
-            raise RuntimeError(f"du produced no total for {scan}")
-        sizes.update(found)
+        if scan in cfg["exclude"]:
+            continue
+        measure_tree(scan, cfg["depth"], device, cfg, budget, sizes, unreadable)
         # Allowed folders deeper than the scan depth are measured directly so
         # their growth can still be excluded from every ancestor.
-        deep = [a for a in cfg["allow"] if under(a, scan) and a not in sizes and os.path.isdir(a)]
+        deep = [a for a in cfg["allow"] if under(a, scan) and a not in sizes and os.path.isdir(a)
+                and not any(under(a, e) for e in cfg["exclude"])]
         if deep:
-            sizes.update(du(["-s"] + deep))
+            sizes.update(du(["-s"] + deep, budget))
     return sizes
 
 
@@ -170,15 +225,23 @@ def main():
     episodes = read_tsv(episodes_path)  # path -> opened epoch
     record = {"at": now, "volume": cfg["volume"], "threshold_gib": cfg["threshold_gib"]}
     alert = None
+    def expired(_signum, _frame):
+        raise TimeoutError(f"measurement exceeded {cfg['timeout_seconds']} seconds")
+
+    # Backstop for a filesystem call that blocks outside du's own timeout.
+    signal.signal(signal.SIGALRM, expired)
+    signal.alarm(cfg["timeout_seconds"] + 60)
     try:
         record["free_kib"] = free_kib(cfg["volume"])
-        cur = measure(cfg)
+        record["unreadable"] = []
+        cur = measure(cfg, record["unreadable"])
     except (OSError, RuntimeError) as error:
         record["error"] = str(error)
         flagged = [{"path": "!measurement", "growth_kib": 0}]
         if "!measurement" not in episodes:
             alert = f"internal growth check could not measure: {error}"
         cur = None
+    signal.alarm(0)
     if cur is not None:
         loaded = read_baseline(baseline_path)
         if loaded is None:
