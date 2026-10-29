@@ -24,6 +24,7 @@ fm_placement_begin() {
   FM_PLACEMENT_ID=$1
   # An absent config preserves unconfigured template homes. A present but
   # unreadable/malformed file enables the gate and fails closed in assess.
+  # shellcheck disable=SC2153 # STATE is assigned by the sourcing caller
   [ -e "$CONFIG/crew-placement.json" ] || [ -L "$CONFIG/crew-placement.json" ] \
     || [ -e "$STATE/capacity.json" ] || return 0
   FM_PLACEMENT_ACTIVE=1

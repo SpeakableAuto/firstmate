@@ -411,7 +411,9 @@ pass 'rejected allocation returns only a clean, unrecorded freshly owned slot'
   STATE="$TMP_ROOT/count-state"
   FM_PLACEMENT_ID=candidate
   mkdir -p "$STATE"
+  # shellcheck disable=SC2329 # invoked indirectly by fm_placement_count
   fm_backend_source() { [ "$1" != unsupported ]; }
+  # shellcheck disable=SC2329 # invoked indirectly by fm_placement_count
   fm_quota_pacing_agent_state() { printf '%s' "$2"; }
   for verdict in missing dead gone; do
     printf 'kind=ship\nbackend=tmux\nwindow=%s\nspawn_gen=s1.0\n' "$verdict" > "$STATE/worker.meta"
