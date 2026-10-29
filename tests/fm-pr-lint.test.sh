@@ -55,6 +55,9 @@ class Linter(unittest.TestCase):
 
     def test_carve_out_paths_and_text(self):
         for path, category in [('src/stripe/refund.ts', 'payments'),
+                               ('src/card.ts', 'payments'),
+                               ('src/credit-card.ts', 'payments'),
+                               ('src/debit_card.ts', 'payments'),
                                ('app/login.ts', 'logins-keys-secrets'),
                                ('db/migrations/004.sql', 'shared-database-schema')]:
             with self.subTest(path=path):
@@ -78,6 +81,19 @@ class Linter(unittest.TestCase):
                     self.assertEqual(result.returncode, 1, result.stdout)
                     self.assertIn('carve-outs/'+category, result.stderr)
                     declared = body.replace('Carve-outs: none', 'Carve-outs: '+category)
+                    result = self.run_lint(declared, '--kind', kind)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_card_goal_requires_payments_classification(self):
+        for wording in ('card', 'credit-card', 'debit card'):
+            for kind in ('pr', 'brief'):
+                with self.subTest(wording=wording, kind=kind):
+                    body = GOOD.replace('incomplete evidence is caught before use.',
+                                        f'store a customer {wording} reference for future use.')
+                    result = self.run_lint(body, '--kind', kind)
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    self.assertIn('carve-outs/payments', result.stderr)
+                    declared = body.replace('Carve-outs: none', 'Carve-outs: payments')
                     result = self.run_lint(declared, '--kind', kind)
                     self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -106,7 +122,8 @@ class Linter(unittest.TestCase):
         r = lint_diff(real)
         self.assertEqual(r.returncode, 0, r.stderr)
         ordinary = ('diff --git a/bin/x.sh b/bin/x.sh\n--- a/bin/x.sh\n+++ b/bin/x.sh\n'
-                    '+git checkout -b demo\n+for k in d.keys(): tokens.append(k)\n')
+                    '+git checkout -b demo\n+for k in d.keys(): tokens.append(k)\n'
+                    '+card = render_summary_card(data)\n')
         r = lint_diff(ordinary)
         self.assertEqual(r.returncode, 0, r.stderr)
         for line, category in [('+const intent = await stripe.paymentIntents.create({ amount });', 'payments'),

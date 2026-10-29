@@ -8,5 +8,6 @@ The check covers the goal, recorded commands and exit codes, missing live-proof 
 It is off unless a home enables it, so existing homes keep their current behavior.
 Watch for conservative path/text matches: record a specific false-positive explanation for independent review when a match is documentation or local test data.
 The follow-up restores broad checkout, keys and tokens matching in prose while keeping added-code matching specific, so ordinary Git checkout and dictionary operations do not create carve-out flags.
+Card references, including credit-card and debit-card prose and paths, now also require payments classification; bare card variables in added code remain unflagged.
 A passing shape check is not proof of deployment or release approval, and required-check wiring is deferred.
 Deployed: no; no operating home was changed.
