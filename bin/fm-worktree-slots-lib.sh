@@ -13,20 +13,20 @@
 # CONTRACT.
 #   - Counting. A home's slots are every slot in the Treehouse pool of each git
 #     project under its projects/ directory, plus the spawning project, read
-#     through `treehouse status --json` and deduplicated by slot path. That
-#     read is side-effect-free apart from Treehouse creating an empty pool
-#     record (no slot, no copy) for a project that never had one.
+#     from Git worktree registrations and their pool state files, deduplicated
+#     by slot path. No Treehouse command runs during a room check: status
+#     itself heals and rewrites pool state.
 #   - Room. fm_worktree_slot_room is the one separately callable room check:
 #     it changes nothing, so a caller may re-run it freely. A spawn that would
-#     reuse a free slot in its own pool always has room, because `treehouse
-#     get` hands that slot out instead of creating one.
-#   - Reclaimable. A slot is reclaimable only when Treehouse reports it
-#     available (no running process, no lease, no uncommitted changes), no
+#     allocate needs held < cap. At the cap, spawn first tries safe reclaim
+#     and rechecks. This conservatively reserves one slot even if get could
+#     reuse an existing copy; no speculative reuse can exceed the bound.
+#   - Candidates. A slot can be considered only when its pool record says it is
+#     unreserved, with no uncommitted changes or observed process, no
 #     Firstmate slot-owner claim sits beside it (bin/fm-wake-lib.sh owns the
 #     claim), and no task record in any local Firstmate home names it as its
-#     worktree= or home=. Such a slot was already returned by teardown's
-#     landed-work test and reset to the default branch, so it holds no task
-#     work. Removal itself goes through `treehouse destroy <slot> --yes` with
+#     worktree= or home=. This identifies candidates, not merge proof.
+#     Removal itself goes through `treehouse destroy <slot> --yes` with
 #     no --include-* flag, so Treehouse's own disposable class (merged, clean,
 #     idle, unleased) is the last word and anything else is skipped.
 #   - Merge-proved removal. bin/fm-teardown.sh removes a task's own slot right
@@ -75,7 +75,7 @@ fm_worktree_slots_link_count() {  # <path>
 # empty when the file is absent (the opt-out). Returns 1 with
 # FM_WORKTREE_SLOTS_ERROR for a file that is present but not exactly one
 # positive decimal integer and one newline in a regular, single-linked file
-# beneath a non-symlinked config directory.
+# beneath a non-symlinked config directory (at most nine digits).
 fm_worktree_slot_cap_read() {  # <config-dir>
   local dir=$1 path value
   FM_WORKTREE_SLOT_CAP=
@@ -96,8 +96,8 @@ fm_worktree_slot_cap_read() {  # <config-dir>
   case "$value" in
     ''|0*|*[!0-9]*) value= ;;
   esac
-  if [ -z "$value" ] || ! printf '%s\n' "$value" | cmp -s "$path" -; then
-    FM_WORKTREE_SLOTS_ERROR="config/$FM_WORKTREE_SLOT_CAP_FILE must hold one positive integer followed by one newline"
+  if [ -z "$value" ] || [ "${#value}" -gt 9 ] || ! printf '%s\n' "$value" | cmp -s "$path" -; then
+    FM_WORKTREE_SLOTS_ERROR="config/$FM_WORKTREE_SLOT_CAP_FILE must hold one positive integer (at most 9 digits) followed by one newline"
     return 1
   fi
   FM_WORKTREE_SLOT_CAP=$value
@@ -187,26 +187,21 @@ fm_worktree_slot_record_named() {  # <slot> <record-state> [<exclude-meta>]
   return 1
 }
 
-# Read every slot of the home's pools into parallel arrays:
-#   FM_WORKTREE_SLOT_PATHS     canonical slot path
-#   FM_WORKTREE_SLOT_STATUSES  Treehouse status (available, in-use, dirty, leased, ...)
-#   FM_WORKTREE_SLOT_PROJECTS  the project directory whose pool holds the slot
-# and FM_WORKTREE_SLOT_POOLS as "<pool-dir>\t<slot-count>" lines.
-# Returns 1 with FM_WORKTREE_SLOTS_ERROR when any pool cannot be read: a cap
-# that cannot count its slots cannot prove there is room.
+# Read registered Treehouse slots without running Treehouse (even status writes
+# state). Git owns worktree discovery; the existing pool recognizer owns the
+# pool layout. All entries of each discovered pool are counted, including
+# missing directories and reservations, so a broken entry never creates room.
+# Ordinary non-pool worktrees are outside this Treehouse-only setting.
+# Output arrays: PATHS, STATUSES, PROJECTS; POOLS holds path/count TSV lines.
 fm_worktree_slots_scan() {  # <projects-dir> [<project-dir>...]
-  local projects=$1 dir top json path status pool known existing i
-  local -a dirs=()
+  local projects=$1 dir top entries field path pool state rows status existing known count
+  local -a dirs=() pools=()
   shift
   FM_WORKTREE_SLOT_PATHS=()
   FM_WORKTREE_SLOT_STATUSES=()
   FM_WORKTREE_SLOT_PROJECTS=()
   FM_WORKTREE_SLOT_POOLS=
   FM_WORKTREE_SLOTS_ERROR=
-  command -v treehouse >/dev/null 2>&1 || {
-    FM_WORKTREE_SLOTS_ERROR="treehouse is not on PATH, so pool slots cannot be counted"
-    return 1
-  }
   command -v jq >/dev/null 2>&1 || {
     FM_WORKTREE_SLOTS_ERROR="jq is not on PATH, so pool slots cannot be counted"
     return 1
@@ -222,51 +217,76 @@ fm_worktree_slots_scan() {  # <projects-dir> [<project-dir>...]
     done
     [ "$known" = 1 ] || dirs+=("$dir")
   done
-  local -a pools=() counts=()
   for dir in "${dirs[@]+"${dirs[@]}"}"; do
-    json=$( ( CDPATH='' cd -- "$dir" && treehouse status --json ) 2>/dev/null) \
-      && json=$(printf '%s' "$json" | jq -r '.[] | [.path, .status] | @tsv' 2>/dev/null) || {
-      FM_WORKTREE_SLOTS_ERROR="could not read the Treehouse pool for $dir"
+    entries=$(git -C "$dir" -c core.quotePath=false worktree list --porcelain 2>/dev/null) || {
+      FM_WORKTREE_SLOTS_ERROR="cannot read worktree registrations for $dir"
       return 1
     }
-    while IFS=$'\t' read -r path status; do
-      [ -n "$path" ] || continue
-      path=$(fm_worktree_slots_canonical_dir "$path") || continue
+    while IFS= read -r field; do
+      case "$field" in worktree\ *) path=${field#worktree } ;; *) continue ;; esac
+      case "$path" in
+        \"*)
+          FM_WORKTREE_SLOTS_ERROR="cannot inspect a quoted Git worktree path for $dir"
+          return 1
+          ;;
+      esac
+      pool=$(dirname "$(dirname "$path")")
+      state="$pool/treehouse-state.json"
+      [ -e "$state" ] || [ -L "$state" ] || continue
       known=0
-      for existing in "${FM_WORKTREE_SLOT_PATHS[@]+"${FM_WORKTREE_SLOT_PATHS[@]}"}"; do
-        [ "$existing" != "$path" ] || known=1
+      for existing in "${pools[@]+"${pools[@]}"}"; do
+        [ "$existing" != "$pool" ] || known=1
       done
       [ "$known" = 0 ] || continue
-      FM_WORKTREE_SLOT_PATHS+=("$path")
-      FM_WORKTREE_SLOT_STATUSES+=("$status")
-      FM_WORKTREE_SLOT_PROJECTS+=("$dir")
-      pool=$(dirname "$(dirname "$path")")
-      known=
-      for i in "${!pools[@]}"; do
-        [ "${pools[$i]}" != "$pool" ] || known=$i
-      done
-      if [ -n "$known" ]; then
-        counts[known]=$((counts[known] + 1))
-      else
-        pools+=("$pool")
-        counts+=(1)
+      if [ ! -f "$state" ] || [ -L "$state" ] || ! rows=$(jq -er '
+        if (.worktrees | type) != "array" then error("invalid pool") else .worktrees end |
+        map(if (.path | type) != "string" or (.path | startswith("/") | not)
+          or (.path | test("[\\t\\r\\n]")) then error("invalid path") else . end) |
+        map([.path, (if .leased == true then "leased"
+          elif .destroying == true then "destroying"
+          elif ((.owner_pid // 0) != 0) then "reserved" else "candidate" end)] | @tsv) |
+        join("\n")' "$state" 2>/dev/null); then
+        FM_WORKTREE_SLOTS_ERROR="cannot read Treehouse pool $pool"
+        return 1
       fi
-    done <<< "$json"
-  done
-  for i in "${!pools[@]}"; do
-    FM_WORKTREE_SLOT_POOLS+="${pools[$i]}"$'\t'"${counts[$i]}"$'\n'
+      pools+=("$pool")
+      count=0
+      while IFS=$'\t' read -r path status; do
+        [ -n "$path" ] || continue
+        # Resolve existing paths; retain missing entries conservatively.
+        top=$(fm_worktree_slots_canonical_dir "$path") && path=$top
+        if [ -z "$path" ]; then
+          FM_WORKTREE_SLOTS_ERROR="Treehouse pool $pool has an unavailable worktree"
+          return 1
+        fi
+        known=0
+        for existing in "${FM_WORKTREE_SLOT_PATHS[@]+"${FM_WORKTREE_SLOT_PATHS[@]}"}"; do
+          [ "$existing" != "$path" ] || known=1
+        done
+        [ "$known" = 0 ] || continue
+        FM_WORKTREE_SLOT_PATHS+=("$path")
+        FM_WORKTREE_SLOT_STATUSES+=("$status")
+        FM_WORKTREE_SLOT_PROJECTS+=("$dir")
+        count=$((count + 1))
+      done <<< "$rows"
+      FM_WORKTREE_SLOT_POOLS+="$pool"$'\t'"$count"$'\n'
+    done <<< "$entries"
   done
 }
 
-# Is scanned slot <index> reclaimable (see CONTRACT)? Side-effect-free.
+# Is scanned slot <index> a reclaim candidate (see CONTRACT)? Read-only.
 # Returns 0 when it is, 1 when it is not (FM_WORKTREE_SLOT_KEPT_REASON says
 # why), and 2 when the local homes cannot be enumerated.
 fm_worktree_slot_reclaimable() {  # <index> <record-state>
-  local idx=$1 record_state=$2 slot rc=0
+  local idx=$1 record_state=$2 slot rc=0 dirty processes
   slot=${FM_WORKTREE_SLOT_PATHS[$idx]}
   FM_WORKTREE_SLOT_KEPT_REASON=
-  if [ "${FM_WORKTREE_SLOT_STATUSES[$idx]}" != available ]; then
+  if [ "${FM_WORKTREE_SLOT_STATUSES[$idx]}" != candidate ]; then
     FM_WORKTREE_SLOT_KEPT_REASON="treehouse reports it ${FM_WORKTREE_SLOT_STATUSES[$idx]}"
+    return 1
+  fi
+  if ! fm_treehouse_pool_slot "${FM_WORKTREE_SLOT_PROJECTS[$idx]}" "$slot"; then
+    FM_WORKTREE_SLOT_KEPT_REASON="slot ownership cannot be verified"
     return 1
   fi
   fm_treehouse_slot_owner_state "$slot" ""
@@ -280,14 +300,31 @@ fm_worktree_slot_reclaimable() {  # <index> <record-state>
       FM_WORKTREE_SLOT_KEPT_REASON="task $FM_WORKTREE_SLOT_RECORD_ID records it as its $FM_WORKTREE_SLOT_RECORD_FIELD"
       return 1
       ;;
-    1) return 0 ;;
+    1) ;;
+    *) return 2 ;;
   esac
-  return 2
+  dirty=$(GIT_OPTIONAL_LOCKS=0 git -C "$slot" status --porcelain --untracked-files=all 2>/dev/null) || {
+    FM_WORKTREE_SLOT_KEPT_REASON="worktree status cannot be verified"
+    return 1
+  }
+  if [ -n "$dirty" ]; then
+    FM_WORKTREE_SLOT_KEPT_REASON="worktree has uncommitted changes"
+    return 1
+  fi
+  # lsof exit 1 with no output means no matching open file. Any diagnostic or
+  # missing executable is uncertainty, never evidence of an idle slot.
+  rc=0
+  processes=$(lsof -t +D "$slot" 2>&1) || rc=$?
+  if [ -n "$processes" ] || [ "$rc" -gt 1 ]; then
+    FM_WORKTREE_SLOT_KEPT_REASON="worktree has a live process or process inspection failed"
+    return 1
+  fi
+  return 0
 }
 
 # The one room check (see CONTRACT). Changes nothing.
 # Sets FM_WORKTREE_SLOT_ROOM_REASON, FM_WORKTREE_SLOT_HELD, and
-# FM_WORKTREE_SLOT_RECLAIMABLE (reclaimable slots outside the spawning pool).
+# FM_WORKTREE_SLOT_RECLAIMABLE (possible reclaim candidates; Treehouse must still prove them disposable).
 # Returns 0 for room (allow) and 1 for no room (refuse); a malformed cap or an
 # unreadable pool refuses, because an unproved bound is not room.
 fm_worktree_slot_room() {  # <config-dir> <projects-dir> <project-dir> <record-state>
@@ -307,18 +344,15 @@ fm_worktree_slot_room() {  # <config-dir> <projects-dir> <project-dir> <record-s
     FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: project $3 is not a directory"
     return 1
   }
+  if ! git -C "$project" rev-parse --show-toplevel >/dev/null 2>&1; then
+    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: project $project is not a Git worktree"
+    return 1
+  fi
   if ! fm_worktree_slots_scan "$projects" "$project"; then
     FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: $FM_WORKTREE_SLOTS_ERROR"
     return 1
   fi
   FM_WORKTREE_SLOT_HELD=${#FM_WORKTREE_SLOT_PATHS[@]}
-  for i in "${!FM_WORKTREE_SLOT_PATHS[@]}"; do
-    if [ "${FM_WORKTREE_SLOT_PROJECTS[$i]}" = "$project" ] \
-       && [ "${FM_WORKTREE_SLOT_STATUSES[$i]}" = available ]; then
-      FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: a free slot in this project's pool is reused ($FM_WORKTREE_SLOT_HELD slots held)"
-      return 0
-    fi
-  done
   if [ "$FM_WORKTREE_SLOT_HELD" -lt "$FM_WORKTREE_SLOT_CAP" ]; then
     FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: $FM_WORKTREE_SLOT_HELD slots held"
     return 0
@@ -335,7 +369,7 @@ fm_worktree_slot_room() {  # <config-dir> <projects-dir> <project-dir> <record-s
     esac
   done
   pools=$(printf '%s' "$FM_WORKTREE_SLOT_POOLS" | awk -F'\t' 'NF == 2 { n = split($1, p, "/"); printf "%s%s %s", (c++ ? ", " : ""), p[n], $2 }')
-  FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP reached: $FM_WORKTREE_SLOT_HELD slots held (pools: $pools); $FM_WORKTREE_SLOT_RECLAIMABLE of them reclaimable"
+  FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP reached: $FM_WORKTREE_SLOT_HELD slots held (pools: $pools); $FM_WORKTREE_SLOT_RECLAIMABLE possible reclaim candidates (Treehouse merge proof still required)"
   return 1
 }
 
@@ -397,13 +431,14 @@ fm_worktree_slot_remove_returned() {  # <project-dir> <slot> <record-state> <own
   fi
 }
 
-# Reclaim up to <limit> reclaimable slots (0 = all) from the scan already in the
+# Reclaim up to <limit> disposable candidates (0 = all) from the scan already in the
 # FM_WORKTREE_SLOT_* arrays. <held-lock> is a project lock the caller already
 # holds (or empty). Each candidate is re-proved under its own project lock
-# before removal. dry-run removes nothing and reports what apply would try.
+# before removal. dry-run calls no Treehouse command and reports candidates,
+# without merge proof; even Treehouse destroy previews write state and fetch.
 # Prints one line per slot considered:
-#   reclaimed: <slot> | would-reclaim: <slot> | kept: <slot>: <why>
-# and sets FM_WORKTREE_SLOT_RECLAIMED to the count removed (or that would be).
+#   reclaimed: <slot> | candidate (...): <slot> | kept: <slot>: <why>
+# and sets FM_WORKTREE_SLOT_RECLAIMED to the count removed (or previewed).
 fm_worktree_slots_reclaim() {  # <record-state> <held-lock> <apply|dry-run> <limit>
   local record_state=$1 held=$2 mode=$3 limit=$4 i rc lock slot project took
   FM_WORKTREE_SLOT_RECLAIMED=0
@@ -415,12 +450,11 @@ fm_worktree_slots_reclaim() {  # <record-state> <held-lock> <apply|dry-run> <lim
     fm_worktree_slot_reclaimable "$i" "$record_state" || rc=$?
     [ "$rc" != 2 ] || return 2
     if [ "$rc" != 0 ]; then
-      [ "${FM_WORKTREE_SLOT_STATUSES[$i]}" = available ] \
-        && printf 'kept: %s: %s\n' "$slot" "$FM_WORKTREE_SLOT_KEPT_REASON"
+      printf 'kept: %s: %s\n' "$slot" "$FM_WORKTREE_SLOT_KEPT_REASON"
       continue
     fi
     if [ "$mode" = dry-run ]; then
-      printf 'would-reclaim: %s\n' "$slot"
+      printf 'candidate (Treehouse merge proof still required): %s\n' "$slot"
       FM_WORKTREE_SLOT_RECLAIMED=$((FM_WORKTREE_SLOT_RECLAIMED + 1))
       continue
     fi
@@ -438,8 +472,7 @@ fm_worktree_slots_reclaim() {  # <record-state> <held-lock> <apply|dry-run> <lim
     fi
     # Re-prove under the lock: the scan may be stale by now.
     rc=0
-    fm_worktree_slots_rescan_one "$i" || rc=1
-    [ "$rc" != 0 ] || fm_worktree_slot_reclaimable "$i" "$record_state" || rc=$?
+    fm_worktree_slot_reclaimable "$i" "$record_state" || rc=$?
     if [ "$rc" = 0 ] && fm_worktree_slot_destroy "$project" "$slot"; then
       printf 'reclaimed: %s\n' "$slot"
       FM_WORKTREE_SLOT_RECLAIMED=$((FM_WORKTREE_SLOT_RECLAIMED + 1))
@@ -452,24 +485,4 @@ fm_worktree_slots_reclaim() {  # <record-state> <held-lock> <apply|dry-run> <lim
     [ "$took" = 0 ] || fm_lock_release "$lock" || true
     [ "$rc" != 2 ] || return 2
   done
-}
-
-# Refresh scanned slot <index>'s status from its pool. Returns 1 when the pool
-# cannot be read or no longer lists the slot.
-fm_worktree_slots_rescan_one() {  # <index>
-  local idx=$1 json status
-  json=$( ( CDPATH='' cd -- "${FM_WORKTREE_SLOT_PROJECTS[$idx]}" && treehouse status --json ) 2>/dev/null) || return 1
-  status=$(printf '%s' "$json" | jq -r --arg p "${FM_WORKTREE_SLOT_PATHS[$idx]}" \
-    '.[] | select(.path == $p) | .status' 2>/dev/null | head -1) || return 1
-  if [ -z "$status" ]; then
-    # Treehouse may spell the path unresolved; match canonically.
-    local path st
-    while IFS=$'\t' read -r path st; do
-      [ "$(fm_worktree_slots_canonical_dir "$path")" = "${FM_WORKTREE_SLOT_PATHS[$idx]}" ] || continue
-      status=$st
-      break
-    done < <(printf '%s' "$json" | jq -r '.[] | [.path, .status] | @tsv' 2>/dev/null)
-  fi
-  [ -n "$status" ] || return 1
-  FM_WORKTREE_SLOT_STATUSES[idx]=$status
 }

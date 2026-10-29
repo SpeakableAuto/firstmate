@@ -7,14 +7,14 @@
 # `room` is the side-effect-free room check a spawn or an admission gate calls
 # before allocating a slot for <project-dir>. It prints exactly one line and
 # exits 0 `allow: <reason>` or 1 `refuse: <reason>`; the reason names the cap,
-# the slots held per pool, and how many are reclaimable. With no
+# the slots held per pool, and how many are possible reclaim candidates. With no
 # config/worktree-slot-cap it always allows.
 # `reclaim` removes every reclaimable slot in this home's pools through
 # Treehouse's own safe destroy, re-proving each under its project lock, and
-# prints one `reclaimed:`, `kept:`, or (with --dry-run) `would-reclaim:` line
-# per free slot. It runs whether or not a cap is configured, so an operator can
+# prints one `reclaimed:`, `kept:`, or (with --dry-run) `candidate ...:` line
+# per slot. It runs whether or not a cap is configured, so an operator can
 # preview or clear released copies on demand.
-# bin/fm-worktree-slots-lib.sh owns what counts as a slot, as reclaimable, and
+# bin/fm-worktree-slots-lib.sh owns what counts as a slot, as a reclaim candidate, and
 # as room. Exit 2 is a usage error or an unreadable pool or home set.
 set -u
 

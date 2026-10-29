@@ -447,6 +447,30 @@ For spawn-capable adapters, the runtime session-provider backend controls where 
 
 Treehouse remains the worktree provider for tmux, herdr, zellij, and cmux, since herdr, zellij, and cmux are session providers only; Orca provides both the task worktree and terminal endpoint.
 
+### Worktree slot cap (`config/worktree-slot-cap`)
+
+An optional positive decimal integer (1 to 999999999, followed by one newline) bounds the Treehouse slots counted for this home.
+The file must be regular, single-linked, and beneath a non-symlinked `config/` directory.
+Absent means existing allocation and return behavior; malformed configuration refuses new Treehouse spawns.
+This is a disk-copy bound, independent of crew concurrency, and is not inherited by secondmate homes.
+Orca owns its own worktrees and is outside this setting; relaunches and secondmate-home provisioning do not allocate through this gate.
+
+The count covers registered Treehouse pools reached through Git worktrees of the home's `projects/` clones plus the spawning project, deduplicated by slot path.
+It includes every entry in a discovered pool, including reservations; a pool with no surviving Git registration is outside this inventory and needs separate operator reconciliation.
+A new spawn conservatively requires room for one additional slot, even when Treehouse might reuse one.
+At capacity, spawn attempts safe reclamation and recounts; if room cannot be proved, it refuses with the cap and pool counts.
+External Treehouse users and independently configured homes are outside this home's admission lock and can consume shared pools, so this is an admission bound rather than a machine-wide storage quota.
+
+With this setting enabled, teardown also attempts to remove the returned slot after it proves the task's PR merge, or after the existing scout completion gate passes.
+A pushed branch alone does not authorize automatic removal, and forced teardown does not enable it.
+Removal requires Treehouse's safe-by-default destroy capability; an older tool keeps the slot and reports why.
+The existing landed-work checks and ownership guards still apply.
+
+[`bin/fm-worktree-slots.sh`](../bin/fm-worktree-slots.sh) owns the read-only `room` interface and the explicit `reclaim` command; its library owns candidate selection and locking.
+`reclaim --dry-run` makes no changes and lists possible candidates without claiming Treehouse merge proof; actual reclaim delegates the final disposable-worktree decision to Treehouse.
+A candidate can still be kept because its commits are unmerged, its remote is unavailable, or its state changes before removal.
+Regression entry points are `tests/fm-worktree-slots.test.sh` and `tests/fm-teardown.test.sh`.
+
 ### Backend selection order
 
 New spawns choose the backend in this order:

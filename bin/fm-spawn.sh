@@ -3265,6 +3265,21 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
     exit 1
   fi
   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
+  # The task-set lock already serializes fresh allocations across this home.
+  # Keep the room seam read-only; reclamation is an explicit spawn action under
+  # the existing locks, followed by a fresh count before treehouse get.
+  # shellcheck source=bin/fm-worktree-slots-lib.sh
+  . "$SCRIPT_DIR/fm-worktree-slots-lib.sh"
+  if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
+    if [ "$FM_WORKTREE_SLOT_RECLAIMABLE" -gt 0 ]; then
+      fm_worktree_slots_reclaim "$STATE" "$SPAWN_TREEHOUSE_PROJECT_LOCK" apply \
+        "$((FM_WORKTREE_SLOT_HELD - FM_WORKTREE_SLOT_CAP + 1))" || true
+    fi
+    if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
+      echo "error: refusing spawn: $FM_WORKTREE_SLOT_ROOM_REASON" >&2
+      exit 1
+    fi
+  fi
 fi
 [ -f "$BRIEF" ] || {
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
