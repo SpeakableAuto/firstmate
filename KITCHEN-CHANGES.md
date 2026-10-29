@@ -1,5 +1,14 @@
 # Changes
 
+## 30 October 2026: refuse unrequested research findings caps
+
+PR: pending pipeline publication.
+The optional brief check now refuses capped research, study, audit, inventory and review tasks with a fix naming complete coverage and the deliverable page.
+An explicit cap request in captain intent is accepted; a claim in the implementation specification cannot supply that authority.
+This follows the source gate's fix-task exceptions and leaves uncapped briefs, PR-body checks and absent/off homes unchanged.
+Watch for conservative text matching: this is a scaffold-time check, not enforcement of every later manual edit or finished report.
+Deployed: no; no operating home was changed.
+
 ## 30 October 2026: optional brief and PR evidence check
 
 PR: https://github.com/SpeakableAuto/firstmate/pull/43
