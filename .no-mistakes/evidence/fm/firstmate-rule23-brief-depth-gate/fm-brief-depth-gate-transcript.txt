@@ -1,0 +1,68 @@
+## Gate OFF (config absent)
+### off-notthis
+captain's intent: Research pstack and return the top 5 ideas we can borrow.
+rc=0
+brief written: yes
+
+## Gate ON (config/brief-pr-lint=on)
+### notthis
+captain's intent: Research pstack and return the top 5 ideas we can borrow.
+rc=1
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+brief written: no
+
+### dothis
+captain's intent: Complete coverage: inventory every skill and script, adopt, adapt or skip each, and list the backlog. Deliver a three-line chat headline and the full depth in a navigable page.
+rc=0
+brief written: yes
+
+### accepted
+captain's intent: Research the market. Zac asked for the top 3 competitors only.
+rc=0
+brief written: yes
+
+### audit-ten
+captain's intent: Audit our rules and list the top ten weakest.
+rc=1
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+brief written: no
+
+### study-best
+captain's intent: Study the market and list the five best options.
+rc=1
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+brief written: no
+
+### withdrawn
+captain's intent: Research pstack and return the top 5 ideas. Zac asked for the top 5 last week but now wants every item.
+rc=1
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+brief written: no
+
+### genuine-notresellers
+captain's intent: Research the market. Zac asked for the top 3 competitors. Do not include resellers.
+rc=0
+brief written: yes
+
+### genuine-instead
+captain's intent: Research the market. Zac wants the best five. Use a page instead of chat.
+rc=0
+brief written: yes
+
+### afew
+captain's intent: Research the API and include a few examples of each endpoint.
+rc=0
+brief written: yes
+
+### fixtask
+captain's intent: Fix the top 3 bugs from the audit report.
+rc=0
+brief written: yes
+
+### spec-cap
+captain's intent: Research pstack for the captain.
+firstmate spec: Return the top 5 ideas only.
+rc=1
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+brief written: no
+
