@@ -16,6 +16,16 @@ Absent Live proof: https://... in Verification, require an early
 NOT PROVEN WHERE USERS SEE IT: <missing check and reason> line.
 Live proof is a link declaration, not independent verification of the outcome.
 
+Briefs additionally refuse research/study/audit/inventory/review findings caps:
+top N, N best/key/most important, best N, at most/up to N findings, a few findings,
+and shortlist of N. Numeric and spelled-out numbers through twenty are recognized
+(one-twelve, fifteen, twenty). Bug/error/fix work follows the source gate exemption.
+Only Captain's intent can authorize a cap: "Zac asked for the top 3", "Zac wants
+the best five", or "Zac requested the 3 best" (not a negated request).
+The first Task preamble and Captain's intent / Firstmate spec are checked, not
+Verification or the surrounding worker instructions. An uncapped brief need not
+contain coverage/page wording to pass. PR bodies do not use this depth check.
+
 Changed paths and task/change prose flag likely carve-outs, including SQL migrations
 whose database ownership cannot be inferred. Added code lines flag only specific
 payment APIs, secret-like env names, credential files, JWT/OAuth and schema statements. Declare the category, or record a specific
@@ -59,6 +69,43 @@ CODE_CATEGORIES = {
     'shared-database-schema': r'(?i:\b(?:alter|create|drop)\s+table\b|\badd\s+column\b|prisma\s+(?:db\s+push|migrate)|^\s*model\s+\w+\s*\{)',
 }
 
+# Mirror the gate linked by kitchen rule 23, including fix-task and count exclusions:
+# https://github.com/SpeakableAuto/claude-config/pull/81
+# Firstmate additionally scopes authorization to captain intent and recognizes
+# the requested "a few" and "shortlist of N" forms.
+NUMBER = r'(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)'
+FINDINGS = r'(?:ideas?|items?|findings?|options?|techniques?|recommendations?|points?|things?|tips?|ways?|lessons?|picks?|examples?|sources?|tools?|competitors?|features?|takeaways?|insights?)'
+RESEARCH = re.compile(
+    r'\b(?:research\w*|stud(?:y|ying|ies)|audit(?:ing)?|inventor(?:y|ies)|investigat\w*|analy[sz]\w*'
+    r'|deep[\s-]dive|survey\w*|learn(?:ing)?(?: from)?|compare|evaluat\w*|review of|look into)\b', re.I)
+FIX_TASK = re.compile(r'\b(?:fix|bugs?|errors?|failing|lint|regression)\b', re.I)
+CAP = re.compile(
+    r'\btop[\s-]*' + NUMBER + r'\b'
+    r'|\b' + NUMBER + r'\s+(?:best|most\s+\w+|key|biggest)\b'
+    r'|\bbest[\s-]*' + NUMBER + r'\b'
+    r'|\b(?:no more than|at most|up to|max(?:imum)?(?: of)?)\s+' + NUMBER + r'\s+(?:\w+\s+){0,2}' + FINDINGS + r'\b'
+    r'|\ba few\s+(?:\w+\s+){0,2}' + FINDINGS + r'\b'
+    r'|\bshortlist(?: of)?[\s-]+' + NUMBER + r'\b', re.I)
+CAP_REQUEST = re.compile(
+    r'\bzac (?:asked|wants|requested)(?![^.\n]{0,60}\bnot\b)[^.\n]{0,60}'
+    r'(?:\btop[\s-]*' + NUMBER + r'|\b' + NUMBER + r'\s+best|\bbest[\s-]*' + NUMBER + r')\b', re.I)
+
+
+def research_depth_capped(text):
+    """Inspect task prose; an attributed request in spec/evidence is not intent."""
+    clean = prose(text, keep_quotes=True)
+    parts = re.split(r'^##\s+([^\n]+)\n', clean, flags=re.M)
+    task, intent = [parts[0]], []
+    for heading, body in zip(parts[1::2], parts[2::2]):
+        heading = heading.strip().lower().replace('\u2019', "'")
+        if heading in ("captain's intent", 'firstmate spec'):
+            task.append(body)
+        if heading == "captain's intent":
+            intent.append(body)
+    narrative = '\n'.join(task)
+    return (RESEARCH.search(narrative) and not FIX_TASK.search(narrative)
+            and CAP.search(narrative) and not CAP_REQUEST.search('\n'.join(intent)))
+
 
 def code_span(cell):
     match = re.fullmatch(r'(`+)(?!`)([^\n]+?)(?<!`)\1', cell)
@@ -66,7 +113,7 @@ def code_span(cell):
                 and len(match[1]) not in {len(run) for run in re.findall(r'`+', match[2])})
 
 
-def prose(text):
+def prose(text, keep_quotes=False):
     """Keep declarations outside quoted/fenced examples and HTML comments."""
     text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
     result, fence = [], None
@@ -79,7 +126,7 @@ def prose(text):
             elif marker[0] == fence[0] and len(marker) >= len(fence):
                 fence = None
             continue
-        if fence is None and not line.lstrip().startswith('>'):
+        if fence is None and (keep_quotes or not line.lstrip().startswith('>')):
             result.append(line)
     return '\n'.join(result)
 
@@ -108,6 +155,10 @@ def lint(text, kind='pr', paths=(), diff=''):
         task = re.search(r'^# Task\s*\n(.*?)(?=^# |\Z)', text, re.M | re.S)
         if task:
             text = task[1]
+        if research_depth_capped(text):
+            refuse('research-depth', 'cover every item; say "complete coverage" and name the deliverable page '
+                   '(three-line chat headline plus the full page), or quote the explicit cap request '
+                   'in Captain\'s intent ("Zac asked for the top 5")')
     clean = prose(text)
     lines = [line.strip() for line in clean.splitlines() if line.strip()]
     if not lines or not re.fullmatch(r'Goal:\s*.+', lines[0], re.I) or not meaningful(lines[0][5:]):
