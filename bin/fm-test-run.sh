@@ -313,7 +313,7 @@ family_for_basename() {
     fm-supervision-events.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
     fm-wake-drain-unread-status.test.sh|\
     fm-tool-update-check.test.sh|\
-    fm-mail.test.sh|fm-mail-check.test.sh|fm-disk-guard.test.sh|fm-placement.test.sh|\
+    fm-mail.test.sh|fm-mail-check.test.sh|fm-disk-guard.test.sh|fm-placement.test.sh|fm-placement-scenarios.test.sh|\
     fm-turnend-foreign-owner-arm-fix.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-durable-queue.test.sh|fm-watch-recovery-loop.test.sh|\
     fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
@@ -1530,7 +1530,7 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-quota-choose.test.sh"
       ;;
     bin/fm-placement.py|bin/fm-placement.sh|bin/fm-placement-lib.sh)
-      printf '%s\n' "__script__:fm-placement.test.sh"
+      printf '%s\n' "__script__:fm-placement.test.sh" "__script__:fm-placement-scenarios.test.sh"
       ;;
     bin/fm-dispatch-resolve.sh)
       printf '%s\n' "__script__:fm-dispatch-resolve.test.sh"

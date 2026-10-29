@@ -2,7 +2,7 @@
 # Capacity queue read/recheck entrypoint (never launches a worker).
 # Usage: fm-placement.sh effective | waits | tick | freed
 # effective prints configured limits, defaults, cadence and slot seam.
-# waits prints the morning-report JSON, priority/age ordered, including >4h flags.
+# waits prints morning-report JSON, including >4h flags and 48h history rows.
 # tick rechecks after a freeing fingerprint change and no later than 900 seconds
 # while the ordinary watcher runs. Successful rechecks enqueue capacity-ready
 # through the existing wake queue; firstmate reroutes through normal dispatch.
@@ -59,6 +59,7 @@ fm_placement_alerts || exit 1
 [ -n "$(python3 "$SCRIPT_DIR/fm-placement.py" due "$STATE")" ] || exit 0
 rows=$(backlog_json "$DATA/backlog.md" | python3 "$SCRIPT_DIR/fm-placement.py" ordered "$STATE") || exit 1
 while IFS= read -r row; do
+  [ "$(printf '%s\n' "$row" | jq -r '.state')" != history ] || continue
   id=$(printf '%s\n' "$row" | jq -r '.task')
   RELAUNCH=$(printf '%s\n' "$row" | jq -r '.request.relaunch // 0')
   # The backlog remains the authority: missing or terminal rows leave the queue,
