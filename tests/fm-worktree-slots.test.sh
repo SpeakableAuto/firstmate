@@ -77,7 +77,9 @@ refuses 'at cap'
 [ ! -e "$SLOT_TEST_LOG" ] || fail 'room check invoked mutating Treehouse inspection'
 cmp -s "$CASE/before" "$CASE/pool/treehouse-state.json" || fail 'room changed pool'
 assert_contains "$FM_WORKTREE_SLOT_ROOM_REASON" 'pools: pool 1' 'refusal must name pools'
+printf '{}' > "$FM_HOME/state/capacity.json"
 reclaim
+[ -f "$FM_HOME/state/.capacity-freed" ] || fail 'safe reclaim did not signal capacity recheck'
 [ ! -d "$SLOT" ] || fail 'safe slot not reclaimed'
 room || fail 'reclaim did not free room'
 pass 'absent cap, malformed config, read-only room, bounded safe reclaim'
@@ -147,3 +149,10 @@ for risk in none dirty; do
   fi
 done
 pass 'symlinked pool root: recorded spelling reclaims, protected slot kept'
+
+make_case merged-returned
+printf '{}' > "$FM_HOME/state/capacity.json"
+fm_worktree_slot_remove_returned "$PROJECT" "$SLOT" "$FM_HOME/state" "$FM_HOME/state/completed.meta" || fail 'proved returned slot was not removed'
+[ ! -d "$SLOT" ] || fail 'returned slot remains'
+[ -f "$FM_HOME/state/.capacity-freed" ] || fail 'merge-proved slot removal did not signal capacity'
+pass 'merge-proved returned slot removal signals automatic capacity recheck'

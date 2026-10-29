@@ -6,8 +6,11 @@
 # publishes one decision BEFORE provisioning. fm_placement_abort records early
 # refusals whose fit/room/quota evidence could not be obtained, exactly once.
 # fm-placement.py owns the atomic decision/wait format. Configuration lives in
-# docs/configuration.md. The optional room seam is fm-worktree-room.sh <project>;
-# absent is recorded as not-installed, present must exit 0 (no slot cleanup here).
+# docs/configuration.md. fm-worktree-slots.sh room <project> owns slot room;
+# its printed reason is retained verbatim (no slot cleanup here).
+
+# shellcheck source=bin/fm-backlog-lib.sh
+. "$SCRIPT_DIR/fm-backlog-lib.sh"
 
 FM_PLACEMENT_ACTIVE=0
 FM_PLACEMENT_RECORDED=0
@@ -31,21 +34,68 @@ fm_placement_begin() {
 }
 
 fm_placement_publish() {
-  local decision=$1 mode=${FM_PLACEMENT_MODE:-spawn} recorded
+  local decision=$1 mode=${FM_PLACEMENT_MODE:-spawn} operation=${2:-record} recorded impact
+  impact=$(backlog_json "$DATA/backlog.md" | jq -r --arg id "$FM_PLACEMENT_ID" '[.records[]|select(.id==$id)|.impact][0] // "P2"') || return 1
   decision=$(printf '%s\n' "$decision" | jq --arg project "${PROJ_ABS:-${PROJ:-}}" --argjson relaunch "${RELAUNCH:-0}" \
-    '.request.project=$project | .request.relaunch=$relaunch') || return 1
+    --arg impact "$impact" '.impact=$impact | .request.project=$project | .request.relaunch=$relaunch') || return 1
   if fm_backlog_row_probe "$DATA" "$FM_PLACEMENT_ID" >/dev/null 2>&1; then
     case "$FM_BACKLOG_ROW_STATE" in
       'queued no no'|'in_flight no no') ;;
       *) decision=$(printf '%s\n' "$decision" | jq --arg hold "${FM_BACKLOG_ROW_HOLD_KIND:-external}" '.hold=$hold') || return 1 ;;
     esac
   fi
-  recorded=$(printf '%s\n' "$decision" | python3 "$SCRIPT_DIR/fm-placement.py" record "$STATE" "$FM_PLACEMENT_ID" "$mode") || return 1
+  recorded=$(printf '%s\n' "$decision" | python3 "$SCRIPT_DIR/fm-placement.py" "$operation" "$STATE" "$FM_PLACEMENT_ID" "$mode") || return 1
   FM_PLACEMENT_RECORDED=1
+  FM_PLACEMENT_DECISION=$recorded
+  FM_PLACEMENT_ROOT=$(printf '%s\n' "$recorded" | jq -r '.checks["treehouse-root"].root // ""') || return 1
+  fm_placement_alerts || return 1
   if ! printf '%s\n' "$recorded" | jq -e '.admitted' >/dev/null; then
     printf 'error: placement refused: %s (state/capacity.json)\n' "$(printf '%s\n' "$recorded" | jq -r '[.checks|to_entries[]|select(.value.status != "pass")|"\(.key): \(.value.reason)"]|join("; ")')" >&2
     return 1
   fi
+}
+
+fm_placement_alerts() {
+  local alerts row key token reason task
+  alerts=$(python3 "$SCRIPT_DIR/fm-placement.py" alerts "$STATE") || return 1
+  while IFS= read -r row; do
+    key=$(jq -r .key <<< "$row")
+    token=$(jq -r .token <<< "$row")
+    reason=$(jq -r .reason <<< "$row")
+    task=$(jq -r .task <<< "$row")
+    fm_wake_append check "placement-$token" "check: placement-condition $task: $reason" || return 1
+    python3 "$SCRIPT_DIR/fm-placement.py" ack-alert "$STATE" "$key" "$token" >/dev/null || return 1
+  done < <(printf '%s\n' "$alerts" | jq -c '.[]')
+}
+
+fm_placement_worktree() { # <project> <acquired-worktree>; amend the same decision
+  local check decision
+  [ "$FM_PLACEMENT_ACTIVE" = 1 ] || return 0
+  check=$(python3 "$SCRIPT_DIR/fm-placement.py" worktree "$CONFIG" "$1" "$2") || return 1
+  decision=$(printf '%s\n' "$FM_PLACEMENT_DECISION" | jq --argjson check "$check" '
+    .checks["acquired-worktree"]=$check |
+    .failed=[.checks|to_entries[]|select(.value.status != "pass")|.key] |
+    .admitted=(.failed|length == 0)') || return 1
+  fm_placement_publish "$decision" amend
+}
+
+fm_placement_return_rejected() { # <project> <worktree>; fresh, closed endpoint only
+  local project=$1 worktree=$2 rc=0 dirty
+  [ "${RELAUNCH:-1}" = 0 ] && [ "${SPAWN_ENDPOINT_CLOSED:-0}" = 1 ] \
+    && [ "${SPAWN_TREEHOUSE_PROJECT_LOCK_HELD:-0}" = 1 ] \
+    && [ "${SPAWN_SLOT_CLAIMED:-0}" = 1 ] || return 1
+  fm_treehouse_pool_slot "$project" "$worktree" || return 1
+  fm_treehouse_slot_owner_state "$worktree" "$FM_PLACEMENT_ID"
+  [ "$FM_TREEHOUSE_SLOT_OWNER" = mine ] || return 1
+  # Reuse the slot owner's cross-home record proof; never return another
+  # recorded copy, discard changes, or bypass Treehouse's own refusal.
+  fm_worktree_slot_record_named "$worktree" "$STATE" '' || rc=$?
+  [ "$rc" = 1 ] || return 1
+  dirty=$(git -C "$worktree" status --porcelain --untracked-files=all) || return 1
+  [ -z "$dirty" ] || return 1
+  (cd "$project" && treehouse return "$worktree" </dev/null) || return 1
+  fm_treehouse_slot_owner_release "$worktree" "$FM_PLACEMENT_ID"
+  touch "$STATE/.capacity-freed"
 }
 
 fm_placement_abort() {
@@ -130,13 +180,15 @@ fm_placement_quota() { # <harness> <model> <effort>; Claude guard handled by cal
 }
 
 fm_placement_check() {
-  local harness=$1 model=$2 effort=$3 quota=$4 disk=fail slots=not-installed locks=fail count evidence decision memory
+  local harness=$1 model=$2 effort=$3 quota=$4 disk=fail slots=fail locks=fail count evidence decision memory slot_reason
   [ "$FM_PLACEMENT_ACTIVE" = 1 ] || return 0
   [ "$FM_PLACEMENT_LOCK_HELD" != 1 ] || locks=pass
   if FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-disk-guard.sh" --check-room >/dev/null 2>&1; then disk=pass; fi
-  if [ -e "$SCRIPT_DIR/fm-worktree-room.sh" ]; then
-    slots=fail
-    if "$SCRIPT_DIR/fm-worktree-room.sh" "${PROJ_ABS:-${PROJ:-}}" >/dev/null 2>&1; then slots=pass; fi
+  if [ "${RELAUNCH:-0}" = 1 ]; then
+    slots=pass
+    slot_reason='existing recorded worktree; no new slot allocation'
+  elif slot_reason=$("$SCRIPT_DIR/fm-worktree-slots.sh" room "${PROJ_ABS:-${PROJ:-}}" 2>&1); then
+    slots=pass
   fi
   count=$(fm_placement_count) || count=null
   memory=$(python3 "$SCRIPT_DIR/fm-placement.py" memory) || memory='{}'
@@ -146,9 +198,10 @@ fm_placement_check() {
     quota=fail
     if fm_placement_quota "$harness" "$model" "$effort"; then quota=pass; fi
   fi
-  evidence=$(jq -cn --argjson quota "$FM_PLACEMENT_QUOTA_DETAIL" --arg disk "$disk" --arg slots "$slots" --arg locks "$locks" --argjson count "$count" --argjson memory "$memory" '
+  evidence=$(jq -cn --argjson quota "$FM_PLACEMENT_QUOTA_DETAIL" --arg disk "$disk" --arg slots "$slots" --arg locks "$locks" --argjson count "$count" --argjson memory "$memory" \
+    --arg project "${PROJ_ABS:-${PROJ:-}}" --arg reason "$slot_reason" '
     {quota:$quota,disk:{status:$disk},
-     slots:{status:$slots},locks:{status:$locks,reason:"placement and spawn locks"},crew_count:$count,memory:$memory}') || return 1
+     project:$project,slots:{status:$slots,reason:$reason},locks:{status:$locks,reason:"placement and spawn locks"},crew_count:$count,memory:$memory}') || return 1
   decision=$(printf '%s\n' "$evidence" | python3 "$SCRIPT_DIR/fm-placement.py" assess "$CONFIG" "$DATA" "$FM_PLACEMENT_ID" "$harness" "$model" "$effort") || return 1
   fm_placement_publish "$decision"
 }

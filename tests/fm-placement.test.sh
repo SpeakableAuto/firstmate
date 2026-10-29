@@ -18,7 +18,7 @@ cat > "$CONFIG/crew-dispatch.json" <<'JSON'
 {"rules":[{"when":"backend","use":[{"harness":"codex","model":"test","effort":"high"}]}]}
 JSON
 jq -n --arg hash "$hash" '{version:1,workload:"backend",priority:"P1",requires_drive:false,dispatch_rule:0,brief_sha256:$hash}' > "$DATA/task-one/placement.json"
-base='{"crew_count":1,"memory":{"free_percent":50,"swap_mib":0},"disk":{"status":"pass"},"slots":{"status":"not-installed"},"quota":{"status":"pass"},"locks":{"status":"pass"}}'
+base='{"impact":"P1","crew_count":1,"memory":{"free_percent":50,"swap_mib":0},"disk":{"status":"pass"},"slots":{"status":"pass"},"quota":{"status":"pass"},"locks":{"status":"pass"}}'
 assess() {
   printf '%s\n' "$1" | python3 "$TOOL" assess "$CONFIG" "$DATA" task-one codex test high
 }
@@ -28,7 +28,7 @@ for missing in quota locks memory disk; do
   bad=$(assess "$(jq --arg key "$missing" 'del(.[$key])' <<< "$base")")
   assert_equals false "$(jq -r .admitted <<< "$bad")" "missing $missing refuses"
 done
-for mutation in '.crew_count=2' '.memory.free_percent=14' '.memory.swap_mib=513' '.slots.status="fail"'; do
+for mutation in '.crew_count=2' '.memory.free_percent=14' '.memory.swap_mib=513'; do
   bad=$(assess "$(jq "$mutation" <<< "$base")")
   assert_equals fail "$(jq -r .checks.room.status <<< "$bad")" "$mutation refuses room"
 done
@@ -47,8 +47,11 @@ bad=$(printf '%s\n' "$base" | python3 "$TOOL" assess "$CONFIG" "$DATA" task-one 
 assert_equals fail "$(jq -r .checks.fit.status <<< "$bad")" 'model outside matched task-fit rule refuses'
 cp "$CONFIG/crew-placement.json" "$TMP_ROOT/profile"
 jq --arg drive "$TMP_ROOT" '.drive=$drive' "$TMP_ROOT/profile" > "$CONFIG/crew-placement.json"
-assert_equals fail "$(assess "$base" | jq -r .checks.room.status)" 'ordinary directory is not a real required drive'
+assert_equals fail "$(assess "$base" | jq -r .checks.drive.status)" 'ordinary directory is not a real required drive'
 mv "$TMP_ROOT/profile" "$CONFIG/crew-placement.json"
+bad=$(assess "$(jq '.slots={status:"fail",reason:"refuse: slot cap reached"}' <<< "$base")")
+assert_equals fail "$(jq -r .checks.slots.status <<< "$bad")" 'named slot refusal'
+assert_contains "$(jq -r .checks.slots.reason <<< "$bad")" 'slot cap reached' 'slot seam reason retained'
 pass 'fit, room, quota, locks and missing evidence refuse bad placement'
 
 blocked=$(assess "$(jq '.crew_count=2' <<< "$base")")
@@ -56,7 +59,7 @@ printf '%s\n' "$blocked" | python3 "$TOOL" record "$STATE" task-one spawn >/dev/
 assert_equals '1:1' "$(jq -r '"\(.decisions|length):\(.waits|length)"' "$STATE/capacity.json")" 'one transaction publishes decision and wait'
 for pair in 'p3:P3' 'p0-old:P0' 'p0-new:P0' 'p2:P2'; do
   id=${pair%:*}; priority=${pair#*:}
-  jq --arg id "$id" --arg p "$priority" '.task=$id|.priority=$p' <<< "$blocked" |
+  jq --arg id "$id" --arg p "$priority" '.task=$id|.impact=$p' <<< "$blocked" |
     python3 "$TOOL" record "$STATE" "$id" spawn >/dev/null
 done
 # Pin historical times to prove age order and the report flag without sleeping.
@@ -74,7 +77,7 @@ mv "$STATE/next" "$STATE/capacity.json"
 assert_equals due "$(python3 "$TOOL" due "$STATE")" 'fifteen minute recheck remains due without freeing events'
 printf '%s\n' "$good" | python3 "$TOOL" record "$STATE" task-one recheck >/dev/null
 assert_equals ready "$(jq -r '.waits["task-one"].state' "$STATE/capacity.json")" 'room release admits a waiting task for ordinary dispatch'
-assert_equals P1 "$(jq -r '.waits["task-one"].priority' "$STATE/capacity.json")" 'recheck preserves task priority'
+assert_equals P1 "$(jq -r '.waits["task-one"].impact' "$STATE/capacity.json")" 'recheck preserves task priority'
 pass 'atomic queue ordering, freeing events, timed rechecks, and morning age flags'
 
 # Independent processes must not lose any transaction or expose partial JSON.
@@ -187,12 +190,160 @@ cp "$BIN/python3" "$BIN/df" "$BIN/quota-axi" "$SPAWN_BIN/"
 cp "$CONFIG/crew-placement.json" "$CONFIG/crew-dispatch.json" "$SPAWN_HOME/config/"
 hash=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$SPAWN_HOME/data/iphone-task/brief.md")
 jq -n --arg hash "$hash" '{version:1,workload:"iphone",requires_drive:false,priority:"P0",dispatch_rule:0,brief_sha256:$hash}' > "$SPAWN_HOME/data/iphone-task/placement.json"
+printf '## Queued\n- [ ] iphone-task - iPhone fixture (impact: P0) (priority: 3)\n' > "$SPAWN_HOME/data/backlog.md"
 out=$(fm_test_run_spawn "$SPAWN_HOME" "$SPAWN_PROJECT" "$SPAWN_BIN" iphone-task "$SPAWN_PROJECT" --scout --harness codex --model test --effort high)
 rc=$?
 expect_code 1 "$rc" 'spawn refuses iPhone on a light machine'
 assert_contains "$out" 'placement refused' 'spawn reports the placement failure'
 assert_equals 1 "$(jq '.decisions|length' "$SPAWN_HOME/state/capacity.json")" 'spawn publishes exactly one atomic decision'
-assert_equals P0 "$(jq -r '.waits["iphone-task"].priority' "$SPAWN_HOME/state/capacity.json")" 'spawn refusal preserves intake priority'
+assert_equals P0 "$(jq -r '.waits["iphone-task"].impact' "$SPAWN_HOME/state/capacity.json")" 'spawn refusal preserves intake priority'
 assert_absent "$SPAWN_HOME/state/iphone-task.meta" 'bad placement never publishes worker metadata'
 assert_absent "$SPAWN_HOME/state/.placement-admission.lock" 'refusal releases admission lock'
 pass 'real spawn refuses bad placement before allocating a worker'
+
+# Canonical impact wins conflicting legacy priority; missing impact defaults P2.
+# shellcheck source=bin/fm-backlog-lib.sh
+. "$ROOT/bin/fm-backlog-lib.sh"
+cat > "$DATA/backlog.md" <<'BACKLOG'
+## Queued
+- [ ] p3 - Most urgent (impact: P0) (priority: 3)
+- [ ] task-one - Ordinary (priority: 0)
+BACKLOG
+parsed=$(backlog_json "$DATA/backlog.md")
+assert_equals P0 "$(jq -r '.records[0].impact' <<< "$parsed")" 'explicit impact is parsed'
+assert_equals 'Most urgent' "$(jq -r '.records[0].title' <<< "$parsed")" 'impact metadata stripped from display title'
+waits=$(printf '%s\n' "$parsed" | python3 "$TOOL" ordered "$STATE")
+assert_equals P2 "$(jq -r '.[]|select(.task=="task-one")|.impact' <<< "$waits")" 'missing impact ignores legacy priority'
+pass 'canonical impact and display title handling'
+
+python3 - "$TOOL" "$TMP_ROOT" <<'PY'
+import importlib.util
+import io
+import json
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location('placement', sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+base = Path(sys.argv[2]).resolve() / 'external'
+base.mkdir()
+drive = base / 'drive'
+drive.mkdir()
+project = base / 'repo'
+project.mkdir()
+pool = drive / 'pool'
+pool.mkdir()
+slot = pool / 'slot'
+slot.mkdir()
+internal = base / 'internal'
+internal.mkdir()
+relative = ['Build/DerivedData', 'Build/Tmp', 'Caches/npm', 'Caches/Playwright', 'SimulatorDevices', 'Logs/Codex']
+for name in relative:
+    (drive / name).mkdir(parents=True)
+profile = dict(drive=str(drive), required_drive_dirs=relative,
+               data_volume=dict(path=str(internal), min_free_gib=10))
+config = project / 'treehouse.toml'
+assert m.treehouse_root(profile, project)['status'] == 'fail', 'missing repo config'
+config.write_text('root = ' + json.dumps(str(internal)) + '\n')
+assert m.treehouse_root(profile, project)['status'] == 'fail', 'internal root refused'
+link = drive / 'link'
+link.symlink_to(pool, target_is_directory=True)
+config.write_text('root = ' + json.dumps(str(link)) + '\n')
+assert m.treehouse_root(profile, project)['status'] == 'fail', 'symlink root refused'
+config.write_text('root = ' + json.dumps(str(pool)) + '\n')
+assert m.treehouse_root(profile, project, slot)['status'] == 'pass', 'valid external allocation'
+assert m.treehouse_root(profile, project, internal)['status'] == 'fail', 'wrong acquired path'
+config.write_text('root = ' + json.dumps(str(pool)) + '\nworktree_path = "../escape"\n')
+assert m.treehouse_root(profile, project)['status'] == 'fail', 'custom layout refused'
+config.write_text('root = ' + json.dumps(str(pool)) + '\n')
+with patch.object(Path, 'is_mount', return_value=False):
+    assert m.external_checks(profile, project)['drive']['status'] == 'fail', 'stale mountpoint refused'
+# Hardware evidence is mocked; directories and cleaned write probes are real.
+with patch.object(Path, 'is_mount', return_value=True), patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=20, f_frsize=1024**3)):
+    good = m.external_checks(profile, project)
+    assert all(x['status'] == 'pass' for x in good.values()), good
+    assert not list(drive.rglob('.fm-placement-*')), 'write probes cleaned'
+    missing = drive / relative[0]
+    missing.rmdir()
+    assert m.external_checks(profile, project)['drive-dir:' + relative[0]]['status'] == 'fail'
+    missing.mkdir()
+    real_probe = m.write_probe
+    def deny(path):
+        if path == missing:
+            raise PermissionError('fixture read-only')
+        real_probe(path)
+    with patch.object(m, 'write_probe', side_effect=deny):
+        bad = m.external_checks(profile, project)
+        assert 'unwritable' in bad['drive-dir:' + relative[0]]['reason']
+    with patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=9, f_frsize=1024**3)):
+        assert m.external_checks(profile, project)['data-disk']['status'] == 'fail'
+    with patch.object(m.os, 'statvfs', side_effect=OSError('no measurement')):
+        assert 'measurement absent' in m.external_checks(profile, project)['data-disk']['reason']
+state = base / 'state'
+def record(checks, operation='record', previous=None):
+    decision = dict(task='heavy', impact='P0', request={}, checks=checks,
+                    failed=[k for k,v in checks.items() if v['status'] != 'pass'],
+                    admitted=all(v['status'] == 'pass' for v in checks.values()))
+    if previous:
+        decision.update(id=previous['id'], at=previous['at'], mode='spawn')
+    with patch.object(sys, 'stdin', io.StringIO(json.dumps(decision))):
+        return m.ledger(state, operation, 'heavy', 'spawn')
+first = record(good)
+rejected = dict(good, **{'acquired-worktree': m.treehouse_root(profile, project, internal)})
+updated = record(rejected, 'amend', first)
+assert updated['id'] == first['id']
+assert len(m.read(state / 'capacity.json')['decisions']) == 1, 'amend retains one spawn decision'
+assert m.ledger(state, 'waits')[0]['failed'] == ['acquired-worktree']
+alerts = m.ledger(state, 'alerts')
+assert len(alerts) == 1
+m.ledger(state, 'ack-alert', alerts[0]['key'], alerts[0]['token'])
+record(rejected)
+assert m.ledger(state, 'alerts') == [], 'same condition does not alert every recheck'
+record(dict(good, **{'acquired-worktree': m.treehouse_root(profile, project, slot)}))
+record(rejected)
+assert len(m.ledger(state, 'alerts')) == 1, 'recovered then recurring condition alerts again'
+print('ok - external mount, directories, disk floor, pool root, atomic acquired-path refusal and alert recovery')
+PY
+expect_code 0 "$?" 'external placement checks'
+
+# The post-acquisition rollback never returns a relaunch, dirty copy, or slot
+# another task records. Only the Treehouse return command is replaced here.
+(
+  SCRIPT_DIR="$ROOT/bin"
+  . "$SCRIPT_DIR/fm-placement-lib.sh"
+  FM_PLACEMENT_ID=reject-test
+  RETURN_PROJECT="$TMP_ROOT/return-project"
+  fm_git_init_commit "$RETURN_PROJECT"
+  STATE="$TMP_ROOT/return-state"
+  mkdir -p "$STATE" "$TMP_ROOT/return-bin"
+  cat > "$TMP_ROOT/return-bin/treehouse" <<'RETURN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$RETURN_LOG"
+[ "$#" = 2 ] && [ "$1" = return ]
+RETURN
+  chmod +x "$TMP_ROOT/return-bin/treehouse"
+  export PATH="$TMP_ROOT/return-bin:$PATH" RETURN_LOG="$TMP_ROOT/returned"
+  fm_treehouse_pool_slot() { return 0; }
+  fm_treehouse_slot_owner_state() { FM_TREEHOUSE_SLOT_OWNER=${TEST_OWNER:-mine}; }
+  fm_treehouse_slot_owner_release() { touch "$STATE/released"; }
+  fm_worktree_slot_record_named() { return "${TEST_RECORD_RC:-1}"; }
+  RELAUNCH=0 SPAWN_ENDPOINT_CLOSED=1 SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1 SPAWN_SLOT_CLAIMED=1
+  TEST_OWNER=other
+  if fm_placement_return_rejected "$RETURN_PROJECT" "$RETURN_PROJECT"; then fail 'returned another claim'; fi
+  TEST_OWNER=mine TEST_RECORD_RC=0
+  if fm_placement_return_rejected "$RETURN_PROJECT" "$RETURN_PROJECT"; then fail 'returned a recorded copy'; fi
+  TEST_RECORD_RC=1 RELAUNCH=1
+  if fm_placement_return_rejected "$RETURN_PROJECT" "$RETURN_PROJECT"; then fail 'returned a relaunch'; fi
+  RELAUNCH=0
+  touch "$RETURN_PROJECT/uncommitted"
+  if fm_placement_return_rejected "$RETURN_PROJECT" "$RETURN_PROJECT"; then fail 'returned a dirty copy'; fi
+  rm "$RETURN_PROJECT/uncommitted"
+  assert_absent "$RETURN_LOG" 'unsafe copies never call Treehouse return'
+  fm_placement_return_rejected "$RETURN_PROJECT" "$RETURN_PROJECT" || fail 'safe rejected allocation was not returned'
+  [ -f "$STATE/released" ] || fail 'successful return releases claim'
+  [ -f "$STATE/.capacity-freed" ] || fail 'successful return signals capacity'
+) || fail 'safe allocation rollback'
+pass 'rejected allocation returns only a clean, unrecorded freshly owned slot'
