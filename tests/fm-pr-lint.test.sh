@@ -13,7 +13,7 @@ import unittest
 
 ROOT = Path(os.environ['ROOT'])
 TOOL = ROOT / 'bin/fm-pr-lint.py'
-GOOD = '''Goal: staff can find the newest notice.
+GOOD = '''Goal: incomplete evidence is caught before use.
 NOT PROVEN WHERE USERS SEE IT: isolated staging is unavailable.
 Carve-outs: none
 Staff-facing: no
@@ -41,7 +41,7 @@ class Linter(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_each_missing_field_names_fix(self):
-        for removed, error in [('Goal: staff can find the newest notice.\n', 'goal'),
+        for removed, error in [('Goal: incomplete evidence is caught before use.\n', 'goal'),
                                ('Carve-outs: none\n', 'carve-outs'),
                                ('Staff-facing: no\n', 'staff-facing'),
                                ('## Verification', 'verification'),
@@ -74,9 +74,79 @@ class Linter(unittest.TestCase):
 
     def test_evidence_cannot_be_hidden_or_placeholder(self):
         self.assertEqual(self.run_lint('```markdown\n'+GOOD+'```\n').returncode, 1)
-        self.assertEqual(self.run_lint(GOOD.replace('Goal: staff can find the newest notice.', 'Goal: TODO')).returncode, 1)
+        self.assertEqual(self.run_lint(GOOD.replace('Goal: incomplete evidence is caught before use.', 'Goal: TODO')).returncode, 1)
         self.assertEqual(self.run_lint(GOOD.replace('| 0 |', '| pending |')).returncode, 1)
         self.assertEqual(self.run_lint(GOOD+'\nCarve-outs: payments\n').returncode, 1)
+        self.assertEqual(self.run_lint('<!--\n'+GOOD+'\n-->').returncode, 1)
+        self.assertEqual(self.run_lint(GOOD.replace('Carve-outs: none', 'Carve-outs: none, payments')).returncode, 1)
+
+    def test_live_link_and_false_positive_explanation(self):
+        proven = GOOD.replace('NOT PROVEN WHERE USERS SEE IT: isolated staging is unavailable.\n', '')
+        self.assertEqual(self.run_lint(proven+'\nLive proof: https://evidence.example.org/outcome/4\n').returncode, 0)
+        self.assertEqual(self.run_lint(proven+'\nLive proof: javascript:alert(1)\n').returncode, 1)
+        review = GOOD+'\nCarve-out review: shared-database-schema | This is the local JSON fixture schema, not a database change.\n'
+        self.assertEqual(self.run_lint(review, '--changed-path', 'tests/schema.json').returncode, 0)
+        self.assertEqual(self.run_lint(GOOD.replace('python3 -m unittest', 'pwd')).returncode, 0)
+        disclosure = GOOD.replace('NOT PROVEN WHERE USERS SEE IT: isolated staging is unavailable.',
+                                  '**NOT PROVEN WHERE USERS SEE IT**\n\nIsolated staging is unavailable.')
+        self.assertEqual(self.run_lint(disclosure).returncode, 0)
+        marker = self.root/'never-execute'
+        self.assertEqual(self.run_lint(GOOD.replace('python3 -m unittest', 'touch '+str(marker))).returncode, 0)
+        self.assertFalse(marker.exists())
+
+    def forge(self, body=GOOD, diff='', mode='ok'):
+        fixture = self.root/'forge.json'
+        fixture.write_text(json.dumps({'body': body, 'diff': diff, 'mode': mode}))
+        fake = self.root/'gh-axi'
+        fake.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+p=pathlib.Path(os.environ['FORGE_FIXTURE'])
+d=json.loads(p.read_text())
+if sys.argv[1]=='api':
+    n=int(p.with_suffix('.count').read_text()) if p.with_suffix('.count').exists() else 0
+    p.with_suffix('.count').write_text(str(n+1))
+    print('api_response:\\n  body: '+('b'*40 if d['mode']=='changed' and n else 'a'*40)+'\\n  truncated: false')
+elif sys.argv[2]=='view':
+    print('pull_request:\\n  body: '+json.dumps(d['body']))
+elif sys.argv[2]=='diff':
+    print('pr_diff:\\n  diff: '+json.dumps(d['diff']))
+if d['mode']=='truncated': print('  truncated: true')
+''')
+        fake.chmod(0o755)
+        return dict(os.environ, PATH=str(self.root)+os.pathsep+os.environ['PATH'], FORGE_FIXTURE=str(fixture))
+
+    def test_forge_reads_and_head_race(self):
+        for mode, expected in [('ok', 0), ('changed', 1), ('truncated', 1)]:
+            with self.subTest(mode=mode):
+                count = self.root/'forge.count'
+                count.unlink(missing_ok=True)
+                r = subprocess.run(['python3', str(TOOL), '--pr-url', 'https://github.com/example/repo/pull/1'],
+                                   env=self.forge(mode=mode), text=True, capture_output=True)
+                self.assertEqual(r.returncode, expected, r.stderr)
+        # Body says none, but a removed/renamed credential path still needs review.
+        r = subprocess.run(['python3', str(TOOL), '--pr-url', 'https://github.com/example/repo/pull/1'],
+                           env=self.forge(diff='--- a/src/secrets.py\n+++ b/src/utils.py\n'), text=True, capture_output=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('logins-keys-secrets', r.stderr)
+
+    def test_pr_registration_refuses_before_side_effects(self):
+        home = self.root/'home'
+        (home/'config').mkdir(parents=True)
+        (home/'state').mkdir()
+        (home/'config/brief-pr-lint').write_text('on\n')
+        meta = home/'state/task.meta'
+        original = 'kind=ship\nmode=no-mistakes\n'
+        meta.write_text(original)
+        env = self.forge(body='Missing everything.')
+        env['FM_HOME'] = str(home)
+        for k in ('FM_ROOT_OVERRIDE', 'FM_CONFIG_OVERRIDE', 'FM_DATA_OVERRIDE', 'FM_STATE_OVERRIDE'):
+            env.pop(k, None)
+        r = subprocess.run(['bash', str(ROOT/'bin/fm-pr-check.sh'), 'task', 'https://github.com/example/repo/pull/1'],
+                           env=env, text=True, capture_output=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('refuse: goal', r.stderr)
+        self.assertEqual(meta.read_text(), original)
+        self.assertEqual(list((home/'state').iterdir()), [meta])
 
     def test_real_evidence(self):
         data = json.loads((ROOT/'tests/fixtures/pr-lint-evidence.json').read_text())

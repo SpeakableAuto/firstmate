@@ -18,6 +18,9 @@
 # bin/fm-pr-merge.sh records through this script with FM_PR_CHECK_MERGE=1 and
 # skips this refusal, because its own merge-time draft refusal is authoritative.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
+# With config/brief-pr-lint=on, complete GitHub body/diff reads must pass
+# fm-pr-lint.py before readiness registration or parent publication. Unsupported
+# forges refuse explicitly in this opt-in mode; absent/off keeps existing behavior.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,6 +69,20 @@ KIND=$(grep '^kind=' "$META" | tail -1 | cut -d= -f2- || true)
 if [ "$KIND" = secondmate ]; then
   echo "error: $ID is a secondmate, not a delivery lane - $URL was reported on its status channel but belongs to a task in the mate's own home, which arms its own merge watch" >&2
   exit 1
+fi
+
+# Lint before poll retirement, metadata writes, or any PR-ready publication.
+# shellcheck source=bin/fm-pr-lint-lib.sh
+. "$SCRIPT_DIR/fm-pr-lint-lib.sh"
+if fm_pr_lint_enabled "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"; then
+  if [ "$PROVIDER" != github ]; then
+    echo 'refuse: brief-pr-lint forge; fix: use the standalone --file linter and an explicit home opt-out until this forge has a reader' >&2
+    exit 1
+  fi
+  python3 "$SCRIPT_DIR/fm-pr-lint.py" --pr-url "$URL" || exit 1
+else
+  LINT_RC=$?
+  [ "$LINT_RC" -eq 1 ] || exit "$LINT_RC"
 fi
 
 # A prior exact merged result may have queued its durable wake immediately

@@ -585,6 +585,10 @@
     {
       "path": "docs/disk-guard.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "KITCHEN-CHANGES.md",
+      "audience": "maintainer-verification"
     }
   ]
 }

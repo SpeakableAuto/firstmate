@@ -918,6 +918,28 @@ An absent file changes nothing, while a present file that does not have that sha
 Non-Claude and secondmate launches ignore the file entirely, and the file is local to each home rather than part of secondmate inherited configuration.
 `bin/fm-spawn.sh`'s header owns the exact merge behavior.
 
+## Brief and PR evidence lint (config/brief-pr-lint)
+
+Set the home-local, gitignored `config/brief-pr-lint` file to `on` to enable the evidence shape gate.
+An absent file or `off` preserves existing scaffold and readiness behavior without requiring Python or an additional forge read.
+Other values and unreadable files refuse the affected operation.
+The enabled gate requires Python 3.9 or newer; GitHub readiness also requires `gh-axi` with complete `pr view --full` and `pr diff --full` output.
+
+With lint enabled, `bin/fm-brief.sh` requires `--task-file <path>` containing the completed Task body, including the intent and specification subsections, and validates it before writing a ship or scout scaffold.
+Secondmate charters are outside this gate.
+The standalone command can recheck a subsequently edited brief; this opt-in does not add a spawn-time check or validate every manual write.
+`bin/fm-pr-check.sh` reads the GitHub body and diff and refuses malformed evidence before readiness registration, merge polling or parent publication.
+Non-GitHub readiness refuses explicitly while this option is enabled; exported bodies remain checkable with the standalone command.
+These entry points are shared by all harnesses and runtime backends and inspect no terminal output.
+
+Run `python3 bin/fm-pr-lint.py --help` for the authoritative declaration format and standalone file/PR commands.
+`tests/fm-pr-lint.test.sh` exercises the executable interface, source evidence excerpts, opt-in scaffolding and readiness refusal without mutating a real home or forge.
+The source fixtures distinguish ungraded eval transcripts, scenario inputs whose transcripts are absent, and verification excerpts from open PRs at their recorded heads.
+
+This gate checks shape and flags likely carve-outs; it cannot establish that a linked screenshot proves an outcome, an Update is published, or an approval was granted.
+An explicit false-positive explanation remains visible for independent review, and a shape pass never grants release authority.
+Required GitHub check wiring is a later step; this option installs no Actions workflow or required status check and does not claim CI ran.
+
 ## Home brief include (config/brief-include.md)
 
 The optional local, gitignored `config/brief-include.md` adds standing worker instructions to every ship and scout brief.
