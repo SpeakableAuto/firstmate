@@ -17,11 +17,12 @@ NOT PROVEN WHERE USERS SEE IT: <missing check and reason> line.
 Live proof is a link declaration, not independent verification of the outcome.
 
 Briefs additionally refuse research/study/audit/inventory/review findings caps:
-top N, N best/key/most important, best N, at most/up to N findings, a few findings,
-and shortlist of N. Numeric and spelled-out numbers through twenty are recognized
-(one-twelve, fifteen, twenty). Bug/error/fix work follows the source gate exemption.
-Only Captain's intent can authorize a cap: "Zac asked for the top 3", "Zac wants
-the best five", or "Zac requested the 3 best" (not a negated request).
+top N, N best/key/most important, best N, and at most/up to N findings. Numeric and
+spelled-out numbers through twenty are recognized (one-twelve, fifteen, twenty).
+Bug/error/fix work in the Task preamble or Captain's intent follows the source gate
+exemption; such words in Firstmate spec do not. Only Captain's intent can authorize
+a cap, by a direct request: "Zac asked for the top 3", "Zac wants the best five",
+or "Zac requested the 3 best".
 The first Task preamble and Captain's intent / Firstmate spec are checked, not
 Verification or the surrounding worker instructions. An uncapped brief need not
 contain coverage/page wording to pass. PR bodies do not use this depth check.
@@ -71,8 +72,8 @@ CODE_CATEGORIES = {
 
 # Mirror the gate linked by kitchen rule 23, including fix-task and count exclusions:
 # https://github.com/SpeakableAuto/claude-config/pull/81
-# Firstmate additionally scopes authorization to captain intent and recognizes
-# the requested "a few" and "shortlist of N" forms.
+# Firstmate additionally scopes authorization and fix-task exemption to captain intent
+# and only accepts a direct, current request for the cap.
 NUMBER = r'(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)'
 FINDINGS = r'(?:ideas?|items?|findings?|options?|techniques?|recommendations?|points?|things?|tips?|ways?|lessons?|picks?|examples?|sources?|tools?|competitors?|features?|takeaways?|insights?)'
 RESEARCH = re.compile(
@@ -83,11 +84,9 @@ CAP = re.compile(
     r'\btop[\s-]*' + NUMBER + r'\b'
     r'|\b' + NUMBER + r'\s+(?:best|most\s+\w+|key|biggest)\b'
     r'|\bbest[\s-]*' + NUMBER + r'\b'
-    r'|\b(?:no more than|at most|up to|max(?:imum)?(?: of)?)\s+' + NUMBER + r'\s+(?:\w+\s+){0,2}' + FINDINGS + r'\b'
-    r'|\ba few\s+(?:\w+\s+){0,2}' + FINDINGS + r'\b'
-    r'|\bshortlist(?: of)?[\s-]+' + NUMBER + r'\b', re.I)
+    r'|\b(?:no more than|at most|up to|max(?:imum)?(?: of)?)\s+' + NUMBER + r'\s+(?:\w+\s+){0,2}' + FINDINGS + r'\b', re.I)
 CAP_REQUEST = re.compile(
-    r'\bzac (?:asked|wants|requested)(?![^.\n]{0,60}\bnot\b)[^.\n]{0,60}'
+    r'\bzac (?:asked|wants|requested)\s+(?:for\s+)?(?:only\s+)?(?:the\s+)?'
     r'(?:\btop[\s-]*' + NUMBER + r'|\b' + NUMBER + r'\s+best|\bbest[\s-]*' + NUMBER + r')\b', re.I)
 
 
@@ -102,9 +101,9 @@ def research_depth_capped(text):
             task.append(body)
         if heading == "captain's intent":
             intent.append(body)
-    narrative = '\n'.join(task)
-    return (RESEARCH.search(narrative) and not FIX_TASK.search(narrative)
-            and CAP.search(narrative) and not CAP_REQUEST.search('\n'.join(intent)))
+    narrative, intent = '\n'.join(task), '\n'.join(intent)
+    return (RESEARCH.search(narrative) and not FIX_TASK.search(parts[0] + '\n' + intent)
+            and CAP.search(narrative) and not CAP_REQUEST.search(intent))
 
 
 def code_span(cell):

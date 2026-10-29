@@ -2,10 +2,10 @@
 
 ## 30 October 2026: refuse unrequested research findings caps
 
-PR: pending pipeline publication.
+PR: pending pipeline publication; stacked on fm/pstack-11-brief-pr-lint and depends on https://github.com/SpeakableAuto/firstmate/pull/43, so it must land afterward.
 The optional brief check now refuses capped research, study, audit, inventory and review tasks with a fix naming complete coverage and the deliverable page.
 An explicit cap request in captain intent is accepted; a claim in the implementation specification cannot supply that authority.
-This follows the source gate's fix-task exceptions and leaves uncapped briefs, PR-body checks and absent/off homes unchanged.
+This follows the source gate's fix-task exceptions, but only for fix work named in the task preamble or captain intent, not in the specification; it leaves uncapped briefs, PR-body checks and absent/off homes unchanged.
 Watch for conservative text matching: this is a scaffold-time check, not enforcement of every later manual edit or finished report.
 Deployed: no; no operating home was changed.
 
