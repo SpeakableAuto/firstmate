@@ -66,6 +66,36 @@ class Linter(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.run_lint(GOOD+'\nChanges Stripe partial refunds.\n').returncode, 1)
 
+    def test_verification_tables(self):
+        piped = GOOD.replace('`python3 -m unittest`', '`git log --oneline \\| head -3`')
+        self.assertEqual(self.run_lint(piped).returncode, 0, self.run_lint(piped).stderr)
+        hand = GOOD+'\nChecked by hand:\n\n| Check | Result |\n| --- | --- |\n| Opened the page | looked right |\n'
+        self.assertEqual(self.run_lint(hand).returncode, 0, self.run_lint(hand).stderr)
+        after = GOOD+'\n| Command | Exit |\n| --- | --- |\n| `pwd` | pending |\n'
+        self.assertIn('verification-command', self.run_lint(after).stderr)
+
+    def test_diff_carve_outs(self):
+        url = 'https://github.com/example/repo/pull/1'
+        def lint_diff(diff):
+            return subprocess.run(['python3', str(TOOL), '--pr-url', url],
+                                  env=self.forge(diff=diff), text=True, capture_output=True)
+        real = (ROOT/'tests/fixtures/firstmate-pr41.diff').read_text()
+        r = lint_diff(real)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ordinary = ('diff --git a/bin/x.sh b/bin/x.sh\n--- a/bin/x.sh\n+++ b/bin/x.sh\n'
+                    '+git checkout -b demo\n+for k in d.keys(): tokens.append(k)\n')
+        r = lint_diff(ordinary)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for line, category in [('+const intent = await stripe.paymentIntents.create({ amount });', 'payments'),
+                               ('+const key = process.env.STRIPE_SECRET_KEY;', 'logins-keys-secrets'),
+                               ("+jwt.sign(payload, secret, { expiresIn: '1h' });", 'logins-keys-secrets'),
+                               ('+ALTER TABLE portal_users ADD COLUMN role text;', 'shared-database-schema'),
+                               ('+model Booking {', 'shared-database-schema')]:
+            with self.subTest(line=line):
+                r = lint_diff('diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n'+line+'\n')
+                self.assertEqual(r.returncode, 1)
+                self.assertIn('carve-outs/'+category, r.stderr)
+
     def test_staff_update(self):
         staff = GOOD.replace('Staff-facing: no', 'Staff-facing: yes')
         self.assertIn('admin-update', self.run_lint(staff).stderr)
@@ -153,7 +183,18 @@ if d['mode']=='truncated': print('  truncated: true')
         for item in data['sources']:
             with self.subTest(source=item['source']):
                 raw = item['text']
-                self.assertEqual(self.run_lint(raw).returncode, 1)
+                r = self.run_lint(raw)
+                self.assertEqual(r.returncode, 1)
+                self.assertIn('refuse: goal', r.stderr)
+                if 'refuses' in item:
+                    shaped = GOOD.replace('## Verification', raw+'\n## Verification')
+                    r = self.run_lint(shaped)
+                    self.assertEqual(r.returncode, 1)
+                    for code in item['refuses']:
+                        self.assertIn('refuse: '+code+';', r.stderr)
+                    if 'staff-facing' in item['refuses']:
+                        r = self.run_lint(shaped.replace('Staff-facing: no', 'Staff-facing: yes'))
+                        self.assertIn('refuse: admin-update;', r.stderr)
                 if 'head' in item:
                     corrected = GOOD[:GOOD.index('## Verification')] + raw
                 else:

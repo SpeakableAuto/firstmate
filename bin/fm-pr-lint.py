@@ -16,8 +16,9 @@ Absent Live proof: https://... in Verification, require an early
 NOT PROVEN WHERE USERS SEE IT: <missing check and reason> line.
 Live proof is a link declaration, not independent verification of the outcome.
 
-Paths and task/change prose flag likely carve-outs, including SQL migrations whose
-database ownership cannot be inferred. Declare the category, or record a specific
+Changed paths and task/change prose flag likely carve-outs, including SQL migrations
+whose database ownership cannot be inferred. Added code lines flag only specific
+payment APIs, secret-like env names, credential files, JWT/OAuth and schema statements. Declare the category, or record a specific
 false-positive explanation: Carve-out review: <category> | <reason>.
 For a staff false positive, use Staff-facing review: <reason>.
 These explanations and classifications are review inputs, never approvals.
@@ -39,9 +40,22 @@ from urllib.parse import urlsplit
 
 
 CATEGORIES = {
-    'payments': r'\b(?:payments?|stripe|refunds?|billing|checkout)\b',
-    'logins-keys-secrets': r'\b(?:logins?|passwords?|secrets?|credentials?|oauth|auth|authentication|keys?|tokens?)\b',
+    'payments': r'\b(?:payments?|stripe|refunds?|billing)\b',
+    'logins-keys-secrets': r'\b(?:logins?|passwords?|secrets?|credentials?|oauth|auth|authentication|jwt|api[- ]keys?|private[- ]keys?|access[- ]tokens?)\b',
     'shared-database-schema': r'\b(?:migrations?|schema|alter\s+table|create\s+table|add\s+column|shared[- ]database)\b',
+}
+# Changed paths stay conservative: broad words still flag likely carve-outs.
+PATH_CATEGORIES = {
+    'payments': r'\b(?:payments?|stripe|refunds?|billing|checkout)\b',
+    'logins-keys-secrets': r'\b(?:logins?|passwords?|secrets?|credentials?|oauth|auth|jwt|keys?|tokens?)\b|\.env\b|\.pem$',
+    'shared-database-schema': r'\b(?:migrations?|schema)\b|\.sql$',
+}
+# Added code lines only count through specific APIs, names and statements.
+CODE_CATEGORIES = {
+    'payments': r'(?i:\bstripe\b|payment[-_]?intents?|checkout\.sessions?|\brefunds\.create)',
+    'logins-keys-secrets': r'\b[A-Z0-9_]*(?:SECRET|TOKEN|API_KEY|PASSWORD|PRIVATE_KEY|CREDENTIALS?)[A-Z0-9_]*\b'
+                           r'|(?i:\bjwt\b|jsonwebtoken|\boauth2?\b|id_rsa|\.pem\b|credentials\.json|\.netrc\b|(?:^|[\s\'"/])\.env(?:\.\w+)?\b)',
+    'shared-database-schema': r'(?i:\b(?:alter|create|drop)\s+table\b|\badd\s+column\b|prisma\s+(?:db\s+push|migrate)|^\s*model\s+\w+\s*\{)',
 }
 
 
@@ -96,13 +110,16 @@ def lint(text, kind='pr', paths=(), diff=''):
     evidence = verification[1] if verification else ''
     if not verification:
         refuse('verification', 'add a ## Verification section with recorded commands and numeric exit codes')
-    rows = [[cell.strip() for cell in line.strip().strip('|').split('|')]
-            for line in evidence.splitlines() if line.strip().startswith('|')]
-    header, recorded, invalid = None, 0, False
-    for row in rows:
-        lowered = [cell.lower() for cell in row]
-        if 'command' in lowered and 'exit' in lowered:
-            header = (lowered.index('command'), lowered.index('exit'))
+    header, recorded, invalid, first = None, 0, False, True
+    for line in evidence.splitlines():
+        if not line.strip().startswith('|'):
+            first = True
+            continue
+        row = [cell.strip() for cell in re.split(r'(?<!\\)\|', line.strip().strip('|'))]
+        if first:
+            lowered = [cell.lower() for cell in row]
+            header = (lowered.index('command'), lowered.index('exit')) if 'command' in lowered and 'exit' in lowered else None
+            first = False
             continue
         if not header or all(re.fullmatch(r'[-: ]+', cell) for cell in row):
             continue
@@ -142,8 +159,11 @@ def lint(text, kind='pr', paths=(), diff=''):
     narrative = '\n'.join(line for line in clean.splitlines() if not line.lstrip().startswith('|'))
     narrative = re.sub(r'^(?:Carve-outs|Carve-out review|Staff-facing|Staff-facing review|Admin Update):[^\n]*', '', narrative, flags=re.M | re.I)
     signals = narrative + '\n' + '\n'.join(paths) + '\n' + diff
-    for category, pattern in CATEGORIES.items():
-        if re.search(pattern, signals.replace('_', '-'), re.I) and category not in categories:
+    for category in CATEGORIES:
+        flagged = (re.search(CATEGORIES[category], narrative.replace('_', '-'), re.I)
+                   or any(re.search(PATH_CATEGORIES[category], path.replace('_', '-'), re.I) for path in paths)
+                   or any(re.search(CODE_CATEGORIES[category], line) for line in diff.splitlines()))
+        if flagged and category not in categories:
             reviews = re.findall(r'^Carve-out review:\s*'+re.escape(category)+r'\s*\|\s*(.+)$', clean, re.M | re.I)
             if len(reviews) != 1 or not meaningful(reviews[0]):
                 refuse('carve-outs/'+category, f'include {category} in Carve-outs, or add Carve-out review: {category} | <specific false-positive reason>; classification does not authorize release')

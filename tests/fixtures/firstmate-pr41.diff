@@ -1,0 +1,1127 @@
+diff --git a/bin/fm-spawn.sh b/bin/fm-spawn.sh
+index d3d938be0fa..7b136db860d 100755
+--- a/bin/fm-spawn.sh
++++ b/bin/fm-spawn.sh
+@@ -3265,6 +3265,21 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
+     exit 1
+   fi
+   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
++  # The task-set lock already serializes fresh allocations across this home.
++  # Keep the room seam read-only; reclamation is an explicit spawn action under
++  # the existing locks, followed by a fresh count before treehouse get.
++  # shellcheck source=bin/fm-worktree-slots-lib.sh
++  . "$SCRIPT_DIR/fm-worktree-slots-lib.sh"
++  if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
++    if [ "$FM_WORKTREE_SLOT_RECLAIMABLE" -gt 0 ]; then
++      fm_worktree_slots_reclaim "$STATE" "$SPAWN_TREEHOUSE_PROJECT_LOCK" apply \
++        "$((FM_WORKTREE_SLOT_HELD - FM_WORKTREE_SLOT_CAP + 1))" || true
++    fi
++    if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
++      echo "error: refusing spawn: $FM_WORKTREE_SLOT_ROOM_REASON" >&2
++      exit 1
++    fi
++  fi
+ fi
+ [ -f "$BRIEF" ] || {
+   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
+@@ -3880,7 +3895,7 @@ else
+     HERDR_LAUNCHER_RELATIONSHIP=launcher-home
+     if [ "$KIND" = secondmate ]; then
+       HERDR_LABEL_HOME=$PROJ_ABS
+-      HERDR_LAUNCHER_RELATIONSHIP=other-home
++      HERDR_LAUNCHER_RELATIONSHIP="other-home"
+     fi
+     HERDR_PRESENTATION_JOURNAL=$(fm_backend_herdr_projection_journal_path "$STATE" "$ID")
+     HERDR_PROJECTED=0
+diff --git a/bin/fm-teardown.sh b/bin/fm-teardown.sh
+index 9dc96a3042a..5c71146ef32 100755
+--- a/bin/fm-teardown.sh
++++ b/bin/fm-teardown.sh
+@@ -405,6 +405,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
+ # leases).
+ # shellcheck source=bin/fm-lease-lib.sh
+ . "$SCRIPT_DIR/fm-lease-lib.sh"
++# shellcheck source=bin/fm-worktree-slots-lib.sh
++. "$SCRIPT_DIR/fm-worktree-slots-lib.sh"
+ # Role partition: forced teardown discards work, and the supervision branch
+ # never discards anything - only an ordinary landed-work teardown is branch
+ # territory (contract: bin/fm-lease-lib.sh).
+@@ -2313,55 +2315,8 @@ teardown_live_slot_path() {
+   canonical_existing_dir "$WT"
+ }
+ 
+-collect_local_firstmate_states() {
+-  local record_state=$1 root home reg line child known existing i=0
+-  local -a homes
+-  TREEHOUSE_OWNER_STATES=("$record_state")
+-  root=$(fm_firstmate_root_home "$FM_HOME") || {
+-    echo "REFUSED: cannot resolve the root Firstmate home; nothing was changed" >&2
+-    return 1
+-  }
+-  homes=("$root")
+-  while [ "$i" -lt "${#homes[@]}" ]; do
+-    home=${homes[$i]}
+-    i=$((i + 1))
+-    known=0
+-    for existing in "${TREEHOUSE_OWNER_STATES[@]}"; do
+-      [ "$existing" != "$home/state" ] || known=1
+-    done
+-    [ "$known" = 1 ] || TREEHOUSE_OWNER_STATES+=("$home/state")
+-    reg="$home/data/secondmates.md"
+-    [ ! -e "$reg" ] && [ ! -L "$reg" ] && continue
+-    [ -f "$reg" ] && [ ! -L "$reg" ] || {
+-      echo "REFUSED: local Firstmate registry is unsafe at $reg; nothing was changed" >&2
+-      return 1
+-    }
+-    while IFS= read -r line || [ -n "$line" ]; do
+-      case "$line" in
+-        "- "*)
+-          secondmate_registry_parse_line "$line" || {
+-            echo "REFUSED: malformed local Firstmate registry entry in $reg; nothing was changed" >&2
+-            return 1
+-          }
+-          [ "$SECONDMATE_REGISTRY_REMOTE" -eq 0 ] || continue
+-          child=$(canonical_existing_dir "$SECONDMATE_REGISTRY_HOME") || {
+-            echo "REFUSED: registered local Firstmate home is unavailable: $SECONDMATE_REGISTRY_HOME; nothing was changed" >&2
+-            return 1
+-          }
+-          known=0
+-          for existing in "${homes[@]}"; do
+-            [ "$existing" != "$child" ] || known=1
+-          done
+-          [ "$known" = 1 ] || homes+=("$child")
+-          ;;
+-      esac
+-    done < "$reg"
+-  done
+-}
+-
+ require_exclusive_worktree_slot_record() {
+-  local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
+-  local slot state_dir other other_id field other_path other_slot
++  local record_meta=$1 record_id=$2 record_state=$3 worktree=$4 slot rc=0
+   slot=$(canonical_existing_dir "$worktree") || return 0
+   # A slot whose owner claim names another task was reassigned, so this record's
+   # teardown is records-only and touches nothing under it; another record naming
+@@ -2369,28 +2324,15 @@ require_exclusive_worktree_slot_record() {
+   # block the claimant's own teardown behind it.
+   fm_treehouse_slot_owner_state "$slot" "$record_id"
+   [ "$FM_TREEHOUSE_SLOT_OWNER" != other ] || return 0
+-  collect_local_firstmate_states "$record_state" || return 1
+-  for state_dir in "${TREEHOUSE_OWNER_STATES[@]}"; do
+-    for other in "$state_dir"/*.meta; do
+-      [ -f "$other" ] && [ ! -L "$other" ] || continue
+-      # Identity, not spelling: the same record reached through a differently
+-      # resolved state dir (e.g. a symlinked $FM_HOME) is still this record. A
+-      # differently named hardlink is another task's record, so the name must
+-      # match too.
+-      [ "${other##*/}" = "${record_meta##*/}" ] && [ "$other" -ef "$record_meta" ] && continue
+-      other_id=$(basename "$other" .meta)
+-      for field in worktree home; do
+-        other_path=$(fm_meta_get "$other" "$field")
+-        [ -n "$other_path" ] || continue
+-        other_slot=$(canonical_existing_dir "$other_path") || continue
+-        [ "$other_slot" = "$slot" ] || continue
+-        echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded $field." >&2
+-        echo "Returning that pool slot would kill $other_id's processes and reset its copy, so nothing was changed - not even with --force." >&2
+-        echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
+-        return 1
+-      done
+-    done
+-  done
++  fm_worktree_slot_record_named "$slot" "$record_state" "$record_meta" || rc=$?
++  case "$rc" in
++    1) return 0 ;;
++    2) return 1 ;;
++  esac
++  echo "REFUSED: task $record_id's recorded worktree $slot is also task $FM_WORKTREE_SLOT_RECORD_ID's recorded $FM_WORKTREE_SLOT_RECORD_FIELD." >&2
++  echo "Returning that pool slot would kill $FM_WORKTREE_SLOT_RECORD_ID's processes and reset its copy, so nothing was changed - not even with --force." >&2
++  echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $FM_WORKTREE_SLOT_RECORD_ID), then re-run teardown." >&2
++  return 1
+ }
+ 
+ require_exclusive_task_worktree_slot() {
+@@ -3598,6 +3540,21 @@ elif [ "$KIND" != secondmate ] && ! teardown_owns_worktree; then
+   :
+ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
+   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
++  # Merge-proved slot removal (bin/fm-worktree-slots-lib.sh owns the contract):
++  # only on a home with config/worktree-slot-cap, never under --force, and only
++  # for a scout whose report gate passed or a PR task whose merge pr_is_merged
++  # proves now, while the branch still names the work. The subshell keeps the
++  # proof from touching PR_URL.
++  TEARDOWN_SLOT_REMOVE=0
++  if [ "$FORCE" != "--force" ] && fm_worktree_slot_cap_read "$CONFIG" 2>/dev/null \
++     && [ -n "$FM_WORKTREE_SLOT_CAP" ]; then
++    if [ "$KIND" = scout ]; then
++      TEARDOWN_SLOT_REMOVE=1
++    elif [ "$KIND" = ship ] && [ "$MODE" != local-only ] && [ "$branch" != HEAD ] \
++         && ( pr_is_merged "$branch" ) >/dev/null 2>&1; then
++      TEARDOWN_SLOT_REMOVE=1
++    fi
++  fi
+   if [ "$branch" != "HEAD" ]; then
+     if git -C "$WT" checkout --detach -q 2>/dev/null; then
+       git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
+@@ -3623,6 +3580,15 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
+   # unclaimed until its next holder claims it, and leaves the claim in place
+   # whenever the return did not actually happen.
+   fm_treehouse_slot_owner_release "$WT" "$ID"
++  # Still under the project lock taken for the return. A kept slot stays in the
++  # pool exactly as before, so a failed removal never fails the teardown.
++  if [ "$TEARDOWN_SLOT_REMOVE" = 1 ]; then
++    if fm_worktree_slot_remove_returned "$PROJ" "$WT" "$STATE" "$META"; then
++      echo "teardown: removed worktree slot $WT after its $([ "$KIND" = scout ] && echo "scout report" || echo "PR merge") was proved"
++    else
++      echo "teardown: kept worktree slot $WT in the pool: $FM_WORKTREE_SLOT_KEPT_REASON" >&2
++    fi
++  fi
+ fi
+ 
+ HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+diff --git a/bin/fm-test-run.sh b/bin/fm-test-run.sh
+index 8e50e9f4a6e..1e6f532d5a0 100755
+--- a/bin/fm-test-run.sh
++++ b/bin/fm-test-run.sh
+@@ -398,7 +398,7 @@ family_for_basename() {
+       ;;
+     fm-check-unregister.test.sh|fm-pr-check-security.test.sh|fm-pr-merge.test.sh|\
+     fm-pr-reviewers.test.sh|fm-pr-state.test.sh|\
+-    fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
++    fm-review-diff.test.sh|fm-teardown.test.sh|fm-worktree-slots.test.sh|fm-x-mode.test.sh)
+       printf '%s\n' pr-forge
+       ;;
+     fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh|\
+diff --git a/bin/fm-wake-lib.sh b/bin/fm-wake-lib.sh
+index 9df71710968..151696a0ae2 100755
+--- a/bin/fm-wake-lib.sh
++++ b/bin/fm-wake-lib.sh
+@@ -1350,7 +1350,7 @@ fm_task_set_lock_path() {  # <state-dir>
+ # the walk at the current home, which is the correct answer rather than an
+ # error: the parent lives on another machine, so its filesystem can neither hold
+ # nor be observed by a lock taken here, and a remote-seeded home is itself the
+-# top of the local tree that bin/fm-teardown.sh's collect_local_firstmate_states
++# top of the local tree that bin/fm-worktree-slots-lib.sh's collect_local_firstmate_states
+ # enumerates (that walk already skips remote registry entries for the same
+ # reason). Refusing a remote binding instead made every operation anchored here
+ # fail closed inside a remote secondmate home and its local descendants.
+diff --git a/bin/fm-worktree-slots-lib.sh b/bin/fm-worktree-slots-lib.sh
+new file mode 100644
+index 00000000000..9acb3a4f602
+--- /dev/null
++++ b/bin/fm-worktree-slots-lib.sh
+@@ -0,0 +1,530 @@
++# shellcheck shell=bash
++# fm-worktree-slots-lib.sh - the bounded Treehouse slot pool contract (one owner).
++# Usage: . bin/fm-worktree-slots-lib.sh (after bin/fm-wake-lib.sh)
++#
++# WHY. A Treehouse pool keeps every slot it ever created: teardown returns a
++# task's slot to the pool, where it waits, reset and clean, for the next spawn
++# of that project. A machine that spawns across many projects therefore keeps
++# one full copy per historical concurrent task of every project, and those
++# copies only ever accumulate. This library bounds them for a home that opts in
++# with config/worktree-slot-cap (docs/configuration.md owns the setting).
++# Absent, nothing here runs and every caller keeps today's behaviour.
++#
++# CONTRACT.
++#   - Counting. A home's slots are every slot in the Treehouse pool of each git
++#     project under its projects/ directory, plus the spawning project, read
++#     from Git worktree registrations and their pool state files, deduplicated
++#     by slot path. No Treehouse command runs during a room check: status
++#     itself heals and rewrites pool state.
++#   - Room. fm_worktree_slot_room is the one separately callable room check:
++#     it changes nothing, so a caller may re-run it freely. A spawn that would
++#     allocate needs held < cap. At the cap, spawn first tries safe reclaim
++#     and rechecks. This conservatively reserves one slot even if get could
++#     reuse an existing copy; no speculative reuse can exceed the bound.
++#   - Candidates. A slot can be considered only when its pool record says it is
++#     unreserved, with no uncommitted changes or observed process, no
++#     Firstmate slot-owner claim sits beside it (bin/fm-wake-lib.sh owns the
++#     claim), and no task record in any local Firstmate home names it as its
++#     worktree= or home=. This identifies candidates, not merge proof.
++#     Removal itself goes through `treehouse destroy <slot> --yes` with
++#     no --include-* flag, so Treehouse's own disposable class (merged, clean,
++#     idle, unleased) is the last word and anything else is skipped.
++#   - Merge-proved removal. bin/fm-teardown.sh removes a task's own slot right
++#     after returning it only when the task's PR merge was proved by its own
++#     pr_is_merged check, or for a scout whose report and completion gate
++#     passed; fm_worktree_slot_remove_returned owns the removal.
++#   - Locks. Every removal holds the slot's project lock
++#     (fm_treehouse_project_lock_path), the same lock spawn and teardown hold
++#     around allocation and return. A caller already holding one project's lock
++#     names it so it is not re-acquired; a contended lock skips that slot.
++#   - Tool floor. Removal requires a Treehouse whose destroy is safe by
++#     default (its help offers --include-unlanded); an older Treehouse removes
++#     nothing and says so.
++
++if ! command -v fm_treehouse_project_lock_path >/dev/null 2>&1; then
++  # shellcheck source=bin/fm-wake-lib.sh
++  . "${BASH_SOURCE[0]%/*}/fm-wake-lib.sh"
++fi
++if ! command -v fm_meta_get >/dev/null 2>&1; then
++  # shellcheck source=bin/fm-backend.sh
++  . "${BASH_SOURCE[0]%/*}/fm-backend.sh"
++fi
++if ! command -v secondmate_registry_parse_line >/dev/null 2>&1; then
++  # shellcheck source=bin/fm-secondmate-registry-lib.sh
++  . "${BASH_SOURCE[0]%/*}/fm-secondmate-registry-lib.sh"
++fi
++
++FM_WORKTREE_SLOT_CAP_FILE="worktree-slot-cap"
++FM_WORKTREE_SLOT_CAP=
++FM_WORKTREE_SLOTS_ERROR=
++
++fm_worktree_slots_canonical_dir() {  # <dir>
++  [ -n "$1" ] && [ -d "$1" ] || return 1
++  ( CDPATH='' cd -- "$1" 2>/dev/null && pwd -P )
++}
++
++fm_worktree_slots_link_count() {  # <path>
++  if [ "$(uname)" = Darwin ]; then
++    /usr/bin/stat -f %l "$1" 2>/dev/null
++  else
++    stat -c %h "$1" 2>/dev/null
++  fi
++}
++
++# Read config/worktree-slot-cap. Sets FM_WORKTREE_SLOT_CAP to the cap, or to
++# empty when the file is absent (the opt-out). Returns 1 with
++# FM_WORKTREE_SLOTS_ERROR for a file that is present but not exactly one
++# positive decimal integer and one newline in a regular, single-linked file
++# beneath a non-symlinked config directory (at most nine digits).
++fm_worktree_slot_cap_read() {  # <config-dir>
++  local dir=$1 path value
++  FM_WORKTREE_SLOT_CAP=
++  FM_WORKTREE_SLOTS_ERROR=
++  path="$dir/$FM_WORKTREE_SLOT_CAP_FILE"
++  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
++    return 0
++  fi
++  if [ -L "$dir" ] || [ ! -d "$dir" ] || [ -L "$path" ] || [ ! -f "$path" ] \
++     || [ "$(fm_worktree_slots_link_count "$path")" != 1 ]; then
++    FM_WORKTREE_SLOTS_ERROR="config/$FM_WORKTREE_SLOT_CAP_FILE must be a regular, single-linked file in a real config directory"
++    return 1
++  fi
++  value=$(<"$path") || {
++    FM_WORKTREE_SLOTS_ERROR="config/$FM_WORKTREE_SLOT_CAP_FILE could not be read"
++    return 1
++  }
++  case "$value" in
++    ''|0*|*[!0-9]*) value= ;;
++  esac
++  if [ -z "$value" ] || [ "${#value}" -gt 9 ] || ! printf '%s\n' "$value" | cmp -s "$path" -; then
++    FM_WORKTREE_SLOTS_ERROR="config/$FM_WORKTREE_SLOT_CAP_FILE must hold one positive integer (at most 9 digits) followed by one newline"
++    return 1
++  fi
++  FM_WORKTREE_SLOT_CAP=$value
++}
++
++# Every local Firstmate home's state directory, starting with <record-state>:
++# the root home reached by fm_firstmate_root_home and every local secondmate
++# home its registries name, recursively. Remote registry entries are skipped
++# because their records live on another machine. Sets TREEHOUSE_OWNER_STATES.
++collect_local_firstmate_states() {  # <record-state>
++  local record_state=$1 root home reg line child known existing i=0
++  local -a homes
++  TREEHOUSE_OWNER_STATES=("$record_state")
++  root=$(fm_firstmate_root_home "$FM_HOME") || {
++    echo "REFUSED: cannot resolve the root Firstmate home; nothing was changed" >&2
++    return 1
++  }
++  homes=("$root")
++  while [ "$i" -lt "${#homes[@]}" ]; do
++    home=${homes[$i]}
++    i=$((i + 1))
++    known=0
++    for existing in "${TREEHOUSE_OWNER_STATES[@]}"; do
++      [ "$existing" != "$home/state" ] || known=1
++    done
++    [ "$known" = 1 ] || TREEHOUSE_OWNER_STATES+=("$home/state")
++    reg="$home/data/secondmates.md"
++    [ ! -e "$reg" ] && [ ! -L "$reg" ] && continue
++    [ -f "$reg" ] && [ ! -L "$reg" ] || {
++      echo "REFUSED: local Firstmate registry is unsafe at $reg; nothing was changed" >&2
++      return 1
++    }
++    while IFS= read -r line || [ -n "$line" ]; do
++      case "$line" in
++        "- "*)
++          secondmate_registry_parse_line "$line" || {
++            echo "REFUSED: malformed local Firstmate registry entry in $reg; nothing was changed" >&2
++            return 1
++          }
++          [ "$SECONDMATE_REGISTRY_REMOTE" -eq 0 ] || continue
++          child=$(fm_worktree_slots_canonical_dir "$SECONDMATE_REGISTRY_HOME") || {
++            echo "REFUSED: registered local Firstmate home is unavailable: $SECONDMATE_REGISTRY_HOME; nothing was changed" >&2
++            return 1
++          }
++          known=0
++          for existing in "${homes[@]}"; do
++            [ "$existing" != "$child" ] || known=1
++          done
++          [ "$known" = 1 ] || homes+=("$child")
++          ;;
++      esac
++    done < "$reg"
++  done
++}
++
++# Does any task record in any local Firstmate home name <slot> as its
++# worktree= or home=? <exclude-meta>, when given, is the caller's own record:
++# skipped by identity, not spelling, so the same record reached through a
++# differently resolved state directory is still skipped while a differently
++# named hardlink still counts as another task's record.
++# Returns 0 and sets FM_WORKTREE_SLOT_RECORD_ID and FM_WORKTREE_SLOT_RECORD_FIELD
++# when one does, 1 when none does, and 2 when the homes cannot be enumerated.
++fm_worktree_slot_record_named() {  # <slot> <record-state> [<exclude-meta>]
++  local slot=$1 record_state=$2 exclude=${3-} state_dir other field other_path other_slot
++  FM_WORKTREE_SLOT_RECORD_ID=
++  FM_WORKTREE_SLOT_RECORD_FIELD=
++  collect_local_firstmate_states "$record_state" || return 2
++  for state_dir in "${TREEHOUSE_OWNER_STATES[@]}"; do
++    for other in "$state_dir"/*.meta; do
++      [ -f "$other" ] && [ ! -L "$other" ] || continue
++      if [ -n "$exclude" ] && [ "${other##*/}" = "${exclude##*/}" ] && [ "$other" -ef "$exclude" ]; then
++        continue
++      fi
++      for field in worktree home; do
++        other_path=$(fm_meta_get "$other" "$field")
++        [ -n "$other_path" ] || continue
++        other_slot=$(fm_worktree_slots_canonical_dir "$other_path") || continue
++        [ "$other_slot" = "$slot" ] || continue
++        # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
++        FM_WORKTREE_SLOT_RECORD_ID=$(basename "$other" .meta)
++        # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
++        FM_WORKTREE_SLOT_RECORD_FIELD=$field
++        return 0
++      done
++    done
++  done
++  return 1
++}
++
++# Read registered Treehouse slots without running Treehouse (even status writes
++# state). Git owns worktree discovery; the existing pool recognizer owns the
++# pool layout. All entries of each discovered pool are counted, including
++# missing directories and reservations, so a broken entry never creates room.
++# Ordinary non-pool worktrees are outside this Treehouse-only setting.
++# Output arrays: PATHS, STATUSES, PROJECTS; POOLS holds path/count TSV lines.
++fm_worktree_slots_scan() {  # <projects-dir> [<project-dir>...]
++  local projects=$1 dir top entries field path pool state rows status existing known count
++  local -a dirs=() pools=()
++  shift
++  FM_WORKTREE_SLOT_PATHS=()
++  FM_WORKTREE_SLOT_STATUSES=()
++  FM_WORKTREE_SLOT_PROJECTS=()
++  FM_WORKTREE_SLOT_POOLS=
++  FM_WORKTREE_SLOTS_ERROR=
++  command -v jq >/dev/null 2>&1 || {
++    FM_WORKTREE_SLOTS_ERROR="jq is not on PATH, so pool slots cannot be counted"
++    return 1
++  }
++  for dir in "$@" "$projects"/*/; do
++    dir=$(fm_worktree_slots_canonical_dir "$dir") || continue
++    top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || continue
++    top=$(fm_worktree_slots_canonical_dir "$top") || continue
++    [ "$top" = "$dir" ] || continue
++    known=0
++    for existing in "${dirs[@]+"${dirs[@]}"}"; do
++      [ "$existing" != "$dir" ] || known=1
++    done
++    [ "$known" = 1 ] || dirs+=("$dir")
++  done
++  for dir in "${dirs[@]+"${dirs[@]}"}"; do
++    entries=$(git -C "$dir" -c core.quotePath=false worktree list --porcelain 2>/dev/null) || {
++      FM_WORKTREE_SLOTS_ERROR="cannot read worktree registrations for $dir"
++      return 1
++    }
++    while IFS= read -r field; do
++      case "$field" in worktree\ *) path=${field#worktree } ;; *) continue ;; esac
++      case "$path" in
++        \"*)
++          FM_WORKTREE_SLOTS_ERROR="cannot inspect a quoted Git worktree path for $dir"
++          return 1
++          ;;
++      esac
++      pool=$(dirname "$(dirname "$path")")
++      state="$pool/treehouse-state.json"
++      [ -e "$state" ] || [ -L "$state" ] || continue
++      known=0
++      for existing in "${pools[@]+"${pools[@]}"}"; do
++        [ "$existing" != "$pool" ] || known=1
++      done
++      [ "$known" = 0 ] || continue
++      if [ ! -f "$state" ] || [ -L "$state" ] || ! rows=$(jq -er '
++        if (.worktrees | type) != "array" then error("invalid pool") else .worktrees end |
++        map(if (.path | type) != "string" or (.path | startswith("/") | not)
++          or (.path | test("[\\t\\r\\n]")) then error("invalid path") else . end) |
++        map([.path, (if .leased == true then "leased"
++          elif .destroying == true then "destroying"
++          elif ((.owner_pid // 0) != 0) then "reserved" else "candidate" end)] | @tsv) |
++        join("\n")' "$state" 2>/dev/null); then
++        FM_WORKTREE_SLOTS_ERROR="cannot read Treehouse pool $pool"
++        return 1
++      fi
++      pools+=("$pool")
++      count=0
++      while IFS=$'\t' read -r path status; do
++        [ -n "$path" ] || continue
++        # Resolve existing paths; retain missing entries conservatively.
++        top=$(fm_worktree_slots_canonical_dir "$path") && path=$top
++        if [ -z "$path" ]; then
++          FM_WORKTREE_SLOTS_ERROR="Treehouse pool $pool has an unavailable worktree"
++          return 1
++        fi
++        known=0
++        for existing in "${FM_WORKTREE_SLOT_PATHS[@]+"${FM_WORKTREE_SLOT_PATHS[@]}"}"; do
++          [ "$existing" != "$path" ] || known=1
++        done
++        [ "$known" = 0 ] || continue
++        FM_WORKTREE_SLOT_PATHS+=("$path")
++        FM_WORKTREE_SLOT_STATUSES+=("$status")
++        FM_WORKTREE_SLOT_PROJECTS+=("$dir")
++        count=$((count + 1))
++      done <<< "$rows"
++      FM_WORKTREE_SLOT_POOLS+="$pool"$'\t'"$count"$'\n'
++    done <<< "$entries"
++  done
++}
++
++# Does no process have its working directory in <slot> or under it? One
++# system-wide `lsof -a -d cwd` listing, bounded by process count, never the
++# recursive +D walk of the copy's file tree. A missing lsof, an lsof error or
++# unparsable output is uncertainty, never evidence of an idle slot.
++fm_worktree_slot_cwd_idle() {  # <slot>
++  local dir out line
++  dir=$(CDPATH='' cd -- "$1" 2>/dev/null && pwd -P) || return 1
++  out=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1
++  while IFS= read -r line; do
++    case "$line" in
++      p[0-9]*|fcwd|'') ;;
++      n*)
++        case "${line#n}" in
++          "$dir"|"$dir"/*) return 1 ;;
++        esac
++        ;;
++      *) return 1 ;;
++    esac
++  done <<EOF
++$out
++EOF
++}
++
++# Is scanned slot <index> a reclaim candidate (see CONTRACT)? Read-only.
++# Returns 0 when it is, 1 when it is not (FM_WORKTREE_SLOT_KEPT_REASON says
++# why), and 2 when the local homes cannot be enumerated.
++fm_worktree_slot_reclaimable() {  # <index> <record-state>
++  local idx=$1 record_state=$2 slot rc=0 dirty
++  slot=${FM_WORKTREE_SLOT_PATHS[$idx]}
++  FM_WORKTREE_SLOT_KEPT_REASON=
++  if [ "${FM_WORKTREE_SLOT_STATUSES[$idx]}" != candidate ]; then
++    FM_WORKTREE_SLOT_KEPT_REASON="treehouse reports it ${FM_WORKTREE_SLOT_STATUSES[$idx]}"
++    return 1
++  fi
++  if ! fm_treehouse_pool_slot "${FM_WORKTREE_SLOT_PROJECTS[$idx]}" "$slot"; then
++    FM_WORKTREE_SLOT_KEPT_REASON="slot ownership cannot be verified"
++    return 1
++  fi
++  fm_treehouse_slot_owner_state "$slot" ""
++  if [ "$FM_TREEHOUSE_SLOT_OWNER" != absent ]; then
++    FM_WORKTREE_SLOT_KEPT_REASON="a slot-owner claim${FM_TREEHOUSE_SLOT_OWNER_ID:+ for task $FM_TREEHOUSE_SLOT_OWNER_ID} sits beside it"
++    return 1
++  fi
++  fm_worktree_slot_record_named "$slot" "$record_state" || rc=$?
++  case "$rc" in
++    0)
++      FM_WORKTREE_SLOT_KEPT_REASON="task $FM_WORKTREE_SLOT_RECORD_ID records it as its $FM_WORKTREE_SLOT_RECORD_FIELD"
++      return 1
++      ;;
++    1) ;;
++    *) return 2 ;;
++  esac
++  dirty=$(GIT_OPTIONAL_LOCKS=0 git -C "$slot" status --porcelain --untracked-files=all 2>/dev/null) || {
++    FM_WORKTREE_SLOT_KEPT_REASON="worktree status cannot be verified"
++    return 1
++  }
++  if [ -n "$dirty" ]; then
++    FM_WORKTREE_SLOT_KEPT_REASON="worktree has uncommitted changes"
++    return 1
++  fi
++  if ! fm_worktree_slot_cwd_idle "$slot"; then
++    FM_WORKTREE_SLOT_KEPT_REASON="worktree has a live process or process inspection failed"
++    return 1
++  fi
++  return 0
++}
++
++# The one room check (see CONTRACT). Changes nothing.
++# Sets FM_WORKTREE_SLOT_ROOM_REASON, FM_WORKTREE_SLOT_HELD, and
++# FM_WORKTREE_SLOT_RECLAIMABLE (possible reclaim candidates; Treehouse must still prove them disposable).
++# Returns 0 for room (allow) and 1 for no room (refuse); a malformed cap or an
++# unreadable pool refuses, because an unproved bound is not room.
++# shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
++fm_worktree_slot_room() {  # <config-dir> <projects-dir> <project-dir> <record-state>
++  local config=$1 projects=$2 project=$3 record_state=$4 i rc pools
++  FM_WORKTREE_SLOT_ROOM_REASON=
++  FM_WORKTREE_SLOT_HELD=0
++  FM_WORKTREE_SLOT_RECLAIMABLE=0
++  if ! fm_worktree_slot_cap_read "$config"; then
++    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap unreadable: $FM_WORKTREE_SLOTS_ERROR"
++    return 1
++  fi
++  if [ -z "$FM_WORKTREE_SLOT_CAP" ]; then
++    FM_WORKTREE_SLOT_ROOM_REASON="no worktree slot cap configured"
++    return 0
++  fi
++  project=$(fm_worktree_slots_canonical_dir "$project") || {
++    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: project $3 is not a directory"
++    return 1
++  }
++  if ! git -C "$project" rev-parse --show-toplevel >/dev/null 2>&1; then
++    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: project $project is not a Git worktree"
++    return 1
++  fi
++  if ! fm_worktree_slots_scan "$projects" "$project"; then
++    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: $FM_WORKTREE_SLOTS_ERROR"
++    return 1
++  fi
++  FM_WORKTREE_SLOT_HELD=${#FM_WORKTREE_SLOT_PATHS[@]}
++  if [ "$FM_WORKTREE_SLOT_HELD" -lt "$FM_WORKTREE_SLOT_CAP" ]; then
++    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: $FM_WORKTREE_SLOT_HELD slots held"
++    return 0
++  fi
++  for i in "${!FM_WORKTREE_SLOT_PATHS[@]}"; do
++    rc=0
++    fm_worktree_slot_reclaimable "$i" "$record_state" || rc=$?
++    case "$rc" in
++      0) FM_WORKTREE_SLOT_RECLAIMABLE=$((FM_WORKTREE_SLOT_RECLAIMABLE + 1)) ;;
++      2)
++        FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: local Firstmate homes cannot be enumerated to prove which slots are free"
++        return 1
++        ;;
++    esac
++  done
++  pools=$(printf '%s' "$FM_WORKTREE_SLOT_POOLS" | awk -F'\t' 'NF == 2 { n = split($1, p, "/"); printf "%s%s %s", (c++ ? ", " : ""), p[n], $2 }')
++  FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP reached: $FM_WORKTREE_SLOT_HELD slots held (pools: $pools); $FM_WORKTREE_SLOT_RECLAIMABLE possible reclaim candidates (Treehouse merge proof still required)"
++  return 1
++}
++
++# Can this Treehouse remove a slot safely by default?
++fm_worktree_slot_destroy_supported() {
++  command -v treehouse >/dev/null 2>&1 || return 1
++  treehouse destroy --help 2>/dev/null | grep -q -- '--include-unlanded'
++}
++
++# Print <slot> as its pool's treehouse-state.json spells it. Treehouse matches
++# that spelling exactly, so a pool reached through a symlink (/var vs
++# /private/var) would otherwise be "not managed"; canonical paths stay for
++# comparisons only. Fails when no recorded entry resolves to <slot>.
++fm_worktree_slot_recorded_path() {  # <slot>
++  local slot recorded
++  slot=$(fm_worktree_slots_canonical_dir "$1") || return 1
++  while IFS= read -r recorded; do
++    [ -n "$recorded" ] || continue
++    [ "$(fm_worktree_slots_canonical_dir "$recorded")" = "$slot" ] || continue
++    printf '%s\n' "$recorded"
++    return 0
++  done <<EOF
++$(jq -r '.worktrees[].path | strings' "$(dirname "$(dirname "$slot")")/treehouse-state.json" 2>/dev/null)
++EOF
++  return 1
++}
++
++# Remove one slot through Treehouse's own safe destroy: no --include-* flag, so
++# only a merged, clean, idle, unleased slot goes. Run from the project, which is
++# how Treehouse resolves the pool. FM_WORKTREE_SLOT_DESTROY_OUTPUT keeps
++# Treehouse's own output for the caller's report.
++fm_worktree_slot_destroy() {  # <project-dir> <slot>
++  local project=$1 slot=$2
++  FM_WORKTREE_SLOT_DESTROY_OUTPUT=
++  fm_worktree_slot_destroy_supported || {
++    FM_WORKTREE_SLOT_DESTROY_OUTPUT="this treehouse has no safe-by-default destroy, so nothing was removed"
++    return 1
++  }
++  slot=$(fm_worktree_slot_recorded_path "$slot") || {
++    FM_WORKTREE_SLOT_DESTROY_OUTPUT="no treehouse-state.json entry records $2, so nothing was removed"
++    return 1
++  }
++  FM_WORKTREE_SLOT_DESTROY_OUTPUT=$( ( CDPATH='' cd -- "$project" && treehouse destroy "$slot" --yes ) 2>&1)
++}
++
++# Merge-proved removal of a task's own slot, called by bin/fm-teardown.sh after
++# a successful return while it still holds the slot's project lock. The task's
++# own claim must already be released and no other record may name the slot.
++# Returns 0 when the slot was removed and 1 when it was kept, with
++# FM_WORKTREE_SLOT_KEPT_REASON saying why.
++fm_worktree_slot_remove_returned() {  # <project-dir> <slot> <record-state> <own-meta>
++  local project=$1 slot=$2 record_state=$3 own_meta=$4 rc=0
++  FM_WORKTREE_SLOT_KEPT_REASON=
++  fm_treehouse_pool_slot "$project" "$slot" || {
++    FM_WORKTREE_SLOT_KEPT_REASON="it is not a Treehouse pool slot of $project"
++    return 1
++  }
++  slot=$(fm_worktree_slots_canonical_dir "$slot") || {
++    FM_WORKTREE_SLOT_KEPT_REASON="it is gone"
++    return 1
++  }
++  fm_treehouse_slot_owner_state "$slot" ""
++  if [ "$FM_TREEHOUSE_SLOT_OWNER" != absent ]; then
++    FM_WORKTREE_SLOT_KEPT_REASON="a slot-owner claim${FM_TREEHOUSE_SLOT_OWNER_ID:+ for task $FM_TREEHOUSE_SLOT_OWNER_ID} sits beside it"
++    return 1
++  fi
++  fm_worktree_slot_record_named "$slot" "$record_state" "$own_meta" || rc=$?
++  case "$rc" in
++    0)
++      FM_WORKTREE_SLOT_KEPT_REASON="task $FM_WORKTREE_SLOT_RECORD_ID records it as its $FM_WORKTREE_SLOT_RECORD_FIELD"
++      return 1
++      ;;
++    2)
++      FM_WORKTREE_SLOT_KEPT_REASON="local Firstmate homes cannot be enumerated"
++      return 1
++      ;;
++  esac
++  if ! fm_worktree_slot_destroy "$project" "$slot"; then
++    FM_WORKTREE_SLOT_KEPT_REASON="treehouse kept it: $(printf '%s\n' "$FM_WORKTREE_SLOT_DESTROY_OUTPUT" | grep -v '^[[:space:]]*$' | tail -1)"
++    return 1
++  fi
++}
++
++# Reclaim up to <limit> disposable candidates (0 = all) from the scan already in the
++# FM_WORKTREE_SLOT_* arrays. <held-lock> is a project lock the caller already
++# holds (or empty). Each candidate is re-proved under its own project lock
++# before removal. dry-run calls no Treehouse command and reports candidates,
++# without merge proof; even Treehouse destroy previews write state and fetch.
++# Prints one line per slot considered:
++#   reclaimed: <slot> | candidate (...): <slot> | kept: <slot>: <why>
++# and sets FM_WORKTREE_SLOT_RECLAIMED to the count removed (or previewed).
++fm_worktree_slots_reclaim() {  # <record-state> <held-lock> <apply|dry-run> <limit>
++  local record_state=$1 held=$2 mode=$3 limit=$4 i rc lock slot project took
++  FM_WORKTREE_SLOT_RECLAIMED=0
++  for i in "${!FM_WORKTREE_SLOT_PATHS[@]}"; do
++    [ "$limit" = 0 ] || [ "$FM_WORKTREE_SLOT_RECLAIMED" -lt "$limit" ] || break
++    slot=${FM_WORKTREE_SLOT_PATHS[$i]}
++    project=${FM_WORKTREE_SLOT_PROJECTS[$i]}
++    rc=0
++    fm_worktree_slot_reclaimable "$i" "$record_state" || rc=$?
++    [ "$rc" != 2 ] || return 2
++    if [ "$rc" != 0 ]; then
++      printf 'kept: %s: %s\n' "$slot" "$FM_WORKTREE_SLOT_KEPT_REASON"
++      continue
++    fi
++    if [ "$mode" = dry-run ]; then
++      printf 'candidate (Treehouse merge proof still required): %s\n' "$slot"
++      FM_WORKTREE_SLOT_RECLAIMED=$((FM_WORKTREE_SLOT_RECLAIMED + 1))
++      continue
++    fi
++    lock=$(fm_treehouse_project_lock_path "$project") || {
++      printf 'kept: %s: its project lock cannot be resolved\n' "$slot"
++      continue
++    }
++    took=0
++    if [ "$lock" != "$held" ]; then
++      fm_lock_try_acquire "$lock" || {
++        printf 'kept: %s: another slot allocation or return holds its project lock\n' "$slot"
++        continue
++      }
++      took=1
++    fi
++    # Re-prove under the lock: the scan may be stale by now.
++    rc=0
++    fm_worktree_slot_reclaimable "$i" "$record_state" || rc=$?
++    if [ "$rc" = 0 ] && fm_worktree_slot_destroy "$project" "$slot"; then
++      printf 'reclaimed: %s\n' "$slot"
++      FM_WORKTREE_SLOT_RECLAIMED=$((FM_WORKTREE_SLOT_RECLAIMED + 1))
++    elif [ "$rc" = 0 ]; then
++      printf 'kept: %s: treehouse kept it: %s\n' "$slot" \
++        "$(printf '%s\n' "$FM_WORKTREE_SLOT_DESTROY_OUTPUT" | grep -v '^[[:space:]]*$' | tail -1)"
++    else
++      printf 'kept: %s: %s\n' "$slot" "${FM_WORKTREE_SLOT_KEPT_REASON:-it changed since the scan}"
++    fi
++    [ "$took" = 0 ] || fm_lock_release "$lock" || true
++    [ "$rc" != 2 ] || return 2
++  done
++}
+diff --git a/bin/fm-worktree-slots.sh b/bin/fm-worktree-slots.sh
+new file mode 100755
+index 00000000000..b34754d5889
+--- /dev/null
++++ b/bin/fm-worktree-slots.sh
+@@ -0,0 +1,70 @@
++#!/usr/bin/env bash
++# Inspect and reclaim this home's bounded Treehouse worktree slots.
++# Usage:
++#   fm-worktree-slots.sh room <project-dir>
++#   fm-worktree-slots.sh reclaim [--dry-run]
++#
++# `room` is the side-effect-free room check a spawn or an admission gate calls
++# before allocating a slot for <project-dir>. It prints exactly one line and
++# exits 0 `allow: <reason>` or 1 `refuse: <reason>`; the reason names the cap,
++# the slots held per pool, and how many are possible reclaim candidates. With no
++# config/worktree-slot-cap it always allows.
++# `reclaim` removes every reclaimable slot in this home's pools through
++# Treehouse's own safe destroy, re-proving each under its project lock, and
++# prints one `reclaimed:`, `kept:`, or (with --dry-run) `candidate ...:` line
++# per slot. It runs whether or not a cap is configured, so an operator can
++# preview or clear released copies on demand.
++# bin/fm-worktree-slots-lib.sh owns what counts as a slot, as a reclaim candidate, and
++# as room. Exit 2 is a usage error or an unreadable pool or home set.
++set -u
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
++FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
++STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
++CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
++PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
++export FM_HOME
++
++# shellcheck source=bin/fm-backend.sh
++. "$SCRIPT_DIR/fm-backend.sh"
++# shellcheck source=bin/fm-wake-lib.sh
++. "$SCRIPT_DIR/fm-wake-lib.sh"
++# shellcheck source=bin/fm-worktree-slots-lib.sh
++. "$SCRIPT_DIR/fm-worktree-slots-lib.sh"
++
++usage() {
++  sed -n '2,18{s/^# \{0,1\}//;p;}' "$0" >&2
++  exit 2
++}
++
++case "${1-}" in
++  room)
++    [ "$#" -eq 2 ] || usage
++    if fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$2" "$STATE"; then
++      printf 'allow: %s\n' "$FM_WORKTREE_SLOT_ROOM_REASON"
++      exit 0
++    fi
++    printf 'refuse: %s\n' "$FM_WORKTREE_SLOT_ROOM_REASON"
++    exit 1
++    ;;
++  reclaim)
++    mode=apply
++    case "$#:${2-}" in
++      1:) ;;
++      2:--dry-run) mode=dry-run ;;
++      *) usage ;;
++    esac
++    if ! fm_worktree_slots_scan "$PROJECTS"; then
++      printf 'error: %s\n' "$FM_WORKTREE_SLOTS_ERROR" >&2
++      exit 2
++    fi
++    fm_worktree_slots_reclaim "$STATE" "" "$mode" 0 || {
++      echo "error: local Firstmate homes cannot be enumerated, so no further slot can be proved free" >&2
++      exit 2
++    }
++    exit 0
++    ;;
++  -h|--help) sed -n '2,18{s/^# \{0,1\}//;p;}' "$0"; exit 0 ;;
++  *) usage ;;
++esac
+diff --git a/docs/configuration.md b/docs/configuration.md
+index e1ff28f4f99..2847f3622f3 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -447,6 +447,30 @@ For spawn-capable adapters, the runtime session-provider backend controls where
+ 
+ Treehouse remains the worktree provider for tmux, herdr, zellij, and cmux, since herdr, zellij, and cmux are session providers only; Orca provides both the task worktree and terminal endpoint.
+ 
++### Worktree slot cap (`config/worktree-slot-cap`)
++
++An optional positive decimal integer (1 to 999999999, followed by one newline) bounds the Treehouse slots counted for this home.
++The file must be regular, single-linked, and beneath a non-symlinked `config/` directory.
++Absent means existing allocation and return behavior; malformed configuration refuses new Treehouse spawns.
++This is a disk-copy bound, independent of crew concurrency, and is not inherited by secondmate homes.
++Orca owns its own worktrees and is outside this setting; relaunches and secondmate-home provisioning do not allocate through this gate.
++
++The count covers registered Treehouse pools reached through Git worktrees of the home's `projects/` clones plus the spawning project, deduplicated by slot path.
++It includes every entry in a discovered pool, including reservations; a pool with no surviving Git registration is outside this inventory and needs separate operator reconciliation.
++A new spawn conservatively requires room for one additional slot, even when Treehouse might reuse one.
++At capacity, spawn attempts safe reclamation and recounts; if room cannot be proved, it refuses with the cap and pool counts.
++External Treehouse users and independently configured homes are outside this home's admission lock and can consume shared pools, so this is an admission bound rather than a machine-wide storage quota.
++
++With this setting enabled, teardown also attempts to remove the returned slot after it proves the task's PR merge, or after the existing scout completion gate passes.
++A pushed branch alone does not authorize automatic removal, and forced teardown does not enable it.
++Removal requires Treehouse's safe-by-default destroy capability; an older tool keeps the slot and reports why.
++The existing landed-work checks and ownership guards still apply.
++
++[`bin/fm-worktree-slots.sh`](../bin/fm-worktree-slots.sh) owns the read-only `room` interface and the explicit `reclaim` command; its library owns candidate selection and locking.
++`reclaim --dry-run` makes no changes and lists possible candidates without claiming Treehouse merge proof; actual reclaim delegates the final disposable-worktree decision to Treehouse.
++A candidate can still be kept because its commits are unmerged, its remote is unavailable, or its state changes before removal.
++Regression entry points are `tests/fm-worktree-slots.test.sh` and `tests/fm-teardown.test.sh`.
++
+ ### Backend selection order
+ 
+ New spawns choose the backend in this order:
+diff --git a/tests/fm-spawn-worktree-settle.test.sh b/tests/fm-spawn-worktree-settle.test.sh
+index ab4c5c50756..2d5a87845c3 100755
+--- a/tests/fm-spawn-worktree-settle.test.sh
++++ b/tests/fm-spawn-worktree-settle.test.sh
+@@ -221,6 +221,28 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
+   pass "a pane stuck on the primary checkout fails loudly at the deadline"
+ }
+ 
++test_slot_cap_refuses_before_endpoint_allocation() {
++  local rec id out status
++  id=slot-cap-refusal
++  rec=$(make_settle_case slot-cap "$id" 0)
++  read_settle_record "$rec"
++  printf '1\n' > "$HOME_DIR/config/worktree-slot-cap"
++  # A recorded pool slot fills the cap. Admission must preserve it even when
++  # no process currently inhabits it; no Treehouse command may run here.
++  printf '{"worktrees":[{"path":"%s"}]}\n' "$WT_DIR" > "$(dirname "$(dirname "$WT_DIR")")/treehouse-state.json"
++  printf 'worktree=%s\n' "$WT_DIR" > "$HOME_DIR/state/existing.meta"
++  out=$(run_settle_spawn "$id")
++  status=$?
++  [ "$status" -ne 0 ] || fail "slot cap allowed spawn: $out"
++  assert_contains "$out" 'worktree slot cap 1 reached' 'cap refusal reason'
++  [ ! -e "$COUNTFILE" ] || fail 'refused spawn polled an allocated endpoint'
++  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail 'refused spawn published metadata'
++  [ -d "$WT_DIR" ] || fail 'recorded worktree removed'
++  pass 'slot cap refuses spawn before endpoint allocation and keeps recorded work'
++}
++
++test_slot_cap_refuses_before_endpoint_allocation
++
+ test_single_stale_first_read_is_not_accepted
+ test_already_settled_pane_costs_one_confirm_read
+ test_transient_primary_checkout_is_not_accepted
+diff --git a/tests/fm-teardown.test.sh b/tests/fm-teardown.test.sh
+index 346cd1c9397..00027144ab0 100755
+--- a/tests/fm-teardown.test.sh
++++ b/tests/fm-teardown.test.sh
+@@ -4452,6 +4452,80 @@ test_local_only_fork_remote_allows
+ test_teardown_closes_the_backlog_item_itself
+ test_teardown_manual_backend_leaves_the_backlog_to_the_operator
+ test_local_only_truly_unpushed_refuses
++# Actual teardown entry point, with disposable Git fixtures and a narrow fake
++# of Treehouse's return/destroy interface. Never addresses a developer pool.
++test_merge_proved_slot_removal() {
++  local variant case_dir head rc slot
++  for variant in merged pushed-unmerged absent force scout; do
++    case_dir=$(make_case "slot-remove-$variant")
++    slot="$case_dir/pool/1/project"
++    mkdir -p "$case_dir/pool/1"
++    git -C "$case_dir/project" worktree move "$case_dir/wt" "$slot"
++    ln -s "$slot" "$case_dir/wt"
++    printf '{"worktrees":[{"path":"%s"}]}\n' "$slot" > "$case_dir/pool/treehouse-state.json"
++    write_meta "$case_dir" no-mistakes ship
++    printf '2\n' > "$case_dir/config/worktree-slot-cap"
++    wt_commit_file "$case_dir" feature.txt hello feature
++    head=$(git -C "$slot" rev-parse HEAD)
++    add_gh_pr_merged_for_head "$case_dir" "$head"
++    case "$variant" in
++      pushed-unmerged)
++        add_fork_with_pushed_branch "$case_dir"
++        printf '#!/usr/bin/env bash\nexit 1\n' > "$case_dir/fakebin/gh"
++        ;;
++      absent) rm "$case_dir/config/worktree-slot-cap" ;;
++      scout)
++        write_meta "$case_dir" scout scout
++        mkdir -p "$case_dir/data/task-x1"
++        echo 'Completed investigation.' > "$case_dir/data/task-x1/report.md"
++        FM_HOME="$case_dir" FM_ROOT_OVERRIDE="$ROOT" \
++          "$ROOT/bin/fm-captain-hold.sh" complete task-x1 --none >/dev/null \
++          || fail 'scout fixture completion inventory'
++        ;;
++    esac
++    cat > "$case_dir/fakebin/treehouse" <<'EOF'
++#!/usr/bin/env bash
++set -eu
++if [ "$*" = 'destroy --help' ]; then echo '--include-unlanded'; exit 0; fi
++printf '%s\n' "$*" >> "$FM_SLOT_TEST_LOG"
++case "$1" in
++  return)
++    git -C "$3" reset --hard -q main
++    git -C "$3" clean -fdq
++    ;;
++  destroy)
++    [ "$#" = 3 ] && [ "$3" = --yes ] || exit 99
++    git -C "$FM_SLOT_TEST_PROJECT" worktree remove "$2"
++    ;;
++  *) exit 99 ;;
++esac
++EOF
++    chmod +x "$case_dir/fakebin/treehouse"
++    rc=0
++    if [ "$variant" = force ]; then
++      FM_HOME="$case_dir" FM_SLOT_TEST_LOG="$case_dir/treehouse.log" FM_SLOT_TEST_PROJECT="$case_dir/project" \
++        run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
++    else
++      FM_HOME="$case_dir" FM_SLOT_TEST_LOG="$case_dir/treehouse.log" FM_SLOT_TEST_PROJECT="$case_dir/project" \
++        run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
++    fi
++    expect_code 0 "$rc" "slot removal $variant: $(cat "$case_dir/stderr")"
++    case "$variant" in
++      merged|scout)
++        [ ! -d "$slot" ] || fail "$variant slot not removed: $(cat "$case_dir/stderr")"
++        assert_grep 'destroy ' "$case_dir/treehouse.log" "$variant did not call safe destroy"
++        ;;
++      *)
++        [ -d "$slot" ] || fail "$variant slot removed without eligible merge proof"
++        ! grep -q '^destroy ' "$case_dir/treehouse.log" || fail "$variant called destroy"
++        ;;
++    esac
++  done
++  pass 'slot removal requires opted-in merge proof or completed scout; pushed-only and force keep slots'
++}
++
++test_merge_proved_slot_removal
++
+ test_local_only_merged_to_local_main_allows
+ test_no_mistakes_origin_remote_allows
+ test_no_mistakes_truly_unpushed_refuses
+diff --git a/tests/fm-worktree-slots.test.sh b/tests/fm-worktree-slots.test.sh
+new file mode 100755
+index 00000000000..676910c8edd
+--- /dev/null
++++ b/tests/fm-worktree-slots.test.sh
+@@ -0,0 +1,149 @@
++#!/usr/bin/env bash
++# Bounded pool admission, read-only inspection, and safe-reclaim refusal paths.
++set -eu
++# shellcheck source=tests/lib.sh
++. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
++# shellcheck source=bin/fm-worktree-slots-lib.sh
++. "$ROOT/bin/fm-worktree-slots-lib.sh"
++TMP_ROOT=$(fm_test_tmproot fm-worktree-slots)
++fm_git_identity fmtest fmtest@example.invalid
++
++make_case() {
++  CASE="$TMP_ROOT/$1"
++  export FM_HOME="$CASE/home"
++  mkdir -p "$FM_HOME"/{projects,config,state,data} "$CASE/bin" "$CASE/real-pool/1"
++  # POOL_VIA=link reaches the pool through a symlink (as /var -> /private/var
++  # does), so Treehouse records a spelling that differs from the resolved path.
++  if [ "${POOL_VIA:-}" = link ]; then ln -s real-pool "$CASE/pool"; else mv "$CASE/real-pool" "$CASE/pool"; fi
++  PROJECT="$FM_HOME/projects/project"
++  SLOT="$CASE/pool/1/project"
++  fm_git_worktree "$PROJECT" "$SLOT" fixture-task
++  printf '{"worktrees":[{"path":"%s"}]}\n' "$SLOT" > "$CASE/pool/treehouse-state.json"
++  export SLOT_TEST_LOG="$CASE/treehouse.log"
++  cat > "$CASE/bin/treehouse" <<'EOF'
++#!/usr/bin/env bash
++set -eu
++if [ "$*" = 'destroy --help' ]; then
++  [ "${SLOT_TEST_OLD:-0}" = 0 ] && echo '--include-unlanded'
++  exit 0
++fi
++printf '%s\n' "$*" >> "$SLOT_TEST_LOG"
++[ "$1" = destroy ] && [ "$#" = 3 ] && [ "$3" = --yes ] || exit 99
++pool=$(dirname "$(dirname "$2")")
++# Like real Treehouse, match only the path exactly as recorded.
++jq -e --arg slot "$2" 'any(.worktrees[]; .path == $slot)' "$pool/treehouse-state.json" >/dev/null || {
++  echo "$2 is not managed by treehouse"; exit 1; }
++# This fake models the safe tool boundary; the subject must never bypass it.
++[ -z "$(git -C "$2" status --porcelain)" ] || exit 1
++git -C "$2" merge-base --is-ancestor HEAD main || exit 1
++project=$(git -C "$2" rev-parse --path-format=absolute --git-common-dir)
++project=${project%/.git}
++git -C "$project" worktree remove "$2"
++jq --arg slot "$2" '.worktrees |= map(select(.path != $slot))' "$pool/treehouse-state.json" > "$pool/next"
++mv "$pool/next" "$pool/treehouse-state.json"
++EOF
++  cat > "$CASE/bin/lsof" <<'EOF'
++#!/usr/bin/env bash
++[ "$*" = '-a -d cwd -Fpn' ] || exit 99
++[ -z "${SLOT_TEST_LSOF_FAIL:-}" ] || exit 2
++printf 'p1\nfcwd\nn/\n'
++if [ -n "${SLOT_TEST_LIVE:-}" ]; then printf 'p12345\nfcwd\nn%s\n' "$SLOT_TEST_LIVE"; fi
++EOF
++  chmod +x "$CASE/bin/"*
++  export PATH="$CASE/bin:$ORIGINAL_PATH"
++}
++ORIGINAL_PATH=$PATH
++room() { fm_worktree_slot_room "$FM_HOME/config" "$FM_HOME/projects" "$PROJECT" "$FM_HOME/state"; }
++reclaim() { fm_worktree_slots_reclaim "$FM_HOME/state" '' apply 0; }
++refuses() { if room; then fail "$1: unexpectedly allowed"; fi; }
++
++make_case absent
++room || fail 'absent cap should allow'
++[ ! -e "$SLOT_TEST_LOG" ] || fail 'absent cap called treehouse'
++for value in 0 -1 01 abc 99999999999999999999; do
++  printf '%s\n' "$value" > "$FM_HOME/config/worktree-slot-cap"
++  refuses "invalid cap $value"
++done
++printf '2' > "$FM_HOME/config/worktree-slot-cap"
++refuses 'cap without newline'
++printf '2\n' > "$FM_HOME/config/worktree-slot-cap"
++room || fail "under cap: $FM_WORKTREE_SLOT_ROOM_REASON"
++[ "$FM_WORKTREE_SLOT_HELD" = 1 ] || fail 'did not count slot'
++# Reading a real pool must not even run a Treehouse status/preview command.
++cp "$CASE/pool/treehouse-state.json" "$CASE/before"
++printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
++refuses 'at cap'
++[ "$FM_WORKTREE_SLOT_RECLAIMABLE" = 1 ] || fail 'idle candidate not found'
++[ ! -e "$SLOT_TEST_LOG" ] || fail 'room check invoked mutating Treehouse inspection'
++cmp -s "$CASE/before" "$CASE/pool/treehouse-state.json" || fail 'room changed pool'
++assert_contains "$FM_WORKTREE_SLOT_ROOM_REASON" 'pools: pool 1' 'refusal must name pools'
++reclaim
++[ ! -d "$SLOT" ] || fail 'safe slot not reclaimed'
++room || fail 'reclaim did not free room'
++pass 'absent cap, malformed config, read-only room, bounded safe reclaim'
++
++for risk in dirty unlanded live lsof-fails claimed recorded leased; do
++  make_case "$risk"
++  printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
++  case "$risk" in
++    dirty) echo work > "$SLOT/untracked" ;;
++    unlanded) echo work > "$SLOT/file"; git -C "$SLOT" add file; git -C "$SLOT" commit -qm work ;;
++    live) mkdir -p "$SLOT/sub"; SLOT_TEST_LIVE=$(cd "$SLOT/sub" && pwd -P); export SLOT_TEST_LIVE ;;
++    lsof-fails) export SLOT_TEST_LSOF_FAIL=1 ;;
++    claimed) printf 'task=active\nhome=%s\n' "$FM_HOME" > "$CASE/pool/1/.fm-slot-owner" ;;
++    recorded) printf 'worktree=%s\n' "$SLOT" > "$FM_HOME/state/active.meta" ;;
++    leased) jq '.worktrees[0].leased=true' "$CASE/pool/treehouse-state.json" > "$CASE/next"; mv "$CASE/next" "$CASE/pool/treehouse-state.json" ;;
++  esac
++  refuses "$risk"
++  reclaim
++  [ -d "$SLOT" ] || fail "$risk slot removed"
++  refuses "$risk remains at cap"
++  [ "$risk" = unlanded ] || [ ! -e "$SLOT_TEST_LOG" ] || fail "$risk attempted destruction"
++  unset SLOT_TEST_LIVE SLOT_TEST_LSOF_FAIL
++  pass "$risk slot retained and admission refused"
++done
++
++make_case old-tool
++printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
++refuses 'old tool'
++export SLOT_TEST_OLD=1
++reclaim
++unset SLOT_TEST_OLD
++[ -d "$SLOT" ] && [ ! -e "$SLOT_TEST_LOG" ] || fail 'unsafe old destroy used'
++pass 'old Treehouse cannot destroy slots'
++
++make_case contended
++printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
++refuses 'contended'
++lock=$(fm_treehouse_project_lock_path "$PROJECT")
++fm_lock_try_acquire "$lock" || fail 'fixture lock'
++bash "$ROOT/bin/fm-worktree-slots.sh" reclaim
++fm_lock_release "$lock"
++[ -d "$SLOT" ] || fail 'removed under contended lock'
++pass 'contended project lock keeps slot'
++
++make_case corrupt
++printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
++printf '{broken' > "$CASE/pool/treehouse-state.json"
++refuses 'unreadable pool'
++assert_contains "$FM_WORKTREE_SLOT_ROOM_REASON" 'cannot read Treehouse pool' 'corrupt pool reason'
++pass 'unreadable pool fails closed'
++
++for risk in none dirty; do
++  POOL_VIA="link" make_case "symlinked-$risk"
++  [ "$(fm_worktree_slots_canonical_dir "$SLOT")" != "$SLOT" ] || fail 'fixture pool is not reached through a symlink'
++  printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
++  [ "$risk" = none ] || echo work > "$SLOT/untracked"
++  refuses "symlinked pool $risk"
++  reclaim
++  if [ "$risk" = none ]; then
++    [ ! -d "$SLOT" ] || fail 'symlinked pool: reclaimable slot kept'
++    grep -qxF "destroy $SLOT --yes" "$SLOT_TEST_LOG" || fail 'treehouse not given the recorded slot path'
++    room || fail 'symlinked pool: reclaim did not free room'
++  else
++    [ -d "$SLOT" ] || fail 'symlinked pool: dirty slot removed'
++    [ ! -e "$SLOT_TEST_LOG" ] || fail 'symlinked pool: dirty slot destruction attempted'
++    refuses 'symlinked pool dirty remains at cap'
++  fi
++done
++pass 'symlinked pool root: recorded spelling reclaims, protected slot kept'
