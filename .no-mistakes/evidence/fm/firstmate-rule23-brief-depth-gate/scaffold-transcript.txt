@@ -1,0 +1,109 @@
+=== [notthis] lint=on
+## Captain's intent
+Research pstack and return the top 5 ideas we can borrow.
+## Firstmate spec
+Write the requested report.
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+--> rc=1 brief_written=no
+
+=== [dothis] lint=on
+## Captain's intent
+Complete coverage: inventory every skill and script, adopt, adapt or skip each, and list the backlog. Deliver a three-line chat headline and the full depth in a navigable page.
+## Firstmate spec
+Write the requested report.
+pass: brief/PR shape; release evidence and approvals still require review
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.3Bmp0u/data/dothis/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+--> rc=0 brief_written=yes
+
+=== [exception] lint=on
+## Captain's intent
+Research the market. Zac asked for the top 3 competitors only.
+## Firstmate spec
+Write the requested report.
+pass: brief/PR shape; release evidence and approvals still require review
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.3Bmp0u/data/exception/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+--> rc=0 brief_written=yes
+
+=== [audit] lint=on
+## Captain's intent
+Audit our rules and list the top ten weakest.
+## Firstmate spec
+Write the requested report.
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+--> rc=1 brief_written=no
+
+=== [studybest] lint=on
+## Captain's intent
+Study the market and list the five best options.
+## Firstmate spec
+Write the requested report.
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+--> rc=1 brief_written=no
+
+=== [fewex] lint=on
+## Captain's intent
+Research the API and include a few examples of each endpoint.
+## Firstmate spec
+Write the requested report.
+pass: brief/PR shape; release evidence and approvals still require review
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.3Bmp0u/data/fewex/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+--> rc=0 brief_written=yes
+
+=== [fixtask] lint=on
+## Captain's intent
+Fix the top 3 bugs from the audit report.
+## Firstmate spec
+Write the requested report.
+pass: brief/PR shape; release evidence and approvals still require review
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.3Bmp0u/data/fixtask/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+--> rc=0 brief_written=yes
+
+=== [specfix] lint=on
+## Captain's intent
+Research pstack and return the top 5 ideas we can borrow.
+## Firstmate spec
+Write the report; record any command errors you hit.
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+--> rc=1 brief_written=no
+
+=== [obsolete] lint=on
+## Captain's intent
+Research pstack and return the top 5 ideas.
+Zac asked about the top 5 last week but now wants every item.
+## Firstmate spec
+Write the requested report.
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+--> rc=1 brief_written=no
+
+=== [negated] lint=on
+## Captain's intent
+Research this. Zac wants depth, not a top 5.
+## Firstmate spec
+Write the requested report.
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+--> rc=1 brief_written=no
+
+=== [speccap] lint=on
+## Captain's intent
+Understand the tool.
+## Firstmate spec
+Research it and return the top 5 ideas.
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+--> rc=1 brief_written=no
+
+=== [specauth] lint=on
+## Captain's intent
+Research the tool and return the top 3.
+## Firstmate spec
+Zac asked for the top 3.
+refuse: research-depth; fix: cover every item; say "complete coverage" and name the deliverable page (three-line chat headline plus the full page), or quote the explicit cap request in Captain's intent ("Zac asked for the top 5")
+--> rc=1 brief_written=no
+
+=== [offmode] lint=off
+## Captain's intent
+Research pstack and return the top 5 ideas we can borrow.
+## Firstmate spec
+Write the requested report.
+scaffolded: /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.3Bmp0u/data/offmode/brief.md (scout; replace {TASK} and {FIRSTMATE_SPEC})
+--> rc=0 brief_written=yes
+
