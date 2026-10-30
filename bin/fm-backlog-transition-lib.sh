@@ -637,9 +637,6 @@ fm_backlog_canonical_existing() {
 
 fm_backlog_record_parent_authorized() {  # <path> <label> <root> [parent-only]
   local path=$1 label=$2 root=$3 parent_only=${4:-} parent base parent_resolved expected_path
-  # FM_HOME is supplied by the caller; same-named assignments in command
-  # substitutions cannot replace this shell's environment.
-  # shellcheck disable=SC2031
   local path_resolved root_resolved root_prefix home_resolved final_matches=1 configured_home=${FM_HOME:-}
   parent=${path%/*}
   [ "$parent" != "$path" ] || parent=.
