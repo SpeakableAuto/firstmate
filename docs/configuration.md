@@ -388,8 +388,9 @@ When a spawn is interrupted after launch delivery began, its exit path re-reads 
 
 ### Finish-first admission
 
-Fresh ship and scout spawns check the backlog WIP limit through [`bin/fm-finish-first.sh`](../bin/fm-finish-first.sh) before allocating their endpoint or worktree.
+Fresh ship and scout spawns check finish-first admission through [`bin/fm-finish-first.sh`](../bin/fm-finish-first.sh) before allocating their endpoint or worktree.
 Within each impact level the existing placement queue orders carried-over resumptions first, then dated queued work oldest first, then undated work in backlog order.
+This is the rule 20 ordering contract, not a same-priority veto: below the WIP bound, another queued item at that priority may still start while an item remains In flight.
 Each request is assessed independently; an older held, blocked or unplaceable job does not veto other runnable work.
 An In-flight item may resume without becoming a new start.
 Captain obligations, public follow-ups, persistent secondmates and parent program commissions are not worker jobs in this check.
@@ -410,6 +411,7 @@ This setting is independent of the disk-copy bound in `config/worktree-slot-cap`
 Teardown emits a finished event only after verified pull request merge, a recorded local landing still containing the exact task head, or a scout report whose completion gate passed.
 The local merge command records `local_landed_head` in task metadata only when it advances the default branch; old local landings without a receipt remain closed-not-landed.
 Another Done transition, including a direct `done --pr`, is closed-not-landed.
+A job closed and then proven landed on the same AEST day appears only as finished, not also as closed-not-landed.
 Stored timestamps remain UTC.
 [`bin/fm-flow-history.py`](../bin/fm-flow-history.py) owns journal schema, recording boundaries and unknown-history behavior; [`tests/fm-flow-report.test.sh`](../tests/fm-flow-report.test.sh) exercises real wrapper and lifecycle transitions.
 Manual edits and direct calls to `tasks-axi` are outside this journal, so this is transition evidence rather than a reconstruction of all historical work.
