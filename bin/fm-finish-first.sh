@@ -20,13 +20,22 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backlog-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+if ! flow=$(fm_exec_timed 15 15 bash "$SCRIPT_DIR/fm-flow-report.sh"); then
+  echo 'finish-first: cannot read flow history; repair it before dispatch' >&2
+  exit 2
+fi
+stop_starting=$(printf '%s\n' "$flow" | sed -n 's/^stop_starting: //p')
+case "$stop_starting" in
+  yes|no|unknown) ;;
+  *) echo 'finish-first: flow report returned no valid stop-starting signal' >&2; exit 2 ;;
+esac
 backend=$(fm_tasks_axi_backend_resolve "${DATA%/*}") || exit 2
 if [ "$backend" = markdown ]; then
-  backlog_json "$DATA/backlog.md" | python3 "$SCRIPT_DIR/fm-finish-first.py" "$1" "$CONFIG"
+  backlog_json "$DATA/backlog.md" | python3 "$SCRIPT_DIR/fm-finish-first.py" "$1" "$CONFIG" "$stop_starting"
 else
   # Native adapters expose their own holds/dependencies and numeric priority.
-  # shellcheck source=bin/fm-timeout-lib.sh
-  . "$SCRIPT_DIR/fm-timeout-lib.sh"
   fm_exec_timed 15 15 bash "$SCRIPT_DIR/fm-tasks-axi.sh" list --fields blocked,held,created,priority \
-    | python3 "$SCRIPT_DIR/fm-finish-first.py" "$1" "$CONFIG" --native
+    | python3 "$SCRIPT_DIR/fm-finish-first.py" "$1" "$CONFIG" "$stop_starting" --native
 fi

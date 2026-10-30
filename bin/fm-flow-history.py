@@ -182,7 +182,7 @@ def read_history(path, grace=0):
     return rows[0]['day'] + dt.timedelta(days=1), events, unknown
 
 
-def report(path, day, held):
+def report(path, day):
     try:
         coverage, events, unknown = read_history(path)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -195,16 +195,19 @@ def report(path, day, held):
     daily = {}
     for row in events:
         items = daily.setdefault(row['day'], {
-            'start': set(), 'finished': set(), 'closed-not-landed': set(), 'reopen': set(), 'eligible': set()
+            'start': set(), 'finished': set(), 'closed-not-landed': set(), 'worker-start': set()
         })
         if row['action'] == 'done':
-            key = 'finished' if row['landing'] in ('merge', 'local', 'report') else 'closed-not-landed'
-            items[key].add(row['task_id'])
-        else:
-            items[row['action']].add(row['task_id'])
-            if row['action'] == 'start' and row.get('kind', 'task') not in ('program', 'captain', 'secondmate', 'public-followup') and row['task_id'] not in held:
-                items['eligible'].add(row['task_id'])
-    empty = {'start': set(), 'finished': set(), 'closed-not-landed': set(), 'reopen': set(), 'eligible': set()}
+            if row['landing'] in ('merge', 'local', 'report'):
+                items['finished'].add(row['task_id'])
+                items['closed-not-landed'].discard(row['task_id'])
+            elif row['task_id'] not in items['finished']:
+                items['closed-not-landed'].add(row['task_id'])
+        elif row['action'] == 'start':
+            items['start'].add(row['task_id'])
+            if row.get('kind', 'task') not in ('program', 'captain', 'secondmate', 'public-followup'):
+                items['worker-start'].add(row['task_id'])
+    empty = {'start': set(), 'finished': set(), 'closed-not-landed': set(), 'worker-start': set()}
     def counts(value):
         return daily.get(value, empty)
     today = dt.datetime.now(dt.timezone.utc).astimezone(AEST).date()
@@ -213,17 +216,17 @@ def report(path, day, held):
     else:
         items = counts(day)
         print(f"{day} finished={len(items['finished'])} closed-not-landed={len(items['closed-not-landed'])} "
-              f"started={len(items['start'])} reopened={len(items['reopen'])}")
+              f"started={len(items['start'])}")
         for key, label in (('finished', 'finished'), ('closed-not-landed', 'closed-not-landed'),
-                           ('start', 'started'), ('reopen', 'reopened')):
+                           ('start', 'started')):
             print(f"  {label}: {', '.join(sorted(items[key])) or '-'}")
     previous = day - dt.timedelta(days=1)
     if previous < coverage or day >= today or {previous, day} & unknown:
         signal = 'unknown'
     else:
-        signal = 'yes' if all(len(counts(d)['eligible']) > len(counts(d)['finished'])
+        signal = 'yes' if all(len(counts(d)['worker-start']) > len(counts(d)['finished'])
                               for d in (previous, day)) else 'no'
-    print('signal_basis: worker starts excluding currently held or blocked jobs; proven deliveries')
+    print('signal_basis: recorded worker starts; proven deliveries')
     print(f'stop_starting: {signal}')
 
 
@@ -243,7 +246,6 @@ def main():
     end.add_argument('result', type=int)
     commands.add_parser('health')
     show = commands.add_parser('report')
-    show.add_argument('--held-json', default='[]')
     show.add_argument('--date', type=dt.date.fromisoformat,
                       help='completed AEST date; default yesterday')
     args = parser.parse_args()
@@ -260,7 +262,7 @@ def main():
                 return 1
         else:
             day = args.date or dt.datetime.now(dt.timezone.utc).astimezone(AEST).date() - dt.timedelta(days=1)
-            report(path, day, set(json.loads(args.held_json)))
+            report(path, day)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f'flow-history: {exc}', file=sys.stderr)
         return 2

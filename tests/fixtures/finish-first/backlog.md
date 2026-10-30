@@ -7,6 +7,7 @@
 ## Queued
 - [ ] oldest - Earlier queued investigation (repo: demo) (kind: scout) (priority: 2) (since 2026-10-27)
 - [ ] candidate - New work (repo: demo) (kind: ship) (priority: 2) (since 2026-10-30)
+- [ ] elevated - Priority one work (repo: demo) (kind: ship) (priority: 1) (since 2026-10-30)
 - [ ] urgent - Restore service (repo: demo) (kind: ship) (priority: 0) (since 2026-10-30)
 
 ## Done

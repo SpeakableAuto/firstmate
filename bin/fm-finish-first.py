@@ -66,9 +66,11 @@ def read_rows(text):
     return {'present': True, 'records': [dict(r, structured=True, impact='P'+str(r['priority']), hold_reason=r['held']=='yes', unresolved_blocker_ids=['blocked'] if r['blocked']=='yes' else []) for r in rows]}
 
 
-def admit(backlog, task_id, config_dir):
+def admit(backlog, task_id, config_dir, stop_starting):
     if not backlog.get('present'):
         raise ValueError('backlog missing')
+    if stop_starting not in ('yes', 'no', 'unknown'):
+        raise ValueError('invalid stop-starting signal')
     rows = [row for row in backlog['records'] if row.get('structured')]
     target = next((row for row in rows if row['id'] == task_id), None)
     if target is None:
@@ -100,6 +102,14 @@ def admit(backlog, task_id, config_dir):
             action = ('finish ' + available[0]['id'] + ' first') if available else 'all open work is held or blocked'
             print(f'finish-first: WIP {len(inflight)}/{2 * cap}; {action}')
             return 1
+    finishable = [r for r in rows if r['state'] == 'in_flight'
+                  and r['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')
+                  and not r.get('hold_reason') and not r.get('unresolved_blocker_ids')]
+    if stop_starting == 'yes' and finishable:
+        first = min(finishable, key=lambda row: int(row['impact'][1:]))
+        if int(target['impact'][1:]) >= int(first['impact'][1:]):
+            print(f"finish-first: two-day stop; finish {first['id']} first ({first['impact']}, in_flight)")
+            return 1
     print(f'finish-first: start allowed for {task_id}')
     return 0
 
@@ -107,7 +117,7 @@ def admit(backlog, task_id, config_dir):
 if __name__ == '__main__':
     try:
         backlog = read_rows(sys.stdin.read()) if '--native' in sys.argv else json.load(sys.stdin)
-        sys.exit(admit(backlog, sys.argv[1], pathlib.Path(sys.argv[2])))
+        sys.exit(admit(backlog, sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3]))
     except (ValueError, OSError, KeyError, TypeError) as exc:
         print(f'finish-first: {exc}', file=sys.stderr)
         sys.exit(2)
