@@ -224,3 +224,186 @@ wedge_alarm_notify() {  # <summary> <marker>
   done
   return 0
 }
+
+# --- urgent captain escalation ----------------------------------------------
+# The wedge alarm above is local and fires for every supervision failure. The
+# urgent path below reaches the captain away from the machine, so it accepts
+# only conditions that block all priority progress and that firstmate cannot
+# repair itself, never routine updates:
+#   supervisor-down    the supervisor still makes no progress after a restart
+#                      attempt, or the restart could not be proven
+#   carve-out-blocked  a captain-only decision is blocking every priority task
+#   machine-down       a fleet machine stayed unreachable
+#   test               the explicit setup test message only
+#
+# Config: config/urgent-alert (local, gitignored), first non-empty,
+# non-comment line: a Hermes delivery target such as `telegram` (that
+# platform's home channel), or `off`. FM_URGENT_ALERT_TARGET overrides the
+# file. An absent config disables delivery and records the attempt, because
+# this channel leaves the machine and must be opted into.
+#
+# Delivery writes the plain message to a private file and runs
+# `hermes send --to <target> --json --file <file>`; Hermes owns the platform
+# login, so firstmate never reads it. FM_HERMES_BIN overrides the binary.
+# FM_URGENT_ALERT_EXEC, when set, REPLACES the sender for tests: it runs with
+# the target as $1 and the message on stdin, and prints Hermes-shaped JSON
+# ({"success":true,"message_id":"..."} or {"error":"..."}).
+#
+# Rate limits, checked under one lock before any send:
+#   - at most one delivered message per condition per
+#     FM_URGENT_ALERT_CONDITION_SECS (default 21600, six hours);
+#   - the same condition and key are not re-sent within
+#     FM_URGENT_ALERT_DEDUPE_SECS (default 86400);
+#   - at most FM_URGENT_ALERT_DAILY_CAP (default 4) delivered messages in any
+#     rolling 24 hours, across all conditions;
+#   - a failed delivery may retry the same condition after
+#     FM_URGENT_ALERT_RETRY_SECS (default 900).
+# Every attempt appends one JSON line to state/urgent-alert/sent.jsonl with its
+# time, condition, key, result, reason, message hash and, when delivered, the
+# platform message id. Message text and platform chat ids are never logged.
+
+URGENT_ALERT_CONDITIONS='supervisor-down carve-out-blocked machine-down test'
+
+fm_urgent_alert_condition_ok() {  # <condition>
+  case " $URGENT_ALERT_CONDITIONS " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+fm_urgent_alert_target() {
+  local cfg line
+  if [ -n "${FM_URGENT_ALERT_TARGET:-}" ]; then
+    printf '%s\n' "$FM_URGENT_ALERT_TARGET"
+    return 0
+  fi
+  cfg="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/urgent-alert"
+  [ -f "$cfg" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -n "$line" ] || continue
+    case "$line" in '#'*) continue ;; esac
+    printf '%s\n' "$line"
+    return 0
+  done < "$cfg"
+}
+
+fm_urgent_alert_int() {  # <value> <default>
+  case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac
+}
+
+fm_urgent_alert_record() {  # <log> <now> <condition> <key> <result> <reason> <sha> [message-id]
+  jq -cn --argjson at "$2" --arg condition "$3" --arg key "$4" --arg result "$5" \
+    --arg reason "$6" --arg sha "$7" --arg id "${8:-}" \
+    '{at:$at,condition:$condition,key:$key,result:$result,reason:$reason,message_sha:$sha}
+     + (if $id == "" then {} else {message_id:$id} end)' >> "$1"
+}
+
+# The bounded runner starts a background job, which does not reliably inherit
+# a pipe on stdin, so the message travels through a private file instead.
+fm_urgent_alert_deliver() {  # <target> <message-file>  -> prints Hermes JSON
+  local target=$1 file=$2 hermes
+  if [ -n "${FM_URGENT_ALERT_EXEC:-}" ]; then
+    # shellcheck disable=SC2016 # Positional parameters expand in the child.
+    wedge_alarm_run_bounded urgent bash -c 'exec "$1" "$2" < "$3"' fm-urgent-alert \
+      "$FM_URGENT_ALERT_EXEC" "$target" "$file"
+    return
+  fi
+  hermes=${FM_HERMES_BIN:-}
+  [ -n "$hermes" ] || hermes=$(command -v hermes 2>/dev/null) || hermes=
+  [ -n "$hermes" ] || [ ! -x "$HOME/.local/bin/hermes" ] || hermes="$HOME/.local/bin/hermes"
+  [ -n "$hermes" ] || return 127
+  wedge_alarm_run_bounded urgent "$hermes" send --to "$target" --json --file "$file"
+}
+
+fm_urgent_alert_mtime() {  # <path>
+  /usr/bin/stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+}
+
+# Record and print one fm_urgent_alert result; FM_URGENT_ALERT_RESULT lets a
+# caller read it without a subshell that would lose FM_URGENT_ALERT_MESSAGE_ID.
+fm_urgent_alert_result() {
+  FM_URGENT_ALERT_RESULT=$1
+  printf '%s\n' "$1"
+}
+
+# fm_urgent_alert <condition> <key> <message>
+# Prints one result: sent, skipped:<reason>, or failed:<reason>. Returns 0 for
+# sent or a rate-limited skip, 1 for an unconfigured or failed delivery, 2 for
+# a condition outside the urgent list or an empty key or message. Also sets
+# FM_URGENT_ALERT_RESULT and, when sent, FM_URGENT_ALERT_MESSAGE_ID.
+fm_urgent_alert() {
+  local condition=$1 key=${2:-} message=${3:-} dir log lock target now sha out id rc reason
+  local cond_secs dedupe_secs cap retry_secs held verdict
+  FM_URGENT_ALERT_MESSAGE_ID=
+  fm_urgent_alert_condition_ok "$condition" || { fm_urgent_alert_result 'failed:unknown-condition'; return 2; }
+  [ -n "$key" ] && [ -n "$message" ] || { fm_urgent_alert_result 'failed:empty'; return 2; }
+  dir="${FM_STATE_OVERRIDE:-$FM_HOME/state}/urgent-alert"
+  log="$dir/sent.jsonl"
+  lock="$dir/lock"
+  mkdir -p "$dir" || { fm_urgent_alert_result 'failed:state'; return 1; }
+  now=$(date +%s)
+  sha=$(printf '%s' "$message" | shasum -a 256 | awk '{print $1}')
+  cond_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_CONDITION_SECS:-}" 21600)
+  dedupe_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_DEDUPE_SECS:-}" 86400)
+  cap=$(fm_urgent_alert_int "${FM_URGENT_ALERT_DAILY_CAP:-}" 4)
+  retry_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_RETRY_SECS:-}" 900)
+  # A lock left by a killed sender is reclaimed after two minutes; a live one
+  # means another sender is mid-delivery, so this attempt stands down.
+  if ! mkdir "$lock" 2>/dev/null; then
+    held=$(fm_urgent_alert_mtime "$lock") || held=$now
+    if [ "$((now - held))" -lt 120 ] || ! rm -rf "$lock" || ! mkdir "$lock" 2>/dev/null; then
+      fm_urgent_alert_result 'skipped:busy'
+      return 0
+    fi
+  fi
+  [ -f "$log" ] || : > "$log"
+  reason=
+  verdict=$(jq -rs --argjson now "$now" --arg c "$condition" --arg k "$key" \
+    --argjson cs "$cond_secs" --argjson ds "$dedupe_secs" --argjson rs "$retry_secs" '
+      [ .[] | select(type == "object") ] as $r
+      | if any($r[]; .result == "sent" and .condition == $c and .key == $k and $now - .at < $ds) then "duplicate"
+        elif any($r[]; .result == "sent" and .condition == $c and $now - .at < $cs) then "condition-rate-limit"
+        elif any($r[]; .result == "failed" and .condition == $c and $now - .at < $rs) then "retry-backoff"
+        else [$r[] | select(.result == "sent" and $now - .at < 86400)] | length | tostring end' "$log" 2>/dev/null) \
+    || verdict=corrupt-log
+  case "$verdict" in
+    duplicate|condition-rate-limit|retry-backoff|corrupt-log) reason=$verdict ;;
+    ''|*[!0-9]*) reason='corrupt-log' ;;
+    *) [ "$verdict" -lt "$cap" ] || reason='daily-cap' ;;
+  esac
+  if [ -n "$reason" ]; then
+    fm_urgent_alert_record "$log" "$now" "$condition" "$key" skipped "$reason" "$sha"
+    rm -rf "$lock"
+    fm_urgent_alert_result "skipped:$reason"
+    return 0
+  fi
+  target=$(fm_urgent_alert_target)
+  case "$target" in
+    '') reason='not-configured' ;;
+    off) reason=off ;;
+  esac
+  if [ -z "$reason" ]; then
+    ( umask 077; printf '%s\n' "$message" > "$lock/message" )
+    if out=$(fm_urgent_alert_deliver "$target" "$lock/message" 2>/dev/null); then rc=0; else rc=$?; fi
+    id=$(printf '%s' "$out" | jq -r 'select(type == "object" and .success == true and .error == null)
+      | .message_id // empty | tostring' 2>/dev/null) || id=
+    if [ "$rc" -eq 0 ] && [ -n "$id" ]; then
+      fm_urgent_alert_record "$log" "$now" "$condition" "$key" sent '' "$sha" "$id"
+      rm -rf "$lock"
+      # shellcheck disable=SC2034 # Read by callers after a send.
+      FM_URGENT_ALERT_MESSAGE_ID=$id
+      fm_urgent_alert_result 'sent'
+      return 0
+    fi
+    case "$rc" in
+      0) reason='no-message-id' ;;
+      124) reason='delivery-timeout' ;;
+      127) reason='hermes-not-found' ;;
+      *) reason='delivery-failed' ;;
+    esac
+  fi
+  fm_urgent_alert_record "$log" "$now" "$condition" "$key" failed "$reason" "$sha"
+  rm -rf "$lock"
+  fm_urgent_alert_result "failed:$reason"
+  return 1
+}

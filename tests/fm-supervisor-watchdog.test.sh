@@ -20,6 +20,8 @@ curl() { printf '%s\n' probe >> "$DIR/probes"; printf '%s' "$HTTP_CODE"; return 
 fm_wake_append() { printf '%s\n' "$*" >> "$DIR/alerts"; }
 fm_wake_branch_grant_live() { return 1; }
 wedge_alarm_notify() { printf '%s\n' "$1" >> "$DIR/notifications"; }
+# Stall detection is off unless a case puts work under way.
+watchdog_under_way() { [ "${UNDER_WAY:-0}" = 1 ]; }
 watchdog_send() {
   SENT=$((SENT+1))
   [ "$SEND_FAIL" = 0 ] || return 1
@@ -360,3 +362,196 @@ watchdog_send() {
 }
 watchdog_tick; TICK=1011; watchdog_tick
 check "$ENTERED" 0 'wrapped ring with one extra character is never submitted'
+
+# Claude's footer row below the prompt's closing rule rotates hints (seen live
+# on 2.1.295); a rotating hint is not a semantic change of a stable error.
+reset_case
+rm -f "$FM_WAKE_QUEUE" "$DIR/queue-alert" "$DIR/queue-nudge.json"
+watchdog_send() { SENT=$((SENT+1)); PANE="API Error: ENOTFOUND"$'\n❯ '"$1"; }
+watchdog_probe() { return 0; }
+PANE="$ERROR"$'\n  ⏵⏵ bypass permissions on · ← for agents   Update available! Run: brew upgrade claude-code@latest'
+watchdog_tick
+TICK=1011
+PANE="$ERROR"$'\n  ⏵⏵ bypass permissions on · ← for agents\n                                   ● high · /effort'
+watchdog_tick
+check "$SENT" 1 'rotating footer hint does not break a stable network error'
+
+# Version drift alerts once per newly seen version and never types, while
+# the aged-wake alert keeps working.
+drift_case() {
+  reset_case
+  rm -f "$DIR/version-alert" "$DIR/queue-alert" "$DIR/queue-nudge.json" "$FM_WAKE_QUEUE"
+  DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)' FM_WATCHDOG_CLAUDE_VERSION='2.1.295 (Claude Code)'
+}
+drift_case
+watchdog_tick; TICK=1011; watchdog_tick; TICK=1500; watchdog_tick
+check "$SENT" 0 'drift never types the network nudge'
+check "$(grep -c "to '2.1.312" "$DIR/alerts")" 1 'drift raises one check wake for the new version'
+check "$(grep -c "to '2.1.312" "$DIR/notifications")" 1 'drift raises one active alert for the new version'
+check "$(jq -r 'select(.event=="refused") | .detail' "$DIR/events.jsonl" | wc -l | tr -d ' ')" 0 'drift is not a refusal'
+check "$(jq -r 'select(.event=="drift") | .detail' "$DIR/events.jsonl")" 'claude-version-changed:2.1.312 (Claude Code)' 'drift is logged once'
+INSTALLED_VERSION='2.1.320 (Claude Code)'; TICK=1600; watchdog_tick
+check "$(grep -c "to '2.1.320" "$DIR/alerts")" 1 'a further version change alerts again'
+printf '300\t31\tcheck\tmail\tpending\n' > "$FM_WAKE_QUEUE"
+IDENTITY=$'claude\tdone'; PANE=$CLEAR; TICK=1700; watchdog_tick; TICK=1711; watchdog_tick
+check "$(grep -c 'undelivered wakes' "$DIR/alerts")" 1 'aged-wake alert still fires during drift'
+check "$SENT" 0 'queue ring is withheld during drift'
+rm -f "$FM_WAKE_QUEUE"
+DRIFT=0; TICK=1800; watchdog_tick
+[ ! -e "$DIR/version-alert" ] || fail 'matching version kept the drift marker'
+pass 'a matching version ends drift'
+DRIFT=0
+
+# Stall detection: nudge, restart, then urgent alert, with progress rearming.
+STALL_SECS=1800
+RESTART_REPEAT_SECS=21600
+RESTART_COMMAND='claude --model opus'
+RESTART_CWD=/fm/home
+SESSION=lab
+PANE_ID=w1:p1
+WATCHDOG_RESTART_POLLS=2
+FM_HOME=$TMP/fmhome
+mkdir -p "$FM_HOME/data"
+printf 'old\n' > "$FM_HOME/data/supervisor-handoff-1029.md"
+printf 'new\n' > "$FM_HOME/data/supervisor-handoff-1030.md"
+touch -t 202610290000 "$FM_HOME/data/supervisor-handoff-1029.md"
+fm_sup_stat_mtime() { case "$1" in *.last-watcher-beat) printf '%s' "$BEACON" ;; *) command stat -f %m "$1" ;; esac; }
+fm_urgent_alert() { printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$DIR/urgent"; }
+fm_backend_herdr_pane_process_state() { printf '%s' "$PROC_STATE"; }
+watchdog_stop_supervisor() { STOPPED=$((STOPPED+1)); [ "$STOP_OK" = 1 ]; }
+fm_backend_herdr_cli() {
+  case "$2 $3" in
+    'pane run') printf '%s\n' "$5" >> "$DIR/launches"; [ "$LAUNCH_OK" = 1 ] || return 1
+      PROC_STATE=$AFTER_LAUNCH_STATE ;;
+    *) return 1 ;;
+  esac
+}
+watchdog_send() {
+  SENT=$((SENT+1)); LAST_SENT=$1
+  PANE=$'● Done\n────────────────────\n❯ '"$1"
+}
+stall_case() {
+  reset_case
+  rm -f "$DIR/stall.json" "$DIR/urgent" "$DIR/launches" "$FM_WAKE_QUEUE" "$DIR/queue-alert" "$DIR/queue-nudge.json"
+  UNDER_WAY=1 BEACON=500 PANE=$CLEAR CONFIRM_NATIVE=1 STOPPED=0 STOP_OK=1 LAUNCH_OK=1
+  PROC_STATE=agent AFTER_LAUNCH_STATE=agent LAST_SENT=
+}
+stage() { jq -r .stage "$DIR/stall.json"; }
+HUNG=$'❯ run it\n✻ Thinking… (12s · esc to interrupt)\n────────────────────\n❯ \n────────────────────'
+hung_case() { stall_case; PANE=$HUNG; IDENTITY=$'claude\tworking'; }
+stall_case
+watchdog_tick
+check "$(stage)" watching 'stall timer starts while work is under way'
+TICK=2799; watchdog_tick
+check "$SENT" 0 'no nudge before thirty quiet minutes'
+TICK=2800; watchdog_tick
+check "$SENT" 1 'thirty quiet minutes send one stall nudge'
+case "$LAST_SENT" in 'Watchdog: no supervision progress for 30 minutes; run bin/fm-wake-drain.sh'*) pass 'stall nudge names the drain' ;; *) fail "unexpected stall payload: $LAST_SENT" ;; esac
+check "$(stage)" nudged 'nudge moves the stall to its restart window'
+# The confirmed nudge turn changed the screen: that is progress.
+IDENTITY=$'claude\tidle'; PANE=$'● Draining now\n────────────────────\n❯ \n────────────────────'; TICK=2815; watchdog_tick
+check "$(stage)" watching 'screen progress after the nudge rearms the timer'
+
+stall_case
+watchdog_tick; TICK=2800; watchdog_tick
+TICK=2801; watchdog_tick
+check "$(stage)" watching 'the screen left by the nudged turn is progress'
+stall_case
+PANE=$'❯ run it\n✻ Thinking… (12s · esc to interrupt)\n────────────────────\n❯ \n────────────────────'
+IDENTITY=$'claude\tworking'; watchdog_tick
+for t in 1900 2400 2799; do
+  PANE=$'❯ run it\n✻ Pondering… ('"$((t-988))"$'s · esc to interrupt)\n────────────────────\n❯ \n────────────────────'
+  TICK=$t; watchdog_tick
+done
+check "$(stage)" watching 'a hung turn is still counting toward the stall'
+TICK=2800; watchdog_tick
+check "$SENT" 0 'a busy supervisor never receives the stall nudge'
+check "$(stage)" nudged 'a ticking spinner is not progress'
+check "$(jq -r 'select(.event=="withheld") | .detail' "$DIR/events.jsonl")" stall-nudge-not-idle 'withheld nudge is logged'
+TICK=4599; watchdog_tick
+check "$STOPPED" 0 'no restart before the second window'
+TICK=4600; watchdog_tick
+check "$STOPPED" 1 'second quiet window restarts the supervisor'
+check "$(stage)" restarted 'restart is recorded'
+launch=$(cat "$DIR/launches")
+case "$launch" in "cd /fm/home && claude --model opus Watchdog\\ restart"*) pass 'restart relaunches the configured command in the home' ;; *) fail "unexpected launch: $launch" ;; esac
+case "$launch" in *supervisor-handoff-1030.md*) pass 'restart prompt names the newest handoff' ;; *) fail "restart prompt lacks newest handoff: $launch" ;; esac
+check "$(tail -1 "$DIR/events.jsonl" | jq -c '[.event,.detail]')" '["restarted","supervisor"]' 'proven restart is logged'
+[ ! -e "$DIR/urgent" ] || fail 'a proven first restart must not reach the captain'
+pass 'a proven restart is not an urgent alert'
+TICK=6399; watchdog_tick
+TICK=6400; watchdog_tick
+check "$(stage)" down 'no progress after the restart marks the supervisor down'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'supervisor down sends one urgent alert'
+check "$(cut -d'|' -f1 "$DIR/urgent")" supervisor-down 'urgent alert uses the supervisor-down condition'
+grep -q 'after an automatic restart' "$DIR/urgent" || fail 'urgent alert is not plain'
+pass 'urgent alert says what happened in plain words'
+TICK=9000; watchdog_tick; TICK=20000; watchdog_tick
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'down supervisor is not re-alerted every tick'
+BEACON=501; TICK=20001; watchdog_tick
+check "$(stage)" watching 'a fresh watcher beacon rearms a down supervisor'
+
+# Unproven restarts alert at once; a draft is never destroyed.
+hung_case; AFTER_LAUNCH_STATE=shell
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+check "$(stage)" down 'unproven restart marks the supervisor down'
+grep -q 'restart attempt failed (not-proven)' "$DIR/urgent" || fail 'unproven restart did not alert'
+pass 'unproven restart sends the urgent alert'
+hung_case; STOP_OK=0
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+[ ! -e "$DIR/launches" ] || fail 'a supervisor that cannot be stopped was relaunched over'
+pass 'a supervisor that cannot be stopped is not relaunched over'
+grep -q 'stop-failed' "$DIR/urgent" || fail 'failed stop did not alert'
+pass 'failed stop sends the urgent alert'
+stall_case; PANE=$'● Done\n❯ half-typed answer'
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+check "$STOPPED" 0 'a draft in the prompt holds the restart'
+check "$(stage)" held 'held stall is recorded'
+[ ! -e "$DIR/urgent" ] || fail 'a held draft must not page the captain'
+pass 'a held draft alerts locally only'
+
+# Restart repeated within six hours escalates even when it is proven.
+hung_case
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+BEACON=600; TICK=4700; watchdog_tick
+TICK=6500; watchdog_tick; TICK=8300; watchdog_tick
+check "$STOPPED" 2 'a second stall restarts again'
+grep -q 'stalled again within' "$DIR/urgent" || fail 'repeated restart did not escalate'
+pass 'repeated stall within six hours reaches the captain'
+
+# Progress signals: acknowledgement, usage limit, nothing under way.
+stall_case
+printf '300\t31\tcheck\tmail\tpending\n' > "$FM_WAKE_QUEUE"
+IDENTITY=$'claude\tworking'; watchdog_tick
+printf '301\t32\tcheck\tmail\tlater\n' > "$FM_WAKE_QUEUE"
+TICK=2800; watchdog_tick
+check "$(stage)" watching 'an acknowledged wake is progress'
+rm -f "$FM_WAKE_QUEUE"
+stall_case; PANE=$'● Done\n────────────────────\n❯ \n────────────────────'
+watchdog_tick
+printf '300\t31\tcheck\tmail\tpending\n' > "$FM_WAKE_QUEUE"
+TICK=2800; IDENTITY=$'claude\tworking'; watchdog_tick
+check "$(stage)" nudged 'a newly queued wake is not progress'
+rm -f "$FM_WAKE_QUEUE"
+stall_case; PANE=$'Usage limit reached · continuing automatically at 3pm\n❯ '
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+check "$STOPPED" 0 'a usage-limit pause is never restarted'
+check "$SENT" 0 'a usage-limit pause is never typed into'
+stall_case; UNDER_WAY=0
+watchdog_tick; TICK=2800; watchdog_tick
+[ ! -e "$DIR/stall.json" ] || fail 'idle home kept a stall timer'
+pass 'no work under way means no stall timer'
+stall_case
+printf '{bad\n' > "$DIR/stall.json"
+watchdog_tick
+[ -e "$DIR/stall.json.corrupt" ] || fail 'corrupt stall state was not preserved'
+watchdog_tick
+check "$(stage)" watching 'corrupt stall state restarts the timer instead of refusing forever'
+
+# Drift keeps the stall restart (no screen parsing) but never the nudge.
+stall_case; DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)'
+watchdog_tick; TICK=2800; watchdog_tick
+check "$SENT" 0 'drift withholds the stall nudge'
+TICK=4600; watchdog_tick
+check "$STOPPED" 1 'drift still restarts a stalled supervisor'
+DRIFT=0

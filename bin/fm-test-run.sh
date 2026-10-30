@@ -288,7 +288,7 @@ family_for_basename() {
     fm-brief.test.sh|fm-pr-lint.test.sh|fm-dod-lib.test.sh|fm-vendor-auth-probe.test.sh|\
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
-    fm-supervisor-watchdog.test.sh|\
+    fm-supervisor-watchdog.test.sh|fm-active-alert.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-crew-state.test.sh|fm-captain-hold-lifecycle.test.sh|\
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
@@ -1633,7 +1633,10 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-supervisor-watchdog.test.sh" "__script__:fm-supervisor-watchdog-herdr-e2e.test.sh"
       ;;
     bin/fm-active-alert-lib.sh)
-      printf '%s\n' "__script__:fm-daemon.test.sh" "__script__:fm-supervisor-watchdog.test.sh"
+      printf '%s\n' "__script__:fm-daemon.test.sh" "__script__:fm-supervisor-watchdog.test.sh" "__script__:fm-active-alert.test.sh"
+      ;;
+    bin/fm-urgent-alert.sh)
+      printf '%s\n' "__script__:fm-active-alert.test.sh"
       ;;
     bin/fm-composer-lib.sh)
       # The shared shape catalogue is vendor-rendered signal; a change to it
