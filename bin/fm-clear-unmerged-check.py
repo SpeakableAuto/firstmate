@@ -4,8 +4,11 @@
 Armed via fm-clear-unmerged-check.sh; discovers PR URLs from local CLEAR reports,
 then uses one bounded gh-axi GraphQL metadata read per candidate (100 paths;
 incomplete reads refuse). Repositories without CLEAR reports need no forge read.
-Registry names follow fm-project-mode.sh; origin resolves each registered clone.
-Local-only and Gerrit projects are excluded through that script's public interface.
+Registry names follow fm-project-mode.sh; origin resolves each registered clone,
+matched case-insensitively. A CLEAR PR whose repository is no registered origin
+(for example after a rename) is named in diagnostics, never dropped silently.
+Local-only and Gerrit projects are excluded through that script's public
+interface, silently even when they have no GitHub origin.
 The optional config/clear-unmerged-skip-repos lists owner/repo or host/owner/repo,
 one per line, with # comments. Registry rows naming Michael are also excluded.
 No inference about ownership is made from an organization name.
@@ -36,11 +39,11 @@ captain holds are read through fm-tasks-axi.sh, including URL-linked backlog
 rows and tasks bound by state/*.meta pr= or a matching review task id.
 
 state/.clear-unmerged.json stores schema=1, alerted PR+head identities, observed
-head clocks (removed when a candidate is closed or absent), a next-candidate
-cursor and the deferred URLs for budget continuation, and a finished map of
-PR URL -> {state, head, seen_at} for PRs read as MERGED or CLOSED. MERGED URLs
-are never read again; CLOSED URLs are reread only after a newer CLEAR report
-names them. Entries leave the map when no CLEAR report names the URL, CLOSED
+head clocks (removed when a candidate is closed or absent, or no CLEAR report
+names it), a next-candidate cursor and the deferred URLs for budget
+continuation, and a finished map of lower-case PR URL -> {state, head, seen_at}
+for PRs read as MERGED, CLOSED or MISSING. MERGED URLs are never read again;
+CLOSED and MISSING URLs are reread only after a newer CLEAR report names them. Entries leave the map when no CLEAR report names the URL, CLOSED
 entries after 30 days, and the oldest beyond 5000. Clamped future
 report times, and the last error and report-skip diagnostics for repeat
 suppression. A nonblocking flock serializes checks.
@@ -50,9 +53,12 @@ At most one new alert per pass keeps watcher output bounded; subsequent polls
 advance through the remaining candidates. Disarming retains this history.
 The entire scan is bounded to min(20, FM_CHECK_TIMEOUT-2) seconds, with a 10s
 per-command cap. FM_CLEAR_UNMERGED_MAX_CALLS bounds forge calls per tick
-(default 12); an overdue eligible candidate needs three calls including metadata,
-diff and head recheck. Unreached candidates are counted as deferred (URLs in
-the state record) and resumed first next tick. Item failures are named as skipped, not whole-check unavailable.
+(default 12, at least 3); an overdue eligible candidate needs three calls including
+metadata, diff and head recheck. Unreached candidates are counted as deferred
+(URLs in the state record) and resumed first next tick. Item failures are named
+as skipped, not whole-check unavailable. Failures that stop every candidate
+(missing gh-axi, unreadable registry or skip list, hold listing, report cap)
+report the whole check unavailable.
 Budget/forge/registry/hold failures never mark a PR alerted. A test-only FM_CLEAR_UNMERGED_NOW freezes age
 calculation, never the real-time budget. No credentials or shell code are read.
 """
@@ -106,8 +112,9 @@ class Poll:
             raise Unavailable('FM_CHECK_TIMEOUT must be at least 3 seconds')
         self.deadline = time.monotonic() + min(20, timeout-2)
         self.calls_left = int(os.environ.get('FM_CLEAR_UNMERGED_MAX_CALLS', '12'))
-        if self.calls_left < 1:
-            raise Unavailable('FM_CLEAR_UNMERGED_MAX_CALLS must be positive')
+        if self.calls_left < 3:
+            raise Unavailable('FM_CLEAR_UNMERGED_MAX_CALLS must be at least 3; '
+                              'an overdue PR needs metadata, diff and head recheck')
         self.now = time.time()
         if os.environ.get('FM_TEST_SEAM') == '1':
             self.now = int(os.environ.get('FM_CLEAR_UNMERGED_NOW', self.now))
@@ -143,7 +150,7 @@ class Poll:
             raise Unavailable(f'{path} exceeds the 2 MiB read bound')
         return path.read_text()
 
-    def repos(self, errors, wanted):
+    def repos(self, errors, wanted, registered):
         skip_file = self.config/'clear-unmerged-skip-repos'
         skipped = set()
         if skip_file.exists():
@@ -162,29 +169,39 @@ class Poll:
             try:
                 if not name or name in ('.', '..') or '/' in name:
                     raise Unavailable('invalid project registry name')
+                key, problem = None, None
+                try:
+                    remote = self.run(['git', '-C', self.projects/name, 'remote', 'get-url', 'origin']).strip()
+                    match = re.fullmatch(r'(?:https?://|ssh://git@|git@)([A-Za-z0-9.-]+)[:/]('+SLUG+'/'+SLUG+r')(?:\.git)?/?', remote)
+                    if match:
+                        # GitHub owner and repository names are case-insensitive.
+                        key = (match[1].lower(), match[2].removesuffix('.git').lower())
+                    else:
+                        problem = Unavailable(f'unsupported origin for {name}; a GitHub origin is required')
+                except Deferred:
+                    raise
+                except Unavailable as error:
+                    problem = error
+                if key:
+                    if key not in wanted:
+                        continue
+                    registered.add(key)
                 if re.search(r'\bMichael\b', row, re.I):
-                    continue
-                remote = self.run(['git', '-C', self.projects/name, 'remote', 'get-url', 'origin']).strip()
-                match = re.fullmatch(r'(?:https?://|ssh://git@|git@)([A-Za-z0-9.-]+)[:/]('+SLUG+'/'+SLUG+r')(?:\.git)?/?', remote)
-                if not match:
-                    raise Unavailable(f'unsupported origin for {name}; a GitHub origin is required')
-                host, repo = match.groups()
-                repo = repo.removesuffix('.git')
-                if (host.lower(), repo) not in wanted:
                     continue
                 mode = self.run([BIN/'fm-project-mode.sh', name]).strip()
                 forge = self.run([BIN/'fm-project-mode.sh', '--forge', name]).strip()
                 if mode.split()[0] == 'local-only' or forge == 'gerrit':
                     continue
+                if problem:
+                    # Excluded projects may lack a GitHub origin; only others report it.
+                    raise problem
             except Deferred:
                 raise
             except (Unavailable, IndexError) as error:
                 errors.append(f'{name}: {error}')
                 continue
-            host, repo = match.groups()
-            repo = repo.removesuffix('.git')
-            if repo.lower() not in skipped and (host+'/'+repo).lower() not in skipped:
-                repos.add((host.lower(), repo))
+            if key[1] not in skipped and '/'.join(key) not in skipped:
+                repos.add(key)
         return sorted(repos)
 
     def reports(self, record, diagnostics):
@@ -206,7 +223,8 @@ class Poll:
             except (OSError, UnicodeError) as error:
                 diagnostics.append(f'{path}: skipped report: {error}')
                 continue
-            urls = set(URL.findall(text))
+            # GitHub URLs are case-insensitive; the forge's spelling is used for output.
+            urls = {url.lower() for url in URL.findall(text)}
             shas = {s.lower() for s in SHA.findall(text)}
             clear = bool(re.match(r'^# CLEAR(?:\s|$)', text))
             if not urls or not shas:
@@ -260,7 +278,7 @@ class Poll:
                 for line in lines:
                     if line.startswith('pr='):
                         urls.update(URL.findall(line[3:]))
-        return ids, urls
+        return ids, {url.lower() for url in urls}
 
     def pr(self, url):
         host, owner, name, _, number = url.removeprefix('https://').split('/')
@@ -289,9 +307,13 @@ class Poll:
                 raise ValueError('incomplete chunk envelope')
             encoded = ''.join(line[2:] for line in chunks)
             result = json.loads(base64.b64decode(encoded, validate=True))
-            if result.get('errors'):
+            pull = result['data']['repository']['pullRequest']
+            errors = result.get('errors')
+            # Only a missing pull request in a readable repository counts as gone.
+            if errors and not (pull is None and all(
+                    e.get('type') == 'NOT_FOUND' and e.get('path') == ['repository', 'pullRequest'] for e in errors)):
                 raise ValueError('GraphQL errors')
-            return result['data']['repository']['pullRequest']
+            return pull
         except (ValueError, KeyError, TypeError) as error:
             raise Unavailable(f'gh-axi missing complete PR data for {host}/{repo}') from error
 
@@ -300,23 +322,24 @@ class Poll:
         if pushed['oid'] != pr['headRefOid']:
             raise Unavailable(f"head changed during forge read for {pr['url']}; retry")
         heads = record.setdefault('heads', {})
-        previous = heads.get(pr['url'], {})
+        key = pr['url'].lower()
+        previous = heads.pop(pr['url'], None) or heads.get(key, {})
         changed = epoch(pushed['pushedDate'] or pr['updatedAt'])
         if previous.get('sha') == pr['headRefOid']:
             changed = previous['changed_at']
         changed = max(changed, epoch(pr['createdAt']),
                       *[epoch(n['createdAt']) for n in pr['timelineItems']['nodes']])
-        heads[pr['url']] = {'sha': pr['headRefOid'], 'changed_at': changed}
+        heads[key] = {'sha': pr['headRefOid'], 'changed_at': changed}
         return changed
 
     def candidate(self, pr, reports, held_ids, held_urls, head_time, alerted):
         url, sha = pr['url'], pr['headRefOid']
         if not URL.fullmatch(url) or not re.fullmatch('[a-f0-9]{40}', sha):
             raise Unavailable('forge returned invalid PR identity')
-        if url in held_urls:
+        if url.lower() in held_urls:
             return None
         matches = [(stamp, not clear, p) for p, urls, shas, stamp, clear in reports
-                   if url in urls and sha in shas and p.parent.name not in held_ids]
+                   if url.lower() in urls and sha in shas and p.parent.name not in held_ids]
         if not matches:
             return None
         # The latest review at this head decides; a re-review resets the grace period.
@@ -435,6 +458,8 @@ def check():
         try:
             reports = poll.reports(record, diagnostics)
             urls = sorted({url for _, urls, _, _, clear in reports if clear for url in urls})
+            heads = {key: value for key, value in record.get('heads', {}).items() if key.lower() in urls}
+            record['heads'] = heads
             finished = {url: entry for url, entry in record.get('finished', {}).items() if url in urls
                         and (entry['state'] == 'MERGED' or entry['seen_at'] > poll.now-FINISHED_CLOSED_SECONDS)}
             finished = dict(sorted(finished.items(), key=lambda item: item[1]['seen_at'])[-FINISHED_LIMIT:])
@@ -449,17 +474,22 @@ def check():
             if urls and shutil.which('gh-axi') is None:
                 global_failure = True
                 raise Unavailable('gh-axi missing; install gh-axi')
-            wanted = {tuple(url.removeprefix('https://').split('/', 1)) for url in urls}
-            wanted = {(host.lower(), tail.rsplit('/pull/', 1)[0]) for host, tail in wanted}
-            repos = set(poll.repos(errors, wanted)) if urls else set()
-            urls = [url for url in urls if
-                    (url.split('/')[2].lower(), '/'.join(url.split('/')[3:5])) in repos]
+            def repo_of(url):
+                return url.split('/')[2], '/'.join(url.split('/')[3:5])
+            registered = set()
+            repos = set(poll.repos(errors, {repo_of(url) for url in urls}, registered)) if urls else set()
+            unregistered = [url for url in urls if repo_of(url) not in registered]
+            # A renamed repository or removed project must not vanish silently.
+            errors.extend(f'{url}: skipped: no registered project has this repository as origin'
+                          for url in unregistered[:5])
+            if len(unregistered) > 5:
+                errors.append(f'{len(unregistered)-5} more CLEAR PRs skipped without a registered origin')
+            urls = [url for url in urls if repo_of(url) in repos]
             held_ids, held_urls = poll.holds() if urls else (set(), set())
             cursor = record.get('cursor')
             if cursor in urls:
                 index = urls.index(cursor)
                 urls = urls[index:] + urls[:index]
-            heads = record.setdefault('heads', {})
             deferred, read = [], 0
             for index, url in enumerate(urls):
                 try:
@@ -471,10 +501,13 @@ def check():
                     finished.pop(url, None)
                     if pr is None or pr['state'] in ('CLOSED', 'MERGED'):
                         heads.pop(url, None)
-                        if pr is not None:
-                            finished[url] = {'state': pr['state'], 'head': pr['headRefOid'], 'seen_at': poll.now}
+                        if pr:
+                            heads.pop(pr['url'], None)  # clock saved under the forge's spelling
+                        # A missing PR is rechecked, like a closed one, only after a newer CLEAR.
+                        finished[url] = {'state': pr['state'] if pr else 'MISSING',
+                                         'head': pr['headRefOid'] if pr else None, 'seen_at': poll.now}
                         continue
-                    if pr['url'] != url:
+                    if pr['url'].lower() != url:
                         raise Unavailable('forge returned a different PR identity')
                     if pr['state'] != 'OPEN':
                         raise Unavailable('forge returned unknown PR state')
@@ -501,10 +534,13 @@ def check():
             record['cursor'] = deferred[0] if deferred else None
             record['deferred'] = deferred
         except Deferred as error:
-            record['cursor'] = urls[0] if urls else record.get('cursor')
+            if record.get('cursor') not in urls:
+                record['cursor'] = urls[0] if urls else None
             record['deferred'] = urls
             errors.append(f'{error}; read 0, deferred {len(urls)}')
         except ITEM_ERRORS as error:
+            # Failures outside the per-PR loop stop every candidate from being judged.
+            global_failure = True
             errors.append(str(error))
         note = ''
         if errors:
