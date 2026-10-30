@@ -1964,6 +1964,15 @@ balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high --override 'ne
 assert_equals refused "$(jq -r .check.verdict <<<"$out")" 'an override never passes the reserve'
 balance_run "$BRIEF" --rule rule_2 --check claude opus high
 assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'a model choice within one allowance is not a balance question'
+write_balance_quota "$QUOTA" 70 -5 60 -30
+balance_run "$BRIEF" --rule rule_2 --check codex gpt-6-astra high --override 'design task requires browser computer use'
+assert_equals override "$(jq -r .check.verdict <<<"$out")" 'a recorded task-class exception can use a mapped profile outside its rule'
+assert_equals 'codex:gpt-6-astra' "$(jq -r '"\(.provider):\(.model)"' "$HOME_DIR/state/dispatch-charges.jsonl")" 'an out-of-rule exception charges its mapped allowance'
+write_balance_quota "$QUOTA" 70 -5 5 -60
+balance_run "$BRIEF" --rule rule_2 --check codex gpt-6-astra high --override 'design task requires browser computer use'
+assert_equals refused "$(jq -r .check.verdict <<<"$out")" 'an out-of-rule exception still refuses unavailable quota'
+assert_contains "$(jq -r .check.reason <<<"$out")" 'below the 10% reserve' 'the out-of-rule quota refusal names the admission failure'
+assert_absent "$HOME_DIR/state/dispatch-charges.jsonl" 'a refused out-of-rule exception charges nothing'
 balance_run "$BRIEF" --check claude opus high
 expect_code 2 "$code" '--check without --rule is a usage error'
 

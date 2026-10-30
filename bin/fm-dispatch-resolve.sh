@@ -881,6 +881,11 @@ POOL_JQ='
   ($answer[0]) as $ans | ($rules[0]) as $cfg | ($homes[0]) as $homes | ($ledger[0]) as $ledger |
   ($burn[0] // {}) as $burn |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
+  def check_profile:
+    if $check == null or $check.override == "" then null
+    else ([profiles($cfg.default // null)[], (($cfg.rules // [])[] | profiles(.use)[])
+      | select(.harness == $check.harness and (.model // "") == $check.model and (.effort // "") == $check.effort)] | first)
+    end;
   def selection_mode($cfg; $rule): ($rule.select // $cfg.select // "quota-balanced");
   # quota-balanced near-tie band in spendPriority units; docs/configuration.md
   # "Candidate selection policy" owns the value and its rationale.
@@ -1147,10 +1152,15 @@ POOL_JQ='
          else {source: $choice, use: profiles($rule.use), note: "rule matched", mode: $mode, rank: 0}
          end
        end) as $sel |
-      $h + {index: $hi, sel: $sel, slots: slots($h.id; $h.admission.counted),
+      ($h + {index: $hi, sel: $sel, slots: slots($h.id; $h.admission.counted),
         candidates: [($sel.use // []) | to_entries[] | . as $e |
           (evaluate($e.value) + {home: $h.id, order: [$sel.rank, $e.key]}) | guard(.; $h) |
-          . + {workers: worker_load(.; $h; .pacing)}]}
+          . + {workers: worker_load(.; $h; .pacing)}]}) as $evaluated |
+      if $h.id == "local" and check_profile != null then
+        $evaluated + {check_candidate:
+          ((evaluate(check_profile) + {home: $h.id, order: [-1, -1]}) | guard(.; $h) |
+           . + {workers: worker_load(.; $h; .pacing)})}
+      else $evaluated end
     end] as $evald |
   ([$evald[] | select(.sel)]) as $usable |
   ([$evald[].candidates[]]) as $all_cands |
@@ -1167,7 +1177,7 @@ POOL_JQ='
   ({model: $ans.model, latency_ms: $ans.latency_ms, tokens: $ans.tokens, rule: $ans.rule,
     rule_when: $ans.rule_when, confidence: $ans.confidence, probabilities: $ans.probabilities}
    + (if $ans.fallback then {fallback: $ans.fallback} else {} end)
-   + {pooled: $pooled, homes: [$evald[] | del(.snapshot, .candidates)]}) as $ev |
+   + {pooled: $pooled, homes: [$evald[] | del(.snapshot, .candidates, .check_candidate)]}) as $ev |
   (if $ans.kind == "ambiguous" then
      $ev + {status: "ambiguous", reason: $ans.reason, candidates: $cands}
    elif $ans.kind == "approval" then
@@ -1243,7 +1253,10 @@ POOL_JQ='
   # Spawn-time check: is the requested profile on the balanced pick'"'"'s allowance?
   (if $check == null then null else
     ([$cands[] | select(.home == "local" and .profile.harness == $check.harness
-      and (.profile.model // "") == $check.model and (.profile.effort // "") == $check.effort)] | first) as $req |
+      and (.profile.model // "") == $check.model and (.profile.effort // "") == $check.effort)] | first) as $rule_req |
+    (if $rule_req != null then $rule_req
+     elif $check.override != "" then ([$evald[].check_candidate // empty] | first)
+     else null end) as $req |
     if $req == null then {verdict: "refused", reason: "requested profile is not a candidate of \($choice) on this machine"}
     elif $check.parent != null and ($req.eligible or ($req.behind // false))
       and $req.provider == $check.parent.provider and $req.account == $check.parent.account then
