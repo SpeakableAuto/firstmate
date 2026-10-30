@@ -11,12 +11,30 @@
 # endpoint here. Only a backend read failure refuses, with return 2 and
 # FM_LIVE_WORKERS_ERROR="crew liveness unreadable: <backend>" (also on stderr).
 # Call under the caller's admission lock and propagate failures, never use a
-# partial count. Task metadata and status events alone are not liveness proof.
+# partial count. Malformed targets and present-but-invalid spawn generations
+# are skipped with a task-named stderr diagnostic, never a backend refusal.
+# Missing spawn_gen/backend fields retain legacy endpoint lookup semantics.
+# Task metadata and status events alone are not liveness proof.
 
 if ! declare -F fm_backend_agent_state >/dev/null; then
   # shellcheck source=bin/fm-backend.sh
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-backend.sh"
 fi
+
+# Validate only address structure, without contacting any backend. Recovery's
+# unreadable verdict also covers invalid addresses; admission must distinguish
+# those records from a failed runtime read before invoking that classifier.
+fm_live_workers_target_valid() { # <backend> <target>
+  local backend=$1 target=$2
+  [ -n "$target" ] || return 1
+  case "$backend" in
+    tmux)
+      case "$target" in *:*:*|'':*|*:'') return 1 ;; *:*) return 0 ;; *) return 1 ;; esac ;;
+    herdr|zellij|cmux)
+      case "$target" in '':*|*:'') return 1 ;; *:*) return 0 ;; *) return 1 ;; esac ;;
+    *) return 0 ;;
+  esac
+}
 
 fm_live_workers_agent_state() { # <backend> <target>
   local backend=$1 target=$2 verdict
@@ -45,7 +63,18 @@ fm_live_workers_count() {
     [ "$meta" != "$state/$exclude.meta" ] || continue
     [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
     if [ -n "$filter" ]; then "$filter" "$meta" "$@" || continue; fi
+    task=${meta##*/}; task=${task%.meta}
+    backend=$(fm_backend_of_meta "$meta") || backend=unknown
+    target=$(fm_backend_target_of_meta "$meta") || target=
+    if ! fm_live_workers_target_valid "$backend" "$target"; then
+      printf 'crew record skipped: %s: malformed target (%s)\n' "$task" "$backend" >&2
+      continue
+    fi
     gen=$(fm_meta_get "$meta" spawn_gen)
+    if [ -n "$gen" ] && ! [[ "$gen" =~ ^s[0-9]{1,10}(\.[0-9]+)+$ ]]; then
+      printf 'crew record skipped: %s: malformed spawn_gen\n' "$task" >&2
+      continue
+    fi
     started=${gen#s}; started=${started%%.*}
     verdict=''
     case "$started" in
@@ -58,8 +87,6 @@ fm_live_workers_count() {
         fi ;;
     esac
     if [ -z "$verdict" ]; then
-      backend=$(fm_backend_of_meta "$meta") || backend=unknown
-      target=$(fm_backend_target_of_meta "$meta") || target=
       verdict=$(fm_live_workers_agent_state "$backend" "$target") || verdict=unreadable
     fi
     case "$verdict" in

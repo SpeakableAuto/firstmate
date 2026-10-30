@@ -14,19 +14,19 @@ test_count_contract() (
   mkdir -p "$state"
   date() { printf '2000000000\n'; }
   fm_backend_source() { return 0; }
-  fm_backend_agent_state() { printf '%s' "$2"; }
+  fm_backend_agent_state() { printf '%s' "${2#fixture:}"; }
   for backend in tmux herdr orca cmux zellij; do
     for verdict in alive missing dead gone unproven-absent ambiguous unverified; do
-      fm_write_meta "$state/worker.meta" "backend=$backend" "window=$verdict" 'kind=ship' 'harness=claude'
+      fm_write_meta "$state/worker.meta" "backend=$backend" "window=fixture:$verdict" 'kind=ship' 'harness=claude'
       fm_live_workers_count "$state" '' || fail "$backend $verdict count failed"
       if [ "$verdict" = alive ]; then expected=1; else expected=0; fi
       assert_equals "$expected" "$FM_LIVE_WORKERS_COUNT" "$backend $verdict count"
     done
-    fm_write_meta "$state/worker.meta" "backend=$backend" 'window=unreadable' 'kind=ship' 'harness=claude'
+    fm_write_meta "$state/worker.meta" "backend=$backend" 'window=fixture:unreadable' 'kind=ship' 'harness=claude'
     if fm_live_workers_count "$state" '' 2>/dev/null; then fail "$backend unreadable count accepted"; fi
     assert_equals "crew liveness unreadable: $backend" "$FM_LIVE_WORKERS_ERROR" 'named refusal'
   done
-  fm_write_meta "$state/worker.meta" 'backend=tmux' 'window=missing' 'kind=ship' 'harness=claude' 'spawn_gen=s1999999941.1'
+  fm_write_meta "$state/worker.meta" 'backend=tmux' 'window=fixture:missing' 'kind=ship' 'harness=claude' 'spawn_gen=s1999999941.1'
   fm_live_workers_count "$state" ''
   assert_equals 1 "$FM_LIVE_WORKERS_COUNT" '59-second launch reservation'
   fm_live_workers_count "$state" worker
@@ -39,19 +39,19 @@ test_count_contract() (
   fm_live_workers_count "$state" ''
   assert_equals 0 "$FM_LIVE_WORKERS_COUNT" 'secondmates never reserve crew slots'
   for n in $(seq 1 65); do
-    fm_write_meta "$state/old-$n.meta" 'backend=tmux' 'window=missing' 'kind=ship' 'harness=claude'
+    fm_write_meta "$state/old-$n.meta" 'backend=tmux' 'window=fixture:missing' 'kind=ship' 'harness=claude'
   done
   fm_claude_admission_count "$state" '' ordinary
   assert_equals 0 "$FM_CLAUDE_ADMISSION_COUNT" 'Claude account excludes parked records'
   printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude"}]}' > "$TMP_ROOT/count-quota.json"
   fm_quota_pacing_count "$state" "$TMP_ROOT/count-quota.json" '' claude default
   assert_equals 0 "$FM_QUOTA_PACING_COUNT" 'quota pacing excludes parked records'
-  fm_write_meta "$state/worker.meta" 'backend=tmux' 'window=alive' 'kind=ship' 'harness=claude' 'account=other'
+  fm_write_meta "$state/worker.meta" 'backend=tmux' 'window=fixture:alive' 'kind=ship' 'harness=claude' 'account=other'
   fm_claude_admission_count "$state" '' ordinary
   assert_equals 0 "$FM_CLAUDE_ADMISSION_COUNT" 'other account excluded'
   fm_claude_admission_count "$state" '' other
   assert_equals 1 "$FM_CLAUDE_ADMISSION_COUNT" 'selected account counted'
-  fm_write_meta "$state/worker.meta" 'backend=tmux' 'window=unreadable' 'kind=ship' 'harness=claude'
+  fm_write_meta "$state/worker.meta" 'backend=tmux' 'window=fixture:unreadable' 'kind=ship' 'harness=claude'
   if fm_claude_admission_count "$state" '' ordinary 2>/dev/null; then fail 'Claude swallowed liveness failure'; fi
   if fm_quota_pacing_count "$state" "$TMP_ROOT/count-quota.json" '' claude default 2>/dev/null; then fail 'pacing swallowed liveness failure'; fi
   pacing_fixture=$(printf '%s\n' '{"schemaVersion":1,"accounts":[{"provider":"claude","accountKey":"default","scope":"all_models","allowedConcurrency":2},{"provider":"codex","accountKey":"default","scope":"all_models","allowedConcurrency":2}]}')
@@ -64,6 +64,30 @@ test_count_contract() (
   pass 'shared count: backend verdicts, grace, exclusions, account filters, and failure propagation'
 )
 test_count_contract
+
+# Exercise real backend parsing without opening an endpoint or reading a server.
+# An invalid historical record must be diagnosed and skipped before that read.
+test_malformed_records() (
+  . "$ROOT/bin/fm-claude-admission-lib.sh"
+  local state="$TMP_ROOT/malformed" backend target gen out
+  mkdir -p "$state"
+  for backend in tmux herdr; do
+    for target in malformed-old-window ':pane' 'session:' ''; do
+      fm_write_meta "$state/old.meta" "backend=$backend" "window=$target" 'kind=ship' 'spawn_gen=s1.1'
+      out=$(fm_live_workers_count "$state" '' 2>&1) || fail "$backend malformed record refused: $out"
+      assert_contains "$out" 'crew record skipped: old: malformed target' 'malformed target diagnostic'
+      fm_live_workers_count "$state" '' 2>/dev/null
+      assert_equals 0 "$FM_LIVE_WORKERS_COUNT" 'malformed target does not count'
+    done
+  done
+  for gen in broken s1.bad s99999999999999999999.1; do
+    fm_write_meta "$state/old.meta" 'backend=tmux' 'window=session:window' 'kind=ship' "spawn_gen=$gen"
+    out=$(fm_live_workers_count "$state" '' 2>&1) || fail "malformed generation refused: $out"
+    assert_contains "$out" 'crew record skipped: old: malformed spawn_gen' 'generation diagnostic'
+  done
+  pass 'malformed targets and generations are diagnosed without querying a backend'
+)
+test_malformed_records
 
 make_case() {
   CASE="$TMP_ROOT/$1"
@@ -96,6 +120,7 @@ SH
   for n in $(seq 1 65); do
     fm_write_meta "$HOME_DIR/state/old-$n.meta" 'backend=tmux' "window=firstmate:old-$n" 'kind=ship' 'harness=codex' 'spawn_gen=s1.1'
   done
+  fm_write_meta "$HOME_DIR/state/malformed.meta" 'backend=tmux' 'window=malformed-old-window' 'kind=ship' 'spawn_gen=s1.1'
   cp -R "$HOME_DIR/state" "$CASE/before"
 }
 
