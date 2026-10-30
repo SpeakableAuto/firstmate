@@ -484,22 +484,41 @@ pass 'rejected allocation returns only a clean, unrecorded freshly owned slot'
   printf 'kind=secondmate\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/secondmate.meta"
   assert_equals '1 0' "$(fm_placement_count)" 'candidate and secondmates excluded'
   rm "$STATE"/*.meta
-  # Per-class counts: a light workload counts light only when the profile names it.
+  # Per-class counts: only a classification bound to its brief can count light.
   CONFIG="$TMP_ROOT/count-config" DATA="$TMP_ROOT/count-data"
-  mkdir -p "$CONFIG" "$DATA/reviewer" "$DATA/fresh-scout" "$DATA/builder" "$DATA/broken"
+  mkdir -p "$CONFIG"
   printf '{"version":1,"workloads":["backend","review","scout"],"max_crew":4,"min_free_memory_percent":15,"max_swap_mib":512,"drive":null}\n' > "$CONFIG/crew-placement.json"
-  printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/legacy.meta"
-  printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/reviewer.meta"
+  classify() { # <task> <workload-json> <version-json>
+    mkdir -p "$DATA/$1"
+    printf 'Brief for %s\n' "$1" > "$DATA/$1/brief.md"
+    jq -n --argjson workload "$2" --argjson version "$3" \
+      --arg hash "$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$DATA/$1/brief.md")" \
+      '{version:$version,workload:$workload,brief_sha256:$hash}' > "$DATA/$1/placement.json"
+  }
+  for task in legacy reviewer builder broken bare bare-v1 stale wrong-version bool-version list-workload no-brief; do
+    printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/$task.meta"
+  done
   printf 'kind=scout\nbackend=tmux\nwindow=fixture:gone\nspawn_gen=s%s.0\n' "$(( $(date +%s) - 10 ))" > "$STATE/fresh-scout.meta"
-  printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/builder.meta"
-  printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/broken.meta"
-  printf '{"version":1,"workload":"review"}\n' > "$DATA/reviewer/placement.json"
-  printf '{"version":1,"workload":"scout"}\n' > "$DATA/fresh-scout/placement.json"
-  printf '{"version":1,"workload":"backend"}\n' > "$DATA/builder/placement.json"
+  classify reviewer '"review"' 1
+  classify fresh-scout '"scout"' 1
+  classify builder '"backend"' 1
+  mkdir -p "$DATA/broken" "$DATA/bare" "$DATA/bare-v1"
   printf 'not json\n' > "$DATA/broken/placement.json"
-  assert_equals '5 0' "$(fm_placement_count)" 'without light_workloads every live crew counts heavy'
+  printf '{"workload":"review"}\n' > "$DATA/bare/placement.json"
+  printf '{"version":1,"workload":"review"}\n' > "$DATA/bare-v1/placement.json"
+  classify stale '"review"' 1
+  printf 'edited after classification\n' >> "$DATA/stale/brief.md"
+  classify wrong-version '"review"' 2
+  classify bool-version '"review"' true
+  classify list-workload '["review"]' 1
+  classify no-brief '"review"' 1
+  rm "$DATA/no-brief/brief.md"
+  assert_equals '12 0' "$(fm_placement_count)" 'without light_workloads every live crew counts heavy'
   jq '.light_workloads=["review","scout"]|.max_light_crew=4' "$CONFIG/crew-placement.json" > "$CONFIG/next"
   mv "$CONFIG/next" "$CONFIG/crew-placement.json"
-  assert_equals '3 2' "$(fm_placement_count)" 'light crews count light; legacy, heavy and unreadable classifications count heavy'
+  assert_equals '10 2' "$(fm_placement_count)" 'only bound light classifications count light; bare, stale or malformed ones count heavy'
+  jq '.max_light_crew=9' "$CONFIG/crew-placement.json" > "$CONFIG/next"
+  mv "$CONFIG/next" "$CONFIG/crew-placement.json"
+  assert_equals '12 0' "$(fm_placement_count)" 'a malformed light allowance moves nobody to the light bucket'
 ) || exit 1
 pass 'crew count requires positive liveness or launch grace and refuses only unreadable liveness'

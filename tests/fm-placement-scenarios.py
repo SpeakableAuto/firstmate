@@ -40,7 +40,7 @@ list-windows)
     basename "$meta" .meta
   done;;
 display-message)
-  [ "${@: -1}" != '#{pane_current_command}' ] || printf 'codex';;
+  [ "${@: -1}" != '#{pane_current_command}' ] || { [ -f "$FM_HOME/tmux-ambiguous" ] && printf 'vim' || printf 'codex'; };;
 *) exit 1;;
 esac
 """)
@@ -133,6 +133,55 @@ fm_placement_count
             result = self.admit(home, 'candidate')
             self.assertEqual(result.returncode == 0, i < 3, result.stderr)
         self.assertIn('count=4, cap=4', self.ledger(home)['decisions'][-1]['checks']['room']['reason'])
+
+    def light_allowance(self, home):
+        path = home / 'config/crew-placement.json'
+        profile = json.loads(path.read_text())
+        profile.update(workloads=profile['workloads'] + ['review'], light_workloads=['review'], max_light_crew=2)
+        self.write(path, profile)
+
+    def test_unverified_and_ambiguous_old_records_never_refuse(self):
+        home = self.home('heavy', True)
+        self.task(home, 'candidate', 'website')
+        (home / 'tmux-ambiguous').touch()
+        for i in range(3):
+            self.live(home, f'ambiguous-{i}')
+            (home / f'state/unverified-{i}.meta').write_text(f'kind=ship\nbackend=zellij\nwindow=fixture:unverified-{i}\n')
+        result = self.admit(home, 'candidate')
+        room = self.ledger(home)['decisions'][-1]['checks']['room']
+        self.assertEqual((result.returncode, room['status']), (0, 'pass'), room['reason'])
+        self.assertIn('crew=0/4', room['reason'])
+        self.light_allowance(home)
+        result = self.admit(home, 'candidate')
+        room = self.ledger(home)['decisions'][-1]['checks']['room']
+        self.assertEqual((result.returncode, room['status']), (0, 'pass'), room['reason'])
+        self.assertIn('crew=0/4; light=0/2; class=heavy', room['reason'])
+
+    def test_unbound_light_label_cannot_pass_heavy_cap(self):
+        home = self.home('heavy', True)
+        self.light_allowance(home)
+        self.task(home, 'candidate', 'website')
+        for i in range(3):
+            self.task(home, f'heavy-{i}', 'website')
+            self.live(home, f'heavy-{i}')
+        self.task(home, 'relabeled', 'review')
+        self.live(home, 'relabeled')
+        bound = home / 'data/relabeled/placement.json'
+        admitted = bound.read_text()
+        result = self.admit(home, 'candidate')
+        room = self.ledger(home)['decisions'][-1]['checks']['room']
+        self.assertEqual((result.returncode, room['status']), (0, 'pass'), 'a bound review crew leaves a heavy slot free: ' + room['reason'])
+        self.assertIn('crew=3/4; light=1/2', room['reason'])
+        version_two = dict(json.loads(admitted), version=2)
+        for label, text in (('bare', '{"workload":"review"}'), ('no hash', '{"version":1,"workload":"review"}'),
+                            ('wrong version', json.dumps(version_two)), ('malformed', 'not json'),
+                            ('stale hash', json.dumps(dict(json.loads(admitted), brief_sha256='0' * 64)))):
+            with self.subTest(label):
+                bound.write_text(text)
+                result = self.admit(home, 'candidate')
+                room = self.ledger(home)['decisions'][-1]['checks']['room']
+                self.assertNotEqual(result.returncode, 0, f'{label} placement.json must stay heavy: {room["reason"]}')
+                self.assertEqual((room['status'], room['reason']), ('fail', 'crew cap: count=4, cap=4'))
 
     def test_unreadable_crew_liveness_refuses_room(self):
         home = self.home('heavy', True, count=4)

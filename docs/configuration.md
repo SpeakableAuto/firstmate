@@ -1298,7 +1298,8 @@ A light-machine example:
 The light machine's `max_crew` may be raised to three after measuring its room; the heavy machine's cannot exceed four.
 `max_crew` (1 to 4) is the heavy-work cap.
 The optional `light_workloads` list and `max_light_crew` (0 to 8) must be set together; together they form a separate light-work allowance, so light crews such as review boards waiting on a captain no longer use up heavy slots.
-A live crew whose `data/<task-id>/placement.json` workload is in `light_workloads` counts against `max_light_crew`; every other live crew, including a crew with no or an unreadable classification, counts against `max_crew`.
+A live crew counts against `max_light_crew` only when its `data/<task-id>/placement.json` is a version 1 classification whose `brief_sha256` matches its current brief and whose workload is in `light_workloads`.
+Every other live crew counts against `max_crew`, including one with a missing, bare, stale or malformed classification.
 A new launch is admitted against the cap of its own class only, and memory, swap and disk floors still apply to every launch.
 A light workload must also appear in `workloads` to fit the machine.
 Without `light_workloads`, every live crew counts against `max_crew`.
