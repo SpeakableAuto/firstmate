@@ -22,11 +22,12 @@ A confirmed ring repeats after another stable idle interval and the backoff whil
 ## Stall recovery
 
 While the home needs supervision, the watchdog treats a newer watcher beacon only while Claude is natively idle or done, and it also treats an acknowledged wake, a newer supervisor transcript file, or a semantic screen change as progress.
-Spinner rows, digit runs such as elapsed-time counters, and Claude's rotating hint row below the prompt are ignored, so a hung turn does not look busy forever.
+Spinner rows, elapsed durations, token counters and Claude's rotating hint row below the prompt are ignored, while other numbers remain semantic progress.
 A visible usage-limit notice counts as progress, because Claude resumes by itself and typing would cancel that.
 After `FM_WATCHDOG_STALL_SECS` (1800 seconds by default) without progress it sends one guarded nudge, which is withheld when the supervisor is busy or its version is unverified.
-After a second quiet interval it stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a new Claude session started in that pane.
-A typed draft visible on a verified version holds the restart and alerts locally instead.
+After a second quiet interval it reads a fresh frame and restarts only when the installed version is verified and the composer is explicitly empty.
+A pending, unknown or unreadable composer, an unsupported harness, or version drift holds the restart and sends one urgent alert that says unsent input may be in the box.
+A permitted restart stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a new Claude session started in that pane.
 An unproven restart or no progress for another interval after a proven one sends one urgent supervisor-down alert through the [urgent captain alert path](wedge-alarm.md#urgent-captain-alerts).
 The same incident retries delivery through the alert limiter until Hermes sends it or reports the incident as a duplicate.
 

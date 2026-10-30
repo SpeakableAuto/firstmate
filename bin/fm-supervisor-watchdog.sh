@@ -22,19 +22,19 @@
 # ends drift; repeat the live check before moving the pin.
 # Stall: while the home needs supervision, progress is a newer watcher beacon
 # while Claude is natively idle or done, a change of the oldest main-owned wake
-# row (an acknowledgement), a newer transcript file, or a semantic pane change
-# (spinner rows and digits ignored, so an elapsed-time counter on a hung turn is
-# not progress). A visible usage-limit notice counts as progress because Claude
-# resumes by itself and typing would cancel that. After STALL_SECS without
-# progress the watchdog sends one guarded nudge; after another STALL_SECS it
-# stops only the target pane's foreground processes, relaunches RESTART_COMMAND
-# there with a prompt naming the newest data/supervisor-handoff-*.md, and proves
-# the new session started. A draft visible on a verified version holds the
-# restart locally. An unverified version also holds the restart and sends one
-# urgent supervisor-down alert because unsent input may be in the box. An
-# unproven restart or no progress for STALL_SECS after a proven one sends one
-# urgent supervisor-down alert through fm_urgent_alert. Progress of any kind
-# rearms the timer.
+# row (an acknowledgement), a newer transcript file, or a semantic pane change.
+# Spinner rows, elapsed durations and token counters are ignored, while other
+# numbers remain semantic progress. A visible usage-limit notice counts as
+# progress because Claude resumes by itself and typing would cancel that. After
+# STALL_SECS without progress the watchdog sends one guarded nudge; after another
+# STALL_SECS it restarts only when a fresh verified frame proves the composer is
+# empty. Otherwise it holds the restart and sends one urgent supervisor-down
+# alert because unsent input may be in the box. A permitted restart stops only
+# the target pane's foreground processes, relaunches RESTART_COMMAND there with
+# a prompt naming the newest data/supervisor-handoff-*.md, and proves the new
+# session started. An unproven restart or no progress for STALL_SECS after a
+# proven one sends one urgent supervisor-down alert through fm_urgent_alert.
+# Progress of any kind rearms the timer.
 # State: FM_HOME/state/supervisor-watchdog/{stall.json,version-alert}.
 # A stable viewport with a terminal network error, native Claude idle/done,
 # no busy footer, and a proven empty composer must survive two observations
@@ -373,7 +373,7 @@ watchdog_version_alert() {
     read -r previous < "$marker" || true
     [ "$previous" != "v:$INSTALLED_VERSION" ] || return 0
   fi
-  summary="Claude changed from '$FM_WATCHDOG_CLAUDE_VERSION' to '${INSTALLED_VERSION:-unknown}'. The supervisor watchdog keeps its stall timer, restart and wake-age alerts but types nothing into the supervisor until the live check is repeated and FM_WATCHDOG_CLAUDE_VERSION is updated."
+  summary="Claude changed from '$FM_WATCHDOG_CLAUDE_VERSION' to '${INSTALLED_VERSION:-unknown}'. The supervisor watchdog keeps its wake-age alert and stall timer, but holds any restart and sends an urgent held-restart alert after the second stall interval. It types nothing into the supervisor until the live check is repeated and FM_WATCHDOG_CLAUDE_VERSION is updated."
   fm_wake_append check supervisor-watchdog "$summary" || return 1
   printf 'v:%s\n' "$INSTALLED_VERSION" > "$marker.tmp"
   mv "$marker.tmp" "$marker"
@@ -389,14 +389,13 @@ watchdog_under_way() {
 }
 
 # Semantic pane fingerprint for stall progress, read from the latest
-# observation: the dim suggestion, ANSI styling, spinner rows and every digit
-# run are dropped, so a ticking elapsed-time counter on a hung turn is not
-# progress while any new transcript text is.
+# observation: the dim suggestion, ANSI styling, spinner rows, elapsed durations
+# and token counters are dropped while other numbers remain semantic progress.
 watchdog_progress_hash() {
   case "${VERDICT:-}" in unreadable|unsupported-harness|'') printf 'unreadable'; return ;; esac
   printf '%s\n' "$STYLED" | fm_composer_strip_ghost | fm_composer_strip_ansi | watchdog_above_footer \
     | LC_ALL=C awk '!/^[[:space:]]*(✻|✽|✢|✳|✶|✺|·|\*)/' \
-    | LC_ALL=C sed -E 's/[0-9]+/#/g; s/[[:space:]]+/ /g' \
+    | LC_ALL=C sed -E 's/[0-9]+(h|m|s)([[:space:]]+[0-9]+(h|m|s))*/#/g; s/[0-9]+([.][0-9]+)?[kKmM]?[[:space:]]+tokens/# tokens/g; s/[[:space:]]+/ /g' \
     | shasum -a 256 | awk '{print $1}'
 }
 
@@ -496,10 +495,22 @@ watchdog_restart_prompt() {
   printf 'then resume supervising every live task. Workers were not touched.'
 }
 
+watchdog_restart_composer() {
+  local styled identity composer
+  [ "${DRIFT:-0}" = 0 ] || { printf 'unverified'; return; }
+  styled=$(watchdog_read) || { printf 'unreadable'; return; }
+  identity=$(watchdog_identity) || { printf 'unreadable'; return; }
+  case "$identity" in claude$'\t'*) ;; *) printf 'unsupported-harness'; return ;; esac
+  composer=$(fm_composer_classify_screen "$CAPS" "$styled" '' "$identity") || composer=unknown
+  printf '%s' "${composer:-unknown}"
+}
+
 # Relaunch the supervisor in its own pane and prove a new Claude session
 # started there. Sets FAIL_REASON on failure.
 watchdog_restart() {
-  local cmd attempt identity state
+  local cmd attempt identity state composer
+  composer=$(watchdog_restart_composer)
+  [ "$composer" = empty ] || { FAIL_REASON="held:$composer"; return 1; }
   watchdog_stop_supervisor || { FAIL_REASON='stop-failed'; return 1; }
   printf -v cmd 'cd %q && %s %q' "$RESTART_CWD" "$RESTART_COMMAND" "$(watchdog_restart_prompt)"
   fm_backend_herdr_cli "$SESSION" pane run "$PANE_ID" "$cmd" >/dev/null || { FAIL_REASON='launch-failed'; return 1; }
@@ -593,18 +604,6 @@ watchdog_stall() {
     nudged)
       [ "$((NOW - stage_at))" -ge "$STALL_SECS" ] || return 0
       STALL_ACTED=1
-      if [ "${DRIFT:-0}" = 1 ]; then
-        watchdog_enter_down "restart held because unsent input may be in the box"
-        return 0
-      fi
-      if [ "$VERDICT" = composer-pending ]; then
-        watchdog_stall_update --argjson now "$NOW" '.stage="held" | .stage_at=$now'
-        watchdog_log held stall-restart-draft
-        fm_wake_append check supervisor-watchdog \
-          "Supervisor made no progress for $((quiet / 60)) minutes but its prompt holds a draft; restart withheld so the draft is not lost." || true
-        wedge_alarm_notify "Supervisor stalled with a draft in its prompt; restart withheld." "$DIR/stall.json"
-        return 0
-      fi
       watchdog_log action-claimed restart
       watchdog_stall_update --argjson now "$NOW" '.stage="restarted" | .stage_at=$now'
       if watchdog_restart; then
@@ -613,8 +612,16 @@ watchdog_stall() {
         watchdog_stall_update '.pane="unreadable"'
       else
         reason=$FAIL_REASON
-        watchdog_log held "restart-$reason"
-        watchdog_enter_down "a restart attempt failed ($reason)"
+        case "$reason" in
+          held:*)
+            watchdog_log held "stall-restart-${reason#held:}"
+            watchdog_enter_down "restart held because unsent input may be in the box"
+            ;;
+          *)
+            watchdog_log held "restart-$reason"
+            watchdog_enter_down "a restart attempt failed ($reason)"
+            ;;
+        esac
       fi
       ;;
     restarted)
