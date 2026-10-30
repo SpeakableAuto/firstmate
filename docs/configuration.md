@@ -392,15 +392,26 @@ Fresh ship and scout spawns check backlog order through [`bin/fm-finish-first.sh
 Unheld, unblocked open work at a higher priority leads, and older work leads within the same priority.
 Lower numeric priorities lead; a missing priority means 3, a missing date sorts before dated work, and equal dates retain backlog row order.
 An In-flight item may resume without becoming a new start.
-Captain obligations, public follow-ups and persistent secondmates are not work items in this check.
+Captain obligations, public follow-ups, persistent secondmates and parent program commissions are not worker jobs in this check.
 The same backlog applicability rules as lifecycle transitions apply, including the manual-backend and absent-backlog exemptions.
+Configured placement records this verdict in its existing capacity ledger and rechecks it through the ordinary queue; the spawn repeats the check under its task-set lock before allocation.
 
 An optional positive decimal integer in `config/crew-slot-cap` bounds open In-flight work at twice that many crew slots.
 It counts held and blocked In-flight work too, and does not count parked task records or worktrees.
 A new start at the bound is refused with a named item to finish; higher priority changes queue order but does not expand the WIP bound.
-Absent means no WIP bound; malformed configuration refuses admission.
+Without that override, a configured `crew-placement.json` supplies its `max_crew` value.
+With neither crew cap configured there is no WIP bound; malformed configuration refuses admission.
 This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
 [`tests/fm-finish-first.test.sh`](../tests/fm-finish-first.test.sh) exercises the policy using tasks-axi and a redacted operational backlog shape.
+
+### Daily work flow
+
+[`bin/fm-flow-report.sh`](../bin/fm-flow-report.sh) reports finished, started and reopened items separately for each completed calendar day, with the two-day started-over-finished signal for a morning-report consumer.
+Its help owns date-range and timezone flags; use `--timezone Australia/Brisbane` for AEST reporting on a host configured in another zone.
+The default is the system's local calendar, while stored timestamps remain UTC.
+[`bin/fm-flow-history.py`](../bin/fm-flow-history.py) owns journal schema, recording boundaries and unknown-history behavior; [`tests/fm-flow-report.test.sh`](../tests/fm-flow-report.test.sh) exercises real wrapper and lifecycle transitions.
+Manual edits and direct calls to `tasks-axi` are outside this journal, so this is transition evidence rather than a reconstruction of all historical work.
+The report emits the stop-starting signal for its consumer; it does not change admission or launch workers.
 
 ### Which backlog receives a transition
 

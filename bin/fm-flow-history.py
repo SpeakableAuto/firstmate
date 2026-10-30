@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append-only backlog transition history and UTC daily flow report.
+"""Append-only backlog transition history and local-calendar daily flow report.
 
 The journal is data/flow-history.jsonl, bounded at 16 MiB. Writers refuse
 before mutation if the journal cannot accept an attempt; a successful mutation
@@ -7,7 +7,7 @@ whose receipt cannot be written leaves an unmatched attempt, making reports
 unknown. Receipts preserve only action, task id, priority and UTC timestamp,
 never task bodies. A crash, malformed row, oversized journal, or incomplete
 attempt is reported as unknown; this reader never repairs or truncates history.
-The first recording day is partial, so only subsequent complete UTC days can
+The first recording day is partial, so only subsequent complete calendar days can
 produce counts. Direct tasks-axi calls and manual backlog edits are outside
 this history; use fm-tasks-axi.sh or the lifecycle helpers for transitions.
 """
@@ -23,6 +23,7 @@ import stat
 import sys
 import time
 import uuid
+from zoneinfo import ZoneInfo
 
 LIMIT = 16 * 1024 * 1024
 
@@ -34,7 +35,7 @@ def now():
 @contextlib.contextmanager
 def journal(path, write=False):
     flags = (os.O_RDWR | os.O_CREAT) if write else os.O_RDONLY
-    fd = os.open(path, flags | os.O_NOFOLLOW, 0o600)
+    fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -95,6 +96,8 @@ def finish(path, token, action, task_id, result, output):
             changed = not first.startswith(f'ok: {action} {task_id} already')
     with journal(path, True) as stream:
         rows = [json.loads(line) for line in stream]
+        if any(not isinstance(row, dict) for row in rows):
+            raise ValueError('journal rows must be objects')
         attempt = next((r for r in rows if r.get('type') == 'attempt' and r.get('token') == token), None)
         if attempt is None or attempt['task_id'] != task_id:
             raise ValueError('missing journal attempt')
@@ -105,22 +108,29 @@ def finish(path, token, action, task_id, result, output):
                             timestamp=now(), result=result))
 
 
-def read_history(path):
+def read_history(path, timezone=None):
     with journal(path) as stream:
         rows = [json.loads(line) for line in stream]
+    if any(not isinstance(row, dict) for row in rows):
+        raise ValueError('journal rows must be objects')
     if not rows or rows[0].get('type') != 'coverage' or rows[0].get('version') != 1:
         raise ValueError('coverage header missing')
     attempts = {}
     completed = set()
     events = []
     for row in rows:
-        stamp = dt.datetime.strptime(row['timestamp'], '%Y-%m-%dT%H:%M:%SZ')
-        row['day'] = stamp.date()
+        stamp = dt.datetime.strptime(row['timestamp'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc)
+        row['stamp'] = stamp
+        row['day'] = stamp.astimezone(timezone).date()
+        if stamp < rows[0].get('stamp', stamp):
+            raise ValueError('journal row precedes coverage')
         if row['type'] == 'coverage':
             if row is not rows[0]:
                 raise ValueError('duplicate coverage header')
             continue
         token = row['token']
+        if not isinstance(token, str) or not token:
+            raise ValueError('invalid journal token')
         if row['type'] == 'attempt':
             if token in attempts:
                 raise ValueError('duplicate attempt')
@@ -129,6 +139,8 @@ def read_history(path):
             if token not in attempts or token in completed:
                 raise ValueError('invalid journal receipt')
             attempt = attempts[token]
+            if stamp < attempt['stamp']:
+                raise ValueError('journal receipt precedes attempt')
             if row['task_id'] != attempt['task_id'] or row['priority'] != attempt['priority']:
                 raise ValueError('journal receipt identity mismatch')
             if row['action'] not in ('start', 'done', 'reopen'):
@@ -145,21 +157,21 @@ def read_history(path):
     return rows[0]['day'] + dt.timedelta(days=1), events
 
 
-def report(path, since, until):
+def report(path, since, until, timezone=None):
     try:
-        coverage, events = read_history(path)
+        coverage, events = read_history(path, timezone)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f'flow_history: unknown ({exc})')
         print('stop_starting: unknown')
         return
-    print(f'flow_history: UTC; complete coverage from {coverage}; wrapper/lifecycle transitions only')
+    print(f'flow_history: {timezone or "system local time"}; complete coverage from {coverage}; wrapper/lifecycle transitions only')
     daily = {}
     for row in events:
         day = daily.setdefault(row['day'], {'start': set(), 'done': set(), 'reopen': set()})
         day[row['action']].add(row['task_id'])
     def counts(day):
         return daily.get(day, {'start': set(), 'done': set(), 'reopen': set()})
-    today = dt.datetime.now(dt.timezone.utc).date()
+    today = dt.datetime.now(dt.timezone.utc).astimezone(timezone).date()
     day = since
     while day <= until:
         if day < coverage or day >= today:
@@ -178,6 +190,13 @@ def report(path, since, until):
     print(f'stop_starting: {signal}')
 
 
+def calendar_zone(value):
+    try:
+        return ZoneInfo(value)
+    except (KeyError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f'unknown calendar timezone: {value}') from exc
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data', required=True, type=Path)
@@ -192,8 +211,8 @@ def main():
     end.add_argument('result', type=int)
     show = commands.add_parser('report')
     show.add_argument('--since', required=True, type=dt.date.fromisoformat)
-    show.add_argument('--until', type=dt.date.fromisoformat,
-                      default=dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=1))
+    show.add_argument('--until', type=dt.date.fromisoformat)
+    show.add_argument('--timezone', type=calendar_zone, help='IANA calendar zone; default system local time')
     args = parser.parse_args()
     path = args.data / 'flow-history.jsonl'
     try:
@@ -202,9 +221,11 @@ def main():
         elif args.command == 'finish':
             finish(path, args.token, args.action, args.task_id, args.result, sys.stdin.read())
         else:
+            if args.until is None:
+                args.until = dt.datetime.now(dt.timezone.utc).astimezone(args.timezone).date() - dt.timedelta(days=1)
             if args.until < args.since or (args.until - args.since).days > 3660:
                 raise ValueError('report range must be ordered and at most 3661 days')
-            report(path, args.since, args.until)
+            report(path, args.since, args.until, args.timezone)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f'flow-history: {exc}', file=sys.stderr)
         return 2

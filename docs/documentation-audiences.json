@@ -594,6 +594,10 @@
     {
       "path": "KITCHEN-CHANGES.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": "tests/fixtures/finish-first/backlog.md",
+      "audience": "maintainer-verification"
     }
   ]
 }

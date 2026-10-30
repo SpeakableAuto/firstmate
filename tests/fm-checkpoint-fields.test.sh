@@ -31,3 +31,16 @@ for kind in ship scout; do
   assert_contains "$brief" 'checkpoint_sha=' 'generated brief specifies fixed commit field'
 done
 pass 'fixed checkpoint fields warn through unread status and appear in both brief roles'
+
+# Exercise the supervisor's actual drain surface and its once-only cursor.
+# shellcheck source=tests/wake-helpers.sh
+. "$ROOT/tests/wake-helpers.sh"
+dir=$(make_case checkpoint-drain)
+printf 'note: initialize cursor\n' > "$dir/state/checkpoint.status"
+FM_STATE_OVERRIDE="$dir/state" bash "$ROOT/bin/fm-wake-drain.sh" >/dev/null || fail 'initial drain'
+printf '%s\n' 'working: checkpoint; done=tests' >> "$dir/state/checkpoint.status"
+out=$(FM_STATE_OVERRIDE="$dir/state" bash "$ROOT/bin/fm-wake-drain.sh") || fail 'checkpoint drain'
+assert_contains "$out" 'warning: checkpoint missing or invalid' 'actual drain prints advisory warning'
+out=$(FM_STATE_OVERRIDE="$dir/state" bash "$ROOT/bin/fm-wake-drain.sh") || fail 'second drain'
+assert_not_contains "$out" 'warning: checkpoint missing or invalid' 'warning is presented once'
+pass 'checkpoint warnings reach the actual drain once without blocking it'
