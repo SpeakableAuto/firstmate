@@ -59,6 +59,7 @@ esac
 : "${FM_HOME:?set FM_HOME to the Firstmate home}"
 case "$FM_HOME" in /*) ;; *) echo 'FM_HOME must be absolute' >&2; exit 2 ;; esac
 CONFIG=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
+STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 config="$CONFIG/work-drive"
 BLOCK_BEGIN='# >>> firstmate work drive >>>'
 BLOCK_END='# <<< firstmate work drive <<<'
@@ -206,51 +207,16 @@ check_placement() {
 }
 
 check_project_treehouse() {
-  local project=$1 file treehouse_root
-  file="$project/treehouse.toml"
-  if [ ! -f "$file" ] || [ -L "$file" ]; then
-    echo "refused treehouse: $file is missing, not a regular file, or symlinked" >&2
+  local project=$1 verdict treehouse_root reason
+  if ! verdict=$(python3 "$SCRIPT_DIR/fm-placement.py" worktree "$CONFIG" "$project"); then
+    echo "refused treehouse: placement validation failed for $project" >&2
     return 3
   fi
-  if ! treehouse_root=$(python3 - "$file" <<'PY'
-import re
-import sys
-
-roots = []
-in_table = False
-with open(sys.argv[1], encoding="utf-8") as handle:
-    for raw in handle:
-        line = raw.rstrip("\r\n")
-        stripped = line.lstrip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("["):
-            in_table = True
-            continue
-        if in_table or not re.match(r"root\s*=", stripped):
-            continue
-        match = re.fullmatch(r'root\s*=\s*"([^"\\]*)"\s*(?:#.*)?', stripped)
-        if not match:
-            sys.exit(1)
-        roots.append(match.group(1))
-if len(roots) != 1:
-    sys.exit(1)
-print(roots[0])
-PY
-  ); then
-    echo "refused treehouse: $file must contain one literal top-level root" >&2
+  if ! treehouse_root=$(printf '%s\n' "$verdict" | jq -er 'select(.status == "pass") | .root'); then
+    reason=$(printf '%s\n' "$verdict" | jq -r '.reason // "invalid placement response"' 2>/dev/null || true)
+    echo "refused treehouse: ${reason:-invalid placement response}" >&2
     return 3
   fi
-  if ! real_dir "$treehouse_root"; then
-    echo "refused treehouse: $treehouse_root is missing or not a real directory" >&2
-    return 3
-  fi
-  case "$treehouse_root" in
-    "$root"|"$root"/*) ;;
-    *)
-      echo "refused treehouse: $treehouse_root is outside $root" >&2
-      return 3 ;;
-  esac
   echo "ok treehouse root $treehouse_root"
 }
 
@@ -463,17 +429,19 @@ prepare_targets() {
   done
 }
 render_growth_plist() {
-  python3 - "$FM_HOME" "$HOME" "$SCRIPT_DIR" "$GROWTH_LABEL" <<'PY'
+  python3 - "$FM_HOME" "$HOME" "$SCRIPT_DIR" "$GROWTH_LABEL" "$CONFIG" "$STATE" <<'PY'
 import os
 import plistlib
 import sys
 
-fm_home, home, script_dir, label = sys.argv[1:]
+fm_home, home, script_dir, label, config, state = sys.argv[1:]
 payload = {
     "Label": label,
     "ProgramArguments": ["/bin/bash", os.path.join(script_dir, "fm-internal-growth.sh")],
     "EnvironmentVariables": {
         "FM_HOME": fm_home,
+        "FM_CONFIG_OVERRIDE": os.path.abspath(config),
+        "FM_STATE_OVERRIDE": os.path.abspath(state),
         "HOME": home,
         "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     },

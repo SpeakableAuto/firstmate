@@ -122,6 +122,22 @@ assert_equals "$scan" "$(last_log | jq -r '.flagged[0].path')" 'removed allowed 
 assert_equals "$((2 * GIB))" "$(last_log | jq -r '.flagged[0].growth_kib')" 'missing allowed path is treated as zero'
 pass 'allowed deltas use the union of baseline and current paths'
 
+new_case separate_allowed
+separate_allow="$case_dir/separate-allow"
+mkdir -p "$separate_allow"
+printf 'allow=%s\n' "$separate_allow" >> "$fm/config/internal-growth"
+sizes a=1
+printf '1\t%s\n' "$separate_allow" >> "$case_dir/du"
+usage 1000000 100000000
+run_check
+printf '%s\t%s\n' "$((2 * GIB + 1))" "$separate_allow" >> "$case_dir/du"
+usage $((1000000 + 2 * GIB)) $((100000000 - 2 * GIB))
+run_check
+assert_equals 0 "$(wakes)" 'allowed growth outside every scan root stays silent'
+assert_equals "$((2 * GIB))" "$(last_log | jq -r .allowed_growth_kib)" 'separate allowed growth is accounted for'
+assert_equals 0 "$(last_log | jq '.flagged | length')" 'separate allowed growth is not reported as unexplained'
+pass 'allowed folders outside scan roots are measured directly'
+
 new_case unreadable
 mkdir -p "$scan/protected"
 sizes a=1

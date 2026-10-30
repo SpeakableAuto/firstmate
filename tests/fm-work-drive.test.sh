@@ -52,6 +52,8 @@ new_case() {
   fm="$case_dir/fm"
   drive="$case_dir/mounts/drive"
   mkdir -p "$user" "$fm/config" "$case_dir/mounts"
+  config_override=
+  state_override=
   # The fresh login shell finds the fake tools only through the user's profile.
   # shellcheck disable=SC2016 # $PATH expands when the profile is sourced.
   printf 'export PATH=%s:$PATH\nexport KEEP_ME=1\n' "$FAKEBIN" > "$user/.bash_profile"
@@ -70,14 +72,16 @@ make_drive() {
   for rel in $TARGETS; do mkdir -p "$drive/$rel"; done
 }
 write_placement() {
+  local config_dir=${config_override:-$fm/config}
   jq -n --arg d "$drive" --arg t "$TARGETS" \
-    '{drive:$d,required_drive_dirs:($t|split(" "))}' > "$fm/config/crew-placement.json"
+    '{drive:$d,required_drive_dirs:($t|split(" "))}' > "$config_dir/crew-placement.json"
 }
 # FM_WORK_DRIVE_TEST_MOUNT stands in for a real mount; unset it to test refusal.
 wd() {
   local rc=0
   [ "${unsafe_parent:-0}" = 1 ] || chmod 0555 "$case_dir/mounts"
   env HOME="$user" SHELL="$(command -v bash)" FM_HOME="$fm" PATH="$FAKEBIN:$PATH" \
+    FM_CONFIG_OVERRIDE="${config_override:-$fm/config}" FM_STATE_OVERRIDE="${state_override:-$fm/state}" \
     FM_WORK_DRIVE_TEST_MOUNT="${mount_seam-$drive}" bash "$ROOT/bin/fm-work-drive.sh" "$@" || rc=$?
   chmod 0755 "$case_dir/mounts"
   return "$rc"
@@ -274,29 +278,61 @@ pass 'verify checks the launch allowlist and placement profile'
 
 project="$case_dir/project"
 treehouse_root="$drive/Treehouse"
-mkdir -p "$project" "$treehouse_root"
-printf 'root = "%s"\n' "$treehouse_root" > "$project/treehouse.toml"
+worktree="$treehouse_root/slot"
+mkdir -p "$project" "$worktree"
+printf "root = '%s'\n" "$treehouse_root" > "$project/treehouse.toml"
 out=$(wd verify --project "$project")
-assert_contains "$out" "ok treehouse root $treehouse_root" 'literal project Treehouse root passes'
+assert_contains "$out" "ok treehouse root $treehouse_root" 'single-quoted project Treehouse root passes'
+verdict=$(python3 "$ROOT/bin/fm-placement.py" worktree "$fm/config" "$project" "$worktree")
+assert_equals pass "$(printf '%s\n' "$verdict" | jq -r .status)" 'spawn accepts the same single-quoted Treehouse root'
+printf "root = '%s'\nworktree_path = 'custom'\n" "$treehouse_root" > "$project/treehouse.toml"
+set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'custom Treehouse layout refuses verification'
+assert_contains "$out" 'custom worktree_path cannot prove external allocation' 'custom layout refusal is named'
+verdict=$(python3 "$ROOT/bin/fm-placement.py" worktree "$fm/config" "$project" "$worktree")
+assert_equals fail "$(printf '%s\n' "$verdict" | jq -r .status)" 'spawn refuses the same custom Treehouse layout'
 printf '[pool]\nroot = "%s"\n' "$treehouse_root" > "$project/treehouse.toml"
 set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
 assert_equals 3 "$rc" 'nested Treehouse root refuses'
-assert_contains "$out" 'must contain one literal top-level root' 'non-top-level root is named'
+assert_contains "$out" 'repo-local Treehouse root absent' 'non-top-level root is named'
 printf 'root = "%s"\n' "$drive/MissingTreehouse" > "$project/treehouse.toml"
 set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
 assert_equals 3 "$rc" 'missing Treehouse root refuses'
-assert_contains "$out" 'is missing or not a real directory' 'missing Treehouse root is named'
+assert_contains "$out" 'Treehouse root missing, symlinked, or outside required drive' 'missing Treehouse root is named'
 printf 'root = "%s"\n' "$case_dir" > "$project/treehouse.toml"
 set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
 assert_equals 3 "$rc" 'Treehouse root outside the drive refuses'
-assert_contains "$out" "is outside $drive" 'outside Treehouse root is named'
+assert_contains "$out" 'Treehouse root missing, symlinked, or outside required drive' 'outside Treehouse root is named'
 rm "$project/treehouse.toml"
 printf 'root = "%s"\n' "$treehouse_root" > "$case_dir/treehouse.toml"
 ln -s "$case_dir/treehouse.toml" "$project/treehouse.toml"
 set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
 assert_equals 3 "$rc" 'symlinked Treehouse config refuses'
-assert_contains "$out" 'or symlinked' 'symlinked Treehouse config is named'
-pass 'verify checks each project Treehouse root on the drive'
+assert_contains "$out" 'repo-local treehouse.toml missing or symlinked' 'symlinked Treehouse config is named'
+pass 'verify reuses placement Treehouse validation'
+
+new_case override_enrollment
+config_override="$case_dir/alternate/config"
+state_override="$case_dir/alternate/state"
+mkdir -p "$config_override" "$drive"
+mv "$fm/config/work-drive" "$config_override/work-drive"
+write_placement
+wd install >/dev/null
+plist="$user/Library/LaunchAgents/local.firstmate.internal-growth.plist"
+python3 - "$plist" "$config_override" "$state_override" <<'PY'
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    environment = plistlib.load(handle)["EnvironmentVariables"]
+assert environment["FM_CONFIG_OVERRIDE"] == sys.argv[2]
+assert environment["FM_STATE_OVERRIDE"] == sys.argv[3]
+PY
+[ -s "$config_override/internal-growth" ] || fail 'override install omitted its growth configuration'
+[ -s "$state_override/internal-growth/baseline.tsv" ] || fail 'override install omitted its measured baseline'
+[ ! -e "$fm/config/internal-growth" ] || fail 'override install wrote growth configuration to the default home'
+[ ! -e "$fm/state/internal-growth/baseline.tsv" ] || fail 'override install wrote growth state to the default home'
+pass 'LaunchAgent retains the effective configuration and state directories'
 
 new_case enrollment_failure
 mkdir -p "$drive"

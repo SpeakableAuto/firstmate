@@ -138,14 +138,20 @@ def measure(cfg, budget, unmeasured):
         if scan not in found:
             raise RuntimeError(f"du produced no total for {scan}")
         sizes.update(found)
-        # Allowed folders deeper than the scan depth are measured directly so
-        # their growth can still be excluded from every ancestor.
-        deep = [a for a in cfg["allow"] if under(a, scan) and a not in sizes and os.path.isdir(a)]
-        if deep:
-            found, inaccessible = du(["-s"] + deep, budget)
-            sizes.update(found)
-            unmeasured.update(inaccessible)
-            unmeasured.update(path for path in deep if path not in found)
+    direct = []
+    for path in cfg["allow"]:
+        if path in sizes or not os.path.lexists(path):
+            continue
+        if not os.path.isdir(path) or os.path.islink(path):
+            raise RuntimeError(f"allowed path is not a real directory: {path}")
+        if os.stat(path).st_dev != device:
+            raise RuntimeError(f"allowed path is not on {cfg['volume']}: {path}")
+        direct.append(path)
+    if direct:
+        found, inaccessible = du(["-s"] + direct, budget)
+        sizes.update(found)
+        unmeasured.update(inaccessible)
+        unmeasured.update(path for path in direct if path not in found)
     return sizes
 
 

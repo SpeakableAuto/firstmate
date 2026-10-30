@@ -83,6 +83,7 @@ allow=/Users/me/firstmate/state
 
 Each `scan=` path must be on `volume`; `du -x` keeps each measurement on that volume, so the work drive is never counted.
 List under `allow=` only folders that are meant to live internally, such as specific Firstmate operational directories, always-on services, and application data.
+An existing allowed folder outside every scan root is measured directly and must be a real directory on `volume`.
 A folder that `du` cannot read is retained in the log row's `unmeasured` list and labeled `UNMEASURED` in any alert emitted during that run.
 A nonzero `du` exit remains a usable partial measurement when the scan-root total exists, while a missing scan-root total is a failed measurement.
 The check also reads total volume use from `df` and opens a separate episode when used-space growth above the threshold is not explained by allowed or already flagged folder growth.
@@ -96,6 +97,7 @@ A large scan can take several minutes, so schedule it rather than running it int
 
 `fm-work-drive.sh install` performs host enrollment by writing and bootstrapping the per-user `local.firstmate.internal-growth` LaunchAgent.
 Installation requires a valid growth configuration, a successful read-only measurement, and an initial recorded check before enrollment, and refuses a failed bootstrap.
+The enrolled service retains the effective `FM_CONFIG_OVERRIDE` and `FM_STATE_OVERRIDE` directories used during installation.
 `verify` requires that same valid configuration and read-only measurement as well as the loaded LaunchAgent; a loaded service alone is not proof that the check works.
 Failed dry-run measurements return a nonzero status without creating baseline, logs, or alerts.
 `install --dry-run` prints the complete plist and the `launchctl bootout` and `launchctl bootstrap` commands without writing or loading anything.
