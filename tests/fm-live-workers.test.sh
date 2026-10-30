@@ -16,14 +16,14 @@ test_count_contract() (
   fm_backend_source() { return 0; }
   fm_backend_agent_state() { printf '%s' "$2"; }
   for backend in tmux herdr orca cmux zellij; do
-    for verdict in alive missing dead gone unproven-absent; do
+    for verdict in alive missing dead gone unproven-absent ambiguous unverified; do
       fm_write_meta "$state/worker.meta" "backend=$backend" "window=$verdict" 'kind=ship' 'harness=claude'
       fm_live_workers_count "$state" '' || fail "$backend $verdict count failed"
       if [ "$verdict" = alive ]; then expected=1; else expected=0; fi
       assert_equals "$expected" "$FM_LIVE_WORKERS_COUNT" "$backend $verdict count"
     done
-    fm_write_meta "$state/worker.meta" "backend=$backend" 'window=unverified' 'kind=ship' 'harness=claude'
-    if fm_live_workers_count "$state" '' 2>/dev/null; then fail "$backend unverified count accepted"; fi
+    fm_write_meta "$state/worker.meta" "backend=$backend" 'window=unreadable' 'kind=ship' 'harness=claude'
+    if fm_live_workers_count "$state" '' 2>/dev/null; then fail "$backend unreadable count accepted"; fi
     assert_equals "crew liveness unreadable: $backend" "$FM_LIVE_WORKERS_ERROR" 'named refusal'
   done
   fm_write_meta "$state/worker.meta" 'backend=tmux' 'window=missing' 'kind=ship' 'harness=claude' 'spawn_gen=s1999999941.1'
@@ -54,6 +54,13 @@ test_count_contract() (
   fm_write_meta "$state/worker.meta" 'backend=tmux' 'window=unreadable' 'kind=ship' 'harness=claude'
   if fm_claude_admission_count "$state" '' ordinary 2>/dev/null; then fail 'Claude swallowed liveness failure'; fi
   if fm_quota_pacing_count "$state" "$TMP_ROOT/count-quota.json" '' claude default 2>/dev/null; then fail 'pacing swallowed liveness failure'; fi
+  pacing_fixture=$(printf '%s\n' '{"schemaVersion":1,"accounts":[{"provider":"claude","accountKey":"default","scope":"all_models","allowedConcurrency":2},{"provider":"codex","accountKey":"default","scope":"all_models","allowedConcurrency":2}]}')
+  node() { printf '%s\n' "$pacing_fixture"; }
+  pacing=$(fm_quota_pacing_state /dev/null "$state" "$TMP_ROOT/count-quota.json") || fail 'pacing snapshot lost on liveness failure'
+  assert_equals 'crew liveness unreadable: tmux' "$(printf '%s\n' "$pacing" | jq -r '.accounts[] | select(.provider == "claude") | .livenessError')" 'affected account names liveness failure'
+  assert_equals null "$(printf '%s\n' "$pacing" | jq -r '.accounts[] | select(.provider == "claude") | .allowedConcurrency')" 'affected account cannot admit'
+  assert_equals 2 "$(printf '%s\n' "$pacing" | jq -r '.accounts[] | select(.provider == "codex") | .allowedConcurrency')" 'unrelated provider stays dispatchable'
+  assert_equals 0 "$(printf '%s\n' "$pacing" | jq -r '.accounts[] | select(.provider == "codex") | .liveCount')" 'unrelated provider keeps its count'
   pass 'shared count: backend verdicts, grace, exclusions, account filters, and failure propagation'
 )
 test_count_contract
@@ -75,7 +82,11 @@ case "$1" in
     printf '%s\n' "${LIVE_TEST_WINDOWS:-}"
     exit 0 ;;
   display-message)
-    case "$*" in *pane_current_command*) echo codex; exit 0 ;; esac ;;
+    case "$*" in
+      *old-1*pane_current_command*) echo less; exit 0 ;;
+      *old-2*pane_current_command*) echo node; exit 0 ;;
+      *pane_current_command*) echo codex; exit 0 ;;
+    esac ;;
 esac
 exec "$(dirname "$0")/tmux-base" "$@"
 SH
@@ -97,17 +108,18 @@ for posture in normal away quiet; do
   if [ "$posture" != normal ]; then
     FM_HOME="$HOME_DIR" FM_AFK_MODE="$posture" "$ROOT/bin/fm-afk-contract.sh" enter --spend 4 >/dev/null
   fi
+  export LIVE_TEST_WINDOWS=$'old-1\nold-2'
   out=$(spawn) || fail "$posture: 65 parked records refused spawn: $out"
   assert_present "$HOME_DIR/state/ready-task.meta" "$posture: no worker published"
   for n in $(seq 1 65); do
     cmp "$CASE/before/old-$n.meta" "$HOME_DIR/state/old-$n.meta" || fail 'old record changed'
   done
-  pass "$posture: 65 parked records admit spawn and remain unchanged"
+  pass "$posture: 65 parked records, two with windows running less and node, admit spawn and remain unchanged"
 done
 
 make_case cap
 FM_HOME="$HOME_DIR" "$ROOT/bin/fm-afk-contract.sh" enter --spend 4 >/dev/null
-export LIVE_TEST_WINDOWS=$'old-1\nold-2\nold-3\nold-4'
+export LIVE_TEST_WINDOWS=$'old-3\nold-4\nold-5\nold-6'
 if out=$(spawn); then fail 'four live workers admitted at cap four'; fi
 assert_contains "$out" 'caps concurrent workers at 4 and 4 ordinary task(s) are live' 'live cap refusal'
 assert_absent "$HOME_DIR/state/ready-task.meta" 'refused task published'

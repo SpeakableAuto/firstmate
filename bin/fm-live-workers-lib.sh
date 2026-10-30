@@ -5,9 +5,10 @@
 # charged to a particular account/provider. Secondmates never consume a slot.
 # Sets FM_LIVE_WORKERS_COUNT and FM_LIVE_WORKERS_COUNTED (comma-space task ids).
 # Counts positively alive endpoints and launches in the preceding 60 seconds.
-# Missing/dead/gone endpoints do not consume capacity, even when their absence
-# is not strong enough to authorize lifecycle recovery. Never recover or delete
-# an endpoint here. Unreadable/unclassified evidence refuses with return 2 and
+# Missing/dead/gone, ambiguous (open endpoint without an agent) and unverified
+# (no classifier) endpoints do not consume capacity, even when their absence is
+# not strong enough to authorize lifecycle recovery. Never recover or delete an
+# endpoint here. Only a backend read failure refuses, with return 2 and
 # FM_LIVE_WORKERS_ERROR="crew liveness unreadable: <backend>" (also on stderr).
 # Call under the caller's admission lock and propagate failures, never use a
 # partial count. Task metadata and status events alone are not liveness proof.
@@ -19,7 +20,8 @@ fi
 
 fm_live_workers_agent_state() { # <backend> <target>
   local backend=$1 target=$2 verdict
-  [ -n "$target" ] || { printf 'unreadable'; return 0; }
+  [ -n "$target" ] || { printf 'missing'; return 0; }
+  fm_backend_source "$backend" || { printf 'unverified'; return 0; }
   verdict=$(fm_backend_agent_state "$backend" "$target") || return 1
   if [ "$backend:$verdict" = herdr:unreadable ] \
      && fm_backend_herdr_parse_target "$target" \
@@ -58,14 +60,11 @@ fm_live_workers_count() {
     if [ -z "$verdict" ]; then
       backend=$(fm_backend_of_meta "$meta") || backend=unknown
       target=$(fm_backend_target_of_meta "$meta") || target=
-      verdict=unreadable
-      if fm_backend_source "$backend"; then
-        verdict=$(fm_live_workers_agent_state "$backend" "$target") || verdict=unreadable
-      fi
+      verdict=$(fm_live_workers_agent_state "$backend" "$target") || verdict=unreadable
     fi
     case "$verdict" in
       alive) ;;
-      missing|dead|gone|unproven-absent) continue ;;
+      missing|dead|gone|unproven-absent|ambiguous|unverified) continue ;;
       *)
         FM_LIVE_WORKERS_ERROR="crew liveness unreadable: ${backend:-unknown}"
         printf '%s\n' "$FM_LIVE_WORKERS_ERROR" >&2

@@ -16,6 +16,9 @@
 # shellcheck source=bin/fm-backlog-lib.sh
 . "$SCRIPT_DIR/fm-backlog-lib.sh"
 
+# shellcheck source=bin/fm-live-workers-lib.sh
+. "$SCRIPT_DIR/fm-live-workers-lib.sh"
+
 FM_PLACEMENT_ACTIVE=0
 FM_PLACEMENT_RECORDED=0
 FM_PLACEMENT_LOCK_HELD=0
@@ -129,31 +132,11 @@ fm_placement_release() {
 }
 
 fm_placement_count() {
-  local meta backend target verdict gen started now count=0
-  now=$(date +%s)
-  for meta in "$STATE"/*.meta; do
-    [ -f "$meta" ] || continue
-    [ "$meta" != "$STATE/$FM_PLACEMENT_ID.meta" ] || continue
-    [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
-    backend=$(fm_backend_of_meta "$meta")
-    target=$(fm_backend_target_of_meta "$meta")
-    gen=$(fm_meta_get "$meta" spawn_gen)
-    started=${gen#s}; started=${started%%.*}
-    case "$started" in
-      ''|*[!0-9]*) ;;
-      *) if [ "$((now - started))" -lt 60 ]; then count=$((count + 1)); continue; fi ;;
-    esac
-    verdict=unreadable
-    if fm_backend_source "$backend"; then
-      verdict=$(fm_quota_pacing_agent_state "$backend" "$target")
-    fi
-    case "$verdict" in
-      alive) count=$((count + 1)) ;;
-      missing|dead|gone) ;;
-      *) printf 'crew liveness unreadable: %s' "${backend:-unknown}"; return 2 ;;
-    esac
-  done
-  printf '%s' "$count"
+  fm_live_workers_count "$STATE" "$FM_PLACEMENT_ID" 2>/dev/null || {
+    printf '%s' "$FM_LIVE_WORKERS_ERROR"
+    return 2
+  }
+  printf '%s' "$FM_LIVE_WORKERS_COUNT"
 }
 
 fm_placement_profile() { # <harness> <model> <effort>

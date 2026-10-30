@@ -10,9 +10,6 @@
 # shellcheck source=bin/fm-live-workers-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-live-workers-lib.sh"
 
-# Compatibility for placement callers; the shared library owns the classifier.
-fm_quota_pacing_agent_state() { fm_live_workers_agent_state "$@"; }
-
 fm_quota_pacing_meta_identity() { # <snapshot-file> <meta>
   local snapshot=$1 meta=$2 harness family model provider lane account
   harness=$(fm_meta_get "$meta" harness)
@@ -55,7 +52,14 @@ fm_quota_pacing_state() { # <config-file> <state> <snapshot-file> [epoch-seconds
   out=$calculated
   while IFS=$'\t' read -r provider account; do
     [ -n "$provider" ] || continue
-    fm_quota_pacing_count "$state" "$snapshot" "$exclude" "$provider" "$account" || return 2
+    if ! fm_quota_pacing_count "$state" "$snapshot" "$exclude" "$provider" "$account" 2>/dev/null; then
+      out=$(printf '%s\n' "$out" | jq -c --arg provider "$provider" --arg account "$account" \
+        --arg error "$FM_LIVE_WORKERS_ERROR" '
+        .accounts |= map(if .provider == $provider and .accountKey == $account then
+          . + {liveCount:null, countedTaskIds:[], allowedConcurrency:null, livenessError:$error}
+        else . end)') || return 1
+      continue
+    fi
     out=$(printf '%s\n' "$out" | jq -c --arg provider "$provider" --arg account "$account" \
       --argjson count "$FM_QUOTA_PACING_COUNT" --arg counted "$FM_QUOTA_PACING_COUNTED" '
       .accounts |= map(if .provider == $provider and .accountKey == $account then
@@ -143,6 +147,11 @@ fm_quota_pacing_admission_check() { # <config-dir> <state> <id> <harness> <model
   ') || applicable='[]'
   rm -f "$snapshot" "$merged"
   [ "$(printf '%s\n' "$applicable" | jq 'length')" -gt 0 ] || return 0
+  status=$(printf '%s\n' "$applicable" | jq -r '[.[].livenessError | select(. != null)] | first // ""')
+  if [ -n "$status" ]; then
+    echo "error: quota pacing admission refused for provider $provider account $account: $status" >&2
+    return 1
+  fi
   if printf '%s\n' "$applicable" | jq -e 'any(.[]; .allowedConcurrency == null)' >/dev/null; then
     echo "error: quota pacing admission refused for provider $provider account $account because pacing evidence is incomplete" >&2
     return 1

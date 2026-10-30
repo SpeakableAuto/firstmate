@@ -414,21 +414,26 @@ pass 'rejected allocation returns only a clean, unrecorded freshly owned slot'
   # shellcheck disable=SC2329 # invoked indirectly by fm_placement_count
   fm_backend_source() { [ "$1" != unsupported ]; }
   # shellcheck disable=SC2329 # invoked indirectly by fm_placement_count
-  fm_quota_pacing_agent_state() { printf '%s' "$2"; }
-  for verdict in missing dead gone; do
+  fm_backend_agent_state() { fm_backend_source "$1" || { printf unverified; return 0; }; printf '%s' "$2"; }
+  for verdict in missing dead gone ambiguous unverified; do
     printf 'kind=ship\nbackend=tmux\nwindow=%s\nspawn_gen=s1.0\n' "$verdict" > "$STATE/worker.meta"
     assert_equals 0 "$(fm_placement_count)" "absent '$verdict' never consumes crew"
     printf 'kind=ship\nbackend=tmux\nwindow=%s\nspawn_gen=s%s.0\n' "$verdict" "$(( $(date +%s) - 10 ))" > "$STATE/worker.meta"
     assert_equals 1 "$(fm_placement_count)" "record launched 10 s ago counts despite '$verdict'"
   done
-  for verdict in unreadable unverified ''; do
-    printf 'kind=ship\nbackend=herdr\nwindow=%s\nspawn_gen=s1.0\n' "$verdict" > "$STATE/worker.meta"
-    reason=$(fm_placement_count) && fail "unreadable '$verdict' liveness must refuse"
-    assert_equals 'crew liveness unreadable: herdr' "$reason" "unreadable '$verdict' names its backend"
+  printf 'kind=ship\nbackend=herdr\nwindow=unreadable\nspawn_gen=s1.0\n' > "$STATE/worker.meta"
+  reason=$(fm_placement_count) && fail 'unreadable liveness must refuse'
+  assert_equals 'crew liveness unreadable: herdr' "$reason" 'unreadable liveness names its backend'
+  printf 'kind=ship\nbackend=tmux\nwindow=alive\nspawn_gen=s%s.0\n' "$(( $(date +%s) + 3600 ))" > "$STATE/worker.meta"
+  assert_equals 1 "$(fm_placement_count)" 'future timestamp falls through to liveness'
+  printf 'kind=ship\nbackend=tmux\nwindow=missing\nspawn_gen=s%s.0\n' "$(( $(date +%s) + 3600 ))" > "$STATE/worker.meta"
+  assert_equals 0 "$(fm_placement_count)" 'future timestamp never reserves a slot'
+  printf 'kind=ship\nbackend=tmux\nwindow=missing\nspawn_gen=s99999999999999999999.0\n' > "$STATE/worker.meta"
+  assert_equals 0 "$(fm_placement_count)" 'overlong timestamp never reserves a slot'
+  for verdict in '' alive; do
+    printf 'kind=ship\nbackend=unsupported\nwindow=%s\n' "$verdict" > "$STATE/worker.meta"
+    assert_equals 0 "$(fm_placement_count)" "unclassified backend '$verdict' neither counts nor refuses"
   done
-  printf 'kind=ship\nbackend=unsupported\nwindow=alive\n' > "$STATE/worker.meta"
-  reason=$(fm_placement_count) && fail 'unloadable backend must refuse'
-  assert_equals 'crew liveness unreadable: unsupported' "$reason" 'unloadable backend names itself'
   for backend in tmux herdr zellij orca cmux; do
     printf 'kind=ship\nbackend=%s\nwindow=alive\nstatus=paused\n' "$backend" > "$STATE/worker.meta"
     assert_equals 1 "$(fm_placement_count)" "$backend positively alive counts even if status says paused"
@@ -437,4 +442,4 @@ pass 'rejected allocation returns only a clean, unrecorded freshly owned slot'
   printf 'kind=secondmate\nbackend=tmux\nwindow=alive\n' > "$STATE/secondmate.meta"
   assert_equals 1 "$(fm_placement_count)" 'candidate and secondmates excluded'
 ) || exit 1
-pass 'crew count requires positive liveness or launch grace and refuses unreadable liveness'
+pass 'crew count requires positive liveness or launch grace and refuses only unreadable liveness'
