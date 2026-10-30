@@ -394,28 +394,28 @@ Each request is assessed independently; an older held, blocked or unplaceable jo
 An In-flight item may resume without becoming a new start.
 Captain obligations, public follow-ups, persistent secondmates and parent program commissions are not worker jobs in this check.
 The same backlog applicability rules as lifecycle transitions apply, including the manual-backend and absent-backlog exemptions.
-Configured placement records WIP refusals as `wip` waits in its existing ledger and rechecks them through the ordinary queue; they are not machine-capacity bottlenecks.
+Configured placement records finish-first refusals as `wip` waits in its existing ledger and rechecks them through the ordinary queue; they are not machine-capacity bottlenecks.
 The spawn repeats the check under its task-set lock before allocation.
 
 When `config/crew-placement.json` exists, its positive `max_crew` value bounds open In-flight work at twice that many crew slots.
 It counts held and blocked In-flight work too, and does not count parked task records or worktrees.
-P0 bypasses this WIP limit; other new starts at the bound are refused with an available item to finish, or an explanation that all open work is held or blocked.
+P0 bypasses this WIP limit and the two-day stop; other new starts at the bound are refused with an available item to finish, or an explanation that all open work is held or blocked.
 Homes without `crew-placement.json` remain uncapped; malformed placement configuration refuses ordinary admission.
 This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
 [`tests/fm-finish-first.test.sh`](../tests/fm-finish-first.test.sh) exercises admission and placement using the operational backlog shape.
 
 ### Daily work flow
 
-[`bin/fm-flow-report.sh`](../bin/fm-flow-report.sh) reports finished, closed-not-landed, started and reopened items separately for the previous AEST day, or for one explicit completed day selected with `--date`.
+[`bin/fm-flow-report.sh`](../bin/fm-flow-report.sh) reports finished, closed-not-landed and started items separately for the previous AEST day, or for one explicit completed day selected with `--date`.
 Teardown emits a finished event only after verified pull request merge, a recorded local landing still containing the exact task head, or a scout report whose completion gate passed.
 The local merge command records `local_landed_head` in task metadata only when it advances the default branch; old local landings without a receipt remain closed-not-landed.
 Another Done transition, including a direct `done --pr`, is closed-not-landed.
 Stored timestamps remain UTC.
 [`bin/fm-flow-history.py`](../bin/fm-flow-history.py) owns journal schema, recording boundaries and unknown-history behavior; [`tests/fm-flow-report.test.sh`](../tests/fm-flow-report.test.sh) exercises real wrapper and lifecycle transitions.
 Manual edits and direct calls to `tasks-axi` are outside this journal, so this is transition evidence rather than a reconstruction of all historical work.
-When eligible starts exceed finished deliveries on both reported AEST days, the report emits `stop_starting: yes` for the supervisor to prioritize finishing.
-This signal excludes non-worker starts and currently held or blocked jobs, while the daily started list still shows all activity.
-It is advisory to scheduling; the WIP bound is the only finish-first start blocker.
+When recorded worker starts exceed finished deliveries on both reported AEST days, the report emits `stop_starting: yes`.
+Fresh admission then refuses work at the same or a lower priority than finishable In-flight work, while a higher priority still jumps the queue.
+Current holds and blockers do not retroactively change the recorded signal, while non-worker starts remain excluded.
 Malformed history affects only its bounded date interval; recording failures raise a deduplicated wake and never prevent a backlog mutation.
 Preserve damaged journals for diagnosis; after repairing a storage limit, archive the journal outside `flow-history.jsonl` and let the next transition begin new coverage rather than fabricating historical receipts.
 The pstack job 03 morning scoreboard is the intended consumer of these counts.

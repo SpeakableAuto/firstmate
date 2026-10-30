@@ -61,7 +61,7 @@ assert [r['landing'] for r in events] == ['none','none','none','none','merge','n
 # Keep real mutation evidence, move timestamps into a completed AEST day.
 rows[0]['timestamp']='2020-10-26T13:00:00Z'
 for row in rows[1:]: row['timestamp']='2020-10-27T12:00:00Z'
-# Two days with more starts than finishes, and a reopened job.
+# Two days with more starts than finishes.
 for day in ('28','29'):
     for task in ('first','second'):
         token=f'{task}-{day}'
@@ -74,10 +74,11 @@ PY
 out=$(bash "$report" --date 2020-10-25)
 assert_contains "$out" '2020-10-25 unknown' 'pre-journal day unknown'
 out=$(bash "$report" --date 2020-10-27)
-assert_contains "$out" '2020-10-27 finished=2 closed-not-landed=2 started=1 reopened=1' 'landed and bare closes are separated'
+assert_contains "$out" '2020-10-27 finished=2 closed-not-landed=0 started=1' 'landing evidence wins the daily job classification'
 assert_contains "$out" 'finished: candidate, oldest' 'landed jobs named separately'
-assert_contains "$out" 'closed-not-landed: candidate, oldest' 'direct PR close is not reported as finished'
+assert_contains "$out" 'closed-not-landed: -' 'landed jobs are not also reported as closed-not-landed'
 assert_contains "$out" 'started: candidate' 'started jobs named separately'
+assert_not_contains "$out" reopened 'reopen transitions are not a public report category'
 out=$(bash "$report" --date 2020-10-29)
 assert_contains "$out" 'stop_starting: yes' 'two consecutive days raise the signal'
 out=$(bash "$report" --date 2020-10-30)
@@ -156,7 +157,7 @@ assert rows[-1]['type']=='transition' and rows[-1]['task_id']=='oldest', rows[-1
 PYTAIL
 pass 'wrapper errors and torn history do not stop later transitions'
 
-# Hold-aware signal excludes work waiting for outside input, without erasing starts.
+# Historical signals do not change when current backlog holds change.
 cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
 cat >> "$FM_HOME/data/backlog.md" <<'HELD'
 ## In flight
@@ -167,8 +168,8 @@ cat >> "$FM_HOME/data/backlog.md" <<'HELD'
 HELD
 out=$(bash "$report" --date 2020-10-29)
 assert_contains "$out" 'started=2' 'held starts remain visible in the daily report'
-assert_contains "$out" 'stop_starting: no' 'held starts do not trigger a finish-now signal'
-pass 'signal excludes currently held starts without hiding activity'
+assert_contains "$out" 'stop_starting: yes' 'current holds do not rewrite recorded starts'
+pass 'signal is stable after current backlog state changes'
 
 assert_contains "$(cat "$FM_HOME/state/.wake-queue")" 'flow-history' 'damaged history wakes the supervisor'
 # A completed scout counts as delivered on the same basis as a landed ship.

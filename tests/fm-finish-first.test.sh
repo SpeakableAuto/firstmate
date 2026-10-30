@@ -21,6 +21,7 @@ check() {
 }
 # Open work, missing briefs and capacity waits must not serialize a level.
 check 0 allowed candidate
+check 0 allowed elevated
 check 0 allowed urgent
 check 0 resume current
 mkdir -p "$FM_HOME/state"
@@ -47,7 +48,30 @@ check 2 missing absent
 bash "$ROOT/bin/fm-tasks-axi.sh" hold candidate --reason 'outside answer' --kind external >/dev/null
 check 1 held candidate
 bash "$ROOT/bin/fm-tasks-axi.sh" unhold candidate >/dev/null
-pass 'only WIP bounds new starts; P0 and resumes remain runnable'
+# Two prior AEST days with more starts than finishes activate the stop signal.
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PY'
+import datetime as dt, json, sys
+aest = dt.timezone(dt.timedelta(hours=10))
+today = dt.datetime.now(dt.timezone.utc).astimezone(aest).date()
+rows = [{'type':'coverage','version':1,
+         'timestamp':dt.datetime.combine(today-dt.timedelta(days=3), dt.time(), aest).astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}]
+for offset in (2, 1):
+    day = today-dt.timedelta(days=offset)
+    for number in (1, 2):
+        token = f'{day}-{number}'
+        stamp = dt.datetime.combine(day, dt.time(12), aest).astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        base = {'token':token,'task_id':token,'priority':2,'landing':'none','timestamp':stamp}
+        rows.append(dict(base, type='attempt'))
+        rows.append(dict(base, type='transition', action='start', result=0))
+with open(sys.argv[1], 'w') as stream:
+    for row in rows:
+        stream.write(json.dumps(row)+'\n')
+PY
+check 1 'two-day stop' candidate
+check 0 allowed elevated
+check 0 P0 urgent
+rm "$FM_HOME/data/flow-history.jsonl"
+pass 'WIP and two-day flow bounds new starts; higher priorities and resumes remain runnable'
 
 # The placement decision must retain the finish-first refusal and queue it.
 printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
