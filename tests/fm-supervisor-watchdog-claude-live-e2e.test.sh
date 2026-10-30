@@ -49,8 +49,8 @@ watchdog_under_way() { return 1; }
 watchdog_probe() { return 0; }
 version=$(claude --version)
 wait_verdict() {  # <verdict> <seconds>
-  local _
-  for ((_=0; _<$2; _++)); do
+  local attempt
+  for ((attempt=0; attempt<$2; attempt++)); do
     watchdog_observe 2>/dev/null
     [ "$VERDICT" = "$1" ] && return 0
     sleep 1
