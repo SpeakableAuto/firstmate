@@ -1643,6 +1643,24 @@ It uses the same live secondmate discovery and propagation helper as bootstrap; 
 - That live discovery starts from `state/*.meta` records with `kind=secondmate`; `data/secondmates.md` only backfills `home=` for older or incomplete meta records.
 - Skipped items, such as a destination checkout that does not yet gitignore the item, are visible warnings but not hard failures.
 
+## Cleared PR monitoring (config/clear-unmerged-skip-repos)
+
+Arm the optional home-level check with `bin/fm-clear-unmerged-check.sh arm` in the intended `FM_HOME`.
+It registers with the existing watcher and raises a firstmate alert when a current-head CLEAR review has waited over two hours, excluding carve-outs and captain-held work.
+It does not merge or change merge authority, and is not enabled automatically on any home.
+Use `bin/fm-clear-unmerged-check.sh disarm` to stop polling while retaining alert history.
+
+`config/clear-unmerged-skip-repos` is an optional local, gitignored exclusion list for repositories whose ownership makes them ineligible, including Michael's repositories.
+Write one `owner/repo` or `host/owner/repo` per line; blank lines and `#` comments are allowed.
+A registry row explicitly naming Michael is also excluded; organization names alone do not establish personal ownership.
+Maintain this list when ownership changes and the registry does not identify the owner.
+
+The [check's help](../bin/fm-clear-unmerged-check.py) owns evidence matching, clock fallback, read bounds, failure diagnostics and notification history.
+GitHub can omit a head push timestamp; in that case unrelated PR activity can conservatively delay the alert.
+The check requires complete GitHub and task-hold reads; an incomplete read raises a diagnostic instead of a merge recommendation.
+A failed project, repository or PR read is reported alongside any alert while the remaining repositories and PRs are still checked.
+`bash tests/fm-clear-unmerged-check.test.sh` exercises the check and the real watcher in isolated fixture homes.
+
 ## Watched tool updates (config/watched-tools.json)
 
 `config/watched-tools.json` is an optional local, gitignored list of the tools this home depends on.
