@@ -198,7 +198,7 @@ usage() {
 
 BRIEFS=() PROJECTS=() LEAD_PROJECT='' RULES_PATH="$CONFIG/crew-dispatch.json" RULES=''
 NEVER_SEND_PATH="$CONFIG/dispatch-never-send"
-KNOWN_RULE='' CHECK_SET=0 CHECK_HARNESS='' CHECK_MODEL='' CHECK_EFFORT='' CHECK_OVERRIDE=''
+KNOWN_RULE='' CHECK_SET=0 CHECK_HARNESS='' CHECK_MODEL='' CHECK_EFFORT='' CHECK_OVERRIDE='' CHECK_GLOBAL=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --rule)
@@ -210,6 +210,7 @@ while [ $# -gt 0 ]; do
       CHECK_SET=1 CHECK_HARNESS=$2 CHECK_MODEL=$3 CHECK_EFFORT=$4
       [ -n "$CHECK_HARNESS" ] || die "--check needs a harness"
       shift 4 ;;
+    --global-check) CHECK_GLOBAL=true; shift ;;
     --override)
       [ $# -ge 2 ] && [ -n "$2" ] || die "--override needs a non-empty reason"
       CHECK_OVERRIDE=$2
@@ -1034,7 +1035,7 @@ POOL_JQ='
     else
       ($eligible | max_by(.score).score) as $top |
       ([$eligible[] | select($top - .score <= near_band_points + 1e-9)]) as $near |
-      ($near | group_by(acct(.)) | map({acct: acct(.[0]), workers: (map(.workers) | min), first: (sort_by(rank_key) | .[0])})) as $groups |
+      ($near | group_by(acct(.)) | map({acct: acct(.[0]), workers: (map(.workers) | min), first: (sort_by((if .home == "local" then 0 else 1 end), rank_key) | .[0])})) as $groups |
       (if ($groups | length) == 1 then {best: $groups[0].first}
        else
          ($groups | min_by(.workers).workers) as $fewest |
@@ -1198,8 +1199,11 @@ POOL_JQ='
     ([$cands[] | select(.home == "local" and .profile.harness == $check.harness
       and (.profile.model // "") == $check.model and (.profile.effort // "") == $check.effort)] | first) as $req |
     if $req == null then {verdict: "refused", reason: "requested profile is not a candidate of \($choice) on this machine"}
-    elif $result.status == "clear" and $req.eligible and $result.chosen.home == "local"
-      and $result.chosen.provider == $req.provider and $result.chosen.account == $req.account then
+    elif $check.global and $check.override == "" and $global != null and $req.headroom != null
+      and $result.status == "clear" and acct($result.chosen) == acct($req)
+      and $global.top.headroom - $req.headroom > $balance.spread_points then
+      {verdict:"refused", requested:$req, reason:"inferred rule cannot narrow the balance pool; requested allowance is behind \($global.top.label); record task classification or balance_override"}
+    elif $result.status == "clear" and $req.eligible and acct($result.chosen) == acct($req) then
       {verdict: "balanced", requested: $req}
     elif $check.override != "" and ($req.eligible or ($req.behind // false)) then {verdict: "override", requested: $req, override: $check.override}
     elif $result.status == "clear" then
@@ -1240,7 +1244,7 @@ LEDGER_FILE="$STATE/dispatch-charges.jsonl"
 CHECK_JSON=null
 if [ "$CHECK_SET" = 1 ]; then
   CHECK_JSON=$(jq -nc --arg harness "$CHECK_HARNESS" --arg model "$CHECK_MODEL" --arg effort "$CHECK_EFFORT" \
-    --arg override "$CHECK_OVERRIDE" '{harness: $harness, model: $model, effort: $effort, override: $override}')
+    --arg override "$CHECK_OVERRIDE" --argjson global "$CHECK_GLOBAL" '{harness: $harness, model: $model, effort: $effort, override: $override, global: $global}')
 fi
 if [ -f "$LEDGER_FILE" ] && [ ! -L "$LEDGER_FILE" ]; then
   jq -cs --argjson now "$NOW" --argjson window "$CHARGE_WINDOW" '
@@ -1269,6 +1273,7 @@ for i in "${!BRIEFS[@]}"; do
   homes_for "$i"
   if [ -n "$quota_failure" ] && ! jq -e 'any(.[]; .snapshot != null)' "$WORK/homes.$i.json" >/dev/null 2>&1; then
     brief_error "$i" "$quota_failure"
+    jq '. + {error_kind:"quota_unavailable"}' "$WORK/result.$i.json" > "$WORK/error.json" && mv "$WORK/error.json" "$WORK/result.$i.json"
     continue
   fi
   placement=false

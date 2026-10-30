@@ -95,7 +95,7 @@ fm_quota_balance_gate() {
   local id=$1 harness=$2 model=$3 effort=$4 project=$5
   # shellcheck disable=SC2153 # DATA is supplied by the sourcing caller.
   local rules="$CONFIG/crew-dispatch.json" work="$DATA/$1/placement.json" brief="$DATA/$1/brief.md"
-  local rule='' override='' out verdict local_reason last points requested fuller seen
+  local rule='' override='' inferred=0 out verdict local_reason last points requested fuller seen
   local -a extra=()
   FM_QUOTA_BALANCE_REASON=''
   FM_QUOTA_BALANCE_RECORD=null
@@ -111,6 +111,7 @@ fm_quota_balance_gate() {
     override=$(jq -r '.balance_override // empty | strings' "$work" 2>/dev/null) || override=''
   fi
   if [ -z "$rule" ]; then
+    inferred=1
     rule=$(jq -r --arg h "$harness" --arg m "$model" --arg e "$effort" '
       def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
       def holds($v): any(profiles($v)[]; .harness == $h and (.model // "") == $m and (.effort // "") == $e);
@@ -119,26 +120,21 @@ fm_quota_balance_gate() {
     ' "$rules" 2>/dev/null) || rule=''
   fi
   if [ -z "$rule" ]; then
-    if [ -n "$override" ]; then
-      FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg override "$override" \
-        '{verdict: "override", reason: "profile is in no dispatch rule", override: $override}')
-      echo "quota balance: override recorded for $id: $override" >&2
-      return 0
-    fi
-    FM_QUOTA_BALANCE_REASON="quota balance: $harness:${model:-default} is in no dispatch rule; record balance_override in data/$id/placement.json stating why the task class needs it"
+    FM_QUOTA_BALANCE_REASON="quota balance: $harness:${model:-default} is in no dispatch rule; configure its allowance before using it and record balance_override in data/$id/placement.json stating why the task class needs it"
     FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg reason "$FM_QUOTA_BALANCE_REASON" '{verdict: "refused", reason: $reason}')
     fm_quota_balance_episode_clear
     return 1
   fi
   [ -r "$brief" ] || brief=/dev/null
   [ -z "$override" ] || extra=(--override "$override")
+  [ "$inferred" = 0 ] || extra+=(--global-check)
   out=$(env -u TYPESAFE_API_KEY FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_DATA_OVERRIDE="$DATA" FM_STATE_OVERRIDE="$STATE" \
     "$SCRIPT_DIR/fm-dispatch-resolve.sh" --rule "$rule" --check "$harness" "$model" "$effort" ${extra[@]+"${extra[@]}"} \
     "$brief" --project "$(basename "$project")" 2>/dev/null | tail -1)
   verdict=$(printf '%s\n' "$out" | jq -r '.check.verdict // empty' 2>/dev/null) || verdict=''
   # No candidate with quota evidence (or no quota read at all) cannot be balanced.
   if [ "$verdict" != balanced ] && [ "$verdict" != override ] && printf '%s\n' "$out" | jq -e '
-      .status == "error"
+      .error_kind == "quota_unavailable"
       or ((.check.requested.eligible // false) and (.check.requested.unranked // false)
           and ([.candidates[]? | select(.eligible and ((.unranked // false) | not))] | length) == 0)' >/dev/null 2>&1; then
     verdict=unverifiable
