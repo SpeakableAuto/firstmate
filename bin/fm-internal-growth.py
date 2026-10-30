@@ -69,7 +69,7 @@ def under(path, parent):
 
 
 class Budget:
-    """One wall-clock allowance for every du call in a run."""
+    """One wall-clock allowance for every measurement operation in a run."""
 
     def __init__(self, seconds):
         self.seconds = seconds
@@ -243,11 +243,10 @@ def main():
     def expired(_signum, _frame):
         raise TimeoutError(f"measurement exceeded {cfg['timeout_seconds']} seconds")
 
-    # Backstop for a filesystem call that blocks outside du's own timeout.
-    signal.signal(signal.SIGALRM, expired)
-    signal.alarm(cfg["timeout_seconds"] + 60)
     unmeasured = set()
     budget = Budget(cfg["timeout_seconds"])
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, budget.remaining(cfg["volume"]))
     try:
         record["used_kib"], record["free_kib"] = volume_usage(cfg["volume"], budget)
         cur = measure(cfg, budget, unmeasured)
@@ -257,7 +256,7 @@ def main():
         if "!measurement" not in episodes:
             alert = f"internal growth check could not measure: {error}"
         cur = None
-    signal.alarm(0)
+    signal.setitimer(signal.ITIMER_REAL, 0)
     record["unmeasured"] = sorted(unmeasured)
     if alert and unmeasured:
         alert += "; UNMEASURED: " + ", ".join(sorted(unmeasured))

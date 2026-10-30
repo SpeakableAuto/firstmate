@@ -68,7 +68,8 @@ sizes() {
 run_check() {
   env FM_HOME="$fm" FM_WAKE_QUEUE="${wake_queue:-$fm/state/.wake-queue}" \
     FM_WAKE_QUEUE_LOCK="$fm/state/.wake-queue.lock" DU_FIXTURE="$case_dir/du" \
-    DF_FIXTURE="$case_dir/df" PATH="$FAKEBIN:$PATH" bash "$ROOT/bin/fm-internal-growth.sh" "$@"
+    DF_FIXTURE="$case_dir/df" PYTHONPATH="${pythonpath-}" BLOCK_STAT_PATH="${block_stat_path-}" \
+    PATH="$FAKEBIN:$PATH" bash "$ROOT/bin/fm-internal-growth.sh" "$@"
 }
 wakes() {
   [ -f "$fm/state/.wake-queue" ] || { echo 0; return; }
@@ -194,6 +195,35 @@ set +e; run_check 2>/dev/null; rc=$?; set -e
 assert_equals 1 "$rc" 'a measurement over budget exits 1'
 assert_contains "$(cat "$fm/state/.wake-queue")" 'du exceeded the 1 second budget' 'over-budget measurement alerts'
 pass 'a measurement over its budget is killed and alerts'
+
+new_case filesystem_timeout
+sizes a=1
+echo timeout_seconds=1 >> "$fm/config/internal-growth"
+mkdir -p "$case_dir/python"
+cat > "$case_dir/python/sitecustomize.py" <<'PY'
+import os
+import time
+
+real_stat = os.stat
+target = os.environ["BLOCK_STAT_PATH"]
+
+def delayed_stat(path, *args, **kwargs):
+    if os.fspath(path) == target:
+        time.sleep(5)
+    return real_stat(path, *args, **kwargs)
+
+os.stat = delayed_stat
+PY
+started=$(date +%s)
+set +e
+pythonpath="$case_dir/python" block_stat_path="$case_dir" run_check 2>/dev/null
+rc=$?
+set -e
+elapsed=$(($(date +%s) - started))
+[ "$elapsed" -lt 4 ] || fail 'a blocked filesystem call exceeded the whole-run budget'
+assert_equals 1 "$rc" 'a blocked filesystem call exits 1 at the deadline'
+assert_contains "$(cat "$fm/state/.wake-queue")" 'measurement exceeded 1 seconds' 'filesystem deadline failure alerts'
+pass 'filesystem calls share the exact whole-run measurement deadline'
 
 new_case dry
 sizes a=1
