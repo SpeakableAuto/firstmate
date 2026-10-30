@@ -1170,12 +1170,13 @@ POOL_JQ='
           else {} end)
      end
    end) as $result |
-  # Every configured allowance across the pool, for the spread alarm firstmate
-  # hears about even when this task could not use the fuller allowance.
+  # Every configured allowance on the machines that may take this project, for
+  # the spread alarm firstmate hears about even when this task could not use the
+  # fuller allowance; a machine outside the project pool is not measured.
   ([(($cfg.rules // [])[] | profiles(.use)[]), profiles($cfg.default // null)[]
     | (.provider // $pmap[.harness] // empty)] | unique) as $configured |
   (
-    spread_from([$homes[] | select(.snapshot != null) | .id as $hid | .snapshot.providers[]?
+    spread_from([$homes[] | select(.snapshot != null and .eligible != false) | .id as $hid | .snapshot.providers[]?
       | select(.provider as $p | $configured | index($p)) |
       {home: $hid, provider, account: (.accountKey // ""), signature: signature(.),
        headroom: ([.quotaSemantics.effectiveAvailability[]? | select(.scope == "all_models" or .scope == "all_products")

@@ -825,10 +825,10 @@ test_claude_admission_refuses_before_relaunch_stop() {
   add_ship_task "$dir" "$id" claude
   cp "$dir/home/state/$id.meta" "$dir/meta-before"
 
-  write_claude_quota "$dir" 39
+  write_claude_quota "$dir" 9
   out=$(run_control "$dir" "$id" relaunch --note "retry after quota recovers"); rc=$?
   expect_code 1 "$rc" "a below-floor Claude relaunch must refuse"
-  assert_contains "$out" 'five_hour remaining 39% below 40%' \
+  assert_contains "$out" 'five_hour remaining 9% below 10%' \
     "the relaunch refusal should report the measured floor"
   [ "$(cat "$dir/fake/command")" = claude ] \
     || fail "below-floor admission stopped the existing Claude agent"

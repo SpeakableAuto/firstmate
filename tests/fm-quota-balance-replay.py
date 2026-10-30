@@ -48,10 +48,12 @@ class Sim:
     def next_reset(self, name):
         return min(r for r in self.resets[name] if r > self.now)
 
+    def owed(self, name):
+        return sum(c["rate"] * (c["end"] - self.now) for c in self.crews if c["provider"] == name)
+
     def headroom(self, name, charged=False):
         left = 100 * (self.next_reset(name) - self.now) / self.window[name]
-        owed = sum(c["rate"] * (c["end"] - self.now) for c in self.crews if c["provider"] == name) if charged else 0
-        return round(self.pct[name] - owed - left, 2)
+        return round(self.pct[name] - (self.owed(name) if charged else 0) - left, 2)
 
     def advance(self, until):
         while self.now < until:
@@ -177,7 +179,9 @@ def main():
         provider = ALLOWANCE[(result["chosen"]["home"], result["chosen"]["provider"])]
         # Judged as the resolver sees it: headroom less the draw still owed.
         heads = {name: sim.headroom(name, charged=True) for name in sim.pct}
-        usable = [heads[name] for name in heads if sim.pct[name] >= 10]
+        # Usable as the resolver judges it: room for one more crew's fixed draw
+        # above the 10% reserve once in-flight draw is counted.
+        usable = [heads[name] for name in heads if sim.pct[name] - sim.owed(name) - 5 >= 10]
         if max(usable) - heads[provider] > 20:
             behind_placements += 1
         decisions.append({"t": sim.now - sim.start, "chosen": provider, "headroom": heads})
