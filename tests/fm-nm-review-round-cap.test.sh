@@ -8,7 +8,7 @@ command -v sqlite3 >/dev/null 2>&1 || fail 'install sqlite3 to test review-round
 TMP=$(fm_test_tmproot fm-nm-review-round-cap)
 mkdir -p "$TMP"
 trap 'rm -rf "$TMP"' EXIT
-export NM_CAP_DB="$TMP/state.sqlite" NM_CAP_BINARY=/bin/true NM_CAP_DRYRUN=1 NM_REVIEW_ROUND_CAP=2
+export NM_CAP_DB="$TMP/state.sqlite" NM_CAP_BINARY=/usr/bin/true NM_CAP_DRYRUN=1 NM_REVIEW_ROUND_CAP=2
 GUARD="$ROOT/bin/fm-nm-review-round-cap.sh"
 # Minimal, data-free shape of a real fix_review gate observed on no-mistakes.
 # The historical run had two review invocations and a review-fix invocation.
