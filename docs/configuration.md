@@ -386,32 +386,33 @@ Completion refuses to report success until the item is closed, and session start
 
 When a spawn is interrupted after launch delivery began, its exit path re-reads the paired task record and the backlog row under the same per-task lock as the commit, repairs a row the commit believed it had moved, and reports only what was verified or honestly attempted, never intent phrased as outcome ([`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-backlog-atomicity.test.sh`](../tests/fm-backlog-atomicity.test.sh)).
 
-### Finish-first admission (`config/crew-slot-cap`)
+### Finish-first admission
 
 Fresh ship and scout spawns check backlog order through [`bin/fm-finish-first.sh`](../bin/fm-finish-first.sh) before allocating their endpoint or worktree.
-Unheld, unblocked open work at a higher priority leads, and older work leads within the same priority.
+Unheld, unblocked open work at a higher priority leads.
+Within the same priority, every In-flight item leads every Queued item regardless of their creation dates, then older Queued work leads newer Queued work.
 Lower numeric priorities lead; a missing priority means 3, a missing date sorts before dated work, and equal dates retain backlog row order.
 An In-flight item may resume without becoming a new start.
 Captain obligations, public follow-ups, persistent secondmates and parent program commissions are not worker jobs in this check.
 The same backlog applicability rules as lifecycle transitions apply, including the manual-backend and absent-backlog exemptions.
 Configured placement records this verdict in its existing capacity ledger and rechecks it through the ordinary queue; the spawn repeats the check under its task-set lock before allocation.
 
-An optional positive decimal integer in `config/crew-slot-cap` bounds open In-flight work at twice that many crew slots.
+When `config/crew-placement.json` exists, its positive `max_crew` value bounds open In-flight work at twice that many crew slots.
 It counts held and blocked In-flight work too, and does not count parked task records or worktrees.
 A new start at the bound is refused with a named item to finish; higher priority changes queue order but does not expand the WIP bound.
-Without that override, a configured `crew-placement.json` supplies its `max_crew` value.
-With neither crew cap configured there is no WIP bound; malformed configuration refuses admission.
+Homes without `crew-placement.json` keep their existing uncapped behavior; malformed placement configuration refuses admission.
 This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
 [`tests/fm-finish-first.test.sh`](../tests/fm-finish-first.test.sh) exercises the policy using tasks-axi and a redacted operational backlog shape.
 
 ### Daily work flow
 
-[`bin/fm-flow-report.sh`](../bin/fm-flow-report.sh) reports finished, started and reopened items separately for each completed calendar day, with the two-day started-over-finished signal for a morning-report consumer.
-Its help owns date-range and timezone flags; use `--timezone Australia/Brisbane` for AEST reporting on a host configured in another zone.
-The default is the system's local calendar, while stored timestamps remain UTC.
+[`bin/fm-flow-report.sh`](../bin/fm-flow-report.sh) reports finished, closed-not-landed, started and reopened items separately for the previous AEST day, or for one explicit completed day selected with `--date`.
+Only a completion carrying a recorded pull request merge or the `local main` landing note is finished; another Done transition is closed-not-landed.
+Stored timestamps remain UTC.
 [`bin/fm-flow-history.py`](../bin/fm-flow-history.py) owns journal schema, recording boundaries and unknown-history behavior; [`tests/fm-flow-report.test.sh`](../tests/fm-flow-report.test.sh) exercises real wrapper and lifecycle transitions.
 Manual edits and direct calls to `tasks-axi` are outside this journal, so this is transition evidence rather than a reconstruction of all historical work.
-The report emits the stop-starting signal for its consumer; it does not change admission or launch workers.
+When started exceeds finished on both reported AEST days, fresh admission reads the stop-starting signal and refuses work at the same or a lower priority than finishable In-flight work; a higher priority still jumps the queue.
+The pstack job 03 morning scoreboard is the intended consumer of these counts.
 
 ### Which backlog receives a transition
 

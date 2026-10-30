@@ -490,7 +490,7 @@ fm_backlog_mutate() {  # <data-dir> <verb> <id> [flag...]
   fm_backlog_tasks_axi_addressing "$data"
   source_status=$?
   [ "$source_status" -eq 0 ] || return "$source_status"
-  if ! fm_flow_begin "$data" "$verb" "$id"; then
+  if ! fm_flow_begin "$data" "$verb" "$id" "$@"; then
     FM_BACKLOG_TRANSITION_ERROR="flow history could not record $verb $id; backlog unchanged"
     return 1
   fi

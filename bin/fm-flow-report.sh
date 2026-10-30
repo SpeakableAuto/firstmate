@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Read-only local-calendar daily finished, started and reopened work from backlog history.
-# Usage: fm-flow-report.sh --since YYYY-MM-DD [--until YYYY-MM-DD] [--timezone IANA_ZONE]
-# Default end is yesterday in the selected zone (system local time by default). Missing/incomplete history prints unknown;
+# Read-only AEST finished, closed-not-landed, started and reopened work from backlog history.
+# Usage: fm-flow-report.sh [--date YYYY-MM-DD]
+# The default date is yesterday. Missing or incomplete history prints unknown;
 # no date is backfilled from current backlog rows. fm-flow-history.py owns
 # the journal schema, coverage limits and two-completed-days signal.
 set -euo pipefail

@@ -4,7 +4,7 @@
 # Uses this home's tasks-axi backlog, never task metadata or worktree counts.
 # Exit 0 allows (including resuming an In-flight row), 1 names earlier work or
 # a reached WIP bound, 2 means the inputs cannot be proved. No state is changed.
-# The optional config/crew-slot-cap setting is owned by docs/configuration.md.
+# Configured placement supplies the crew count used for the WIP bound.
 # The same command can be called by placement admission before fm-spawn.sh.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,4 +21,13 @@ if ! rows=$(fm_exec_timed 15 15 bash "$SCRIPT_DIR/fm-tasks-axi.sh" list --fields
   echo 'finish-first: cannot read backlog; repair tasks-axi before dispatch' >&2
   exit 2
 fi
-printf '%s\n' "$rows" | python3 "$SCRIPT_DIR/fm-finish-first.py" "$1" "$CONFIG/crew-slot-cap"
+if ! flow=$(fm_exec_timed 15 15 bash "$SCRIPT_DIR/fm-flow-report.sh"); then
+  echo 'finish-first: cannot read flow history; repair it before dispatch' >&2
+  exit 2
+fi
+stop_starting=$(printf '%s\n' "$flow" | sed -n 's/^stop_starting: //p')
+case "$stop_starting" in
+  yes|no|unknown) ;;
+  *) echo 'finish-first: flow report returned no valid stop-starting signal' >&2; exit 2 ;;
+esac
+printf '%s\n' "$rows" | python3 "$SCRIPT_DIR/fm-finish-first.py" "$1" "$CONFIG" "$stop_starting"

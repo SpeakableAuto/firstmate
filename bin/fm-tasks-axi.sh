@@ -145,7 +145,7 @@ case "${ARGS[0]:-}" in
   start|done|close|reopen)
     # Preserve tasks-axi output and status; the shared hook also covers spawn
     # and teardown's direct lifecycle mutations.
-    fm_flow_begin "$DATA" "${ARGS[0]}" "${ARGS[1]:-}" || exit 2
+    fm_flow_begin "$DATA" "${ARGS[0]}" "${ARGS[1]:-}" "${ARGS[@]:2}" || exit 2
     flow_token=$FM_FLOW_TOKEN
     output=$(tasks-axi "${ARGS[@]}" 2>&1)
     result=$?
