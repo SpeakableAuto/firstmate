@@ -44,36 +44,22 @@ pass 'status inspection is allowed'
 
 out=$(sh "$GUARD" axi respond --run "$RUN" --step review --action fix 2>&1); rc=$?
 expect_code 3 "$rc" 'explicit review must enforce the cap'
-assert_contains "$out" 'review-round cap reached (2 of 2): ask firstmate' 'explicit selection must report the real count and owner'
-assert_contains "$out" "$NM_CAP_OVERRIDE_DIR/$RUN.review-3" 'refusal must name the exact authorization token'
+assert_contains "$out" 'review-round cap reached (2 of 2)' 'explicit selection must report the real count and owner'
 pass 'explicit review reports the real capped count'
 
 out=$(sh "$GUARD" axi respond --run "$RUN" --action fix 2>&1); rc=$?
 expect_code 3 "$rc" 'implicit fix_review must enforce the cap'
-assert_contains "$out" 'review-round cap reached (2 of 2): ask firstmate' 'fix_review must report the real count instead of unreadable'
+assert_contains "$out" 'review-round cap reached (2 of 2)' 'fix_review must report the real count instead of unreadable'
 pass 'run-shaped fix_review gate reports two reviews and escalates'
 
 mkdir -p "$NM_CAP_OVERRIDE_DIR/consumed"
-: >"$NM_CAP_OVERRIDE_DIR/$OTHER_RUN.review-3"
-out=$(sh "$GUARD" axi respond --run "$RUN" --action fix 2>&1); rc=$?
-expect_code 3 "$rc" 'an override for another run must not authorize this run'
-assert_contains "$out" "$NM_CAP_OVERRIDE_DIR/$RUN.review-3" 'wrong-run refusal must still name this run token'
-rm "$NM_CAP_OVERRIDE_DIR/$OTHER_RUN.review-3"
-pass 'override for another run is refused'
-
 : >"$NM_CAP_OVERRIDE_DIR/$RUN.review-3"
 out=$(sh "$GUARD" axi respond --run "$RUN" --action fix 2>&1); rc=$?
-expect_code 0 "$rc" 'a matching override must allow exactly one round'
-assert_contains "$out" "consumed one-use override for run $RUN review round 3" 'authorized use must be logged'
-[ ! -e "$NM_CAP_OVERRIDE_DIR/$RUN.review-3" ] || fail 'authorized token was not consumed'
-consumed=("$NM_CAP_OVERRIDE_DIR/consumed/$RUN.review-3."*)
-[ "${#consumed[@]}" -eq 1 ] && [ -f "${consumed[0]}" ] || fail 'consumed token audit was not retained'
-pass 'matching override is consumed and logged'
-
-out=$(sh "$GUARD" axi respond --run "$RUN" --action fix 2>&1); rc=$?
-expect_code 3 "$rc" 'a consumed override must not authorize another call'
-assert_contains "$out" "$NM_CAP_OVERRIDE_DIR/$RUN.review-3" 'repeat refusal must name the replacement token path'
-pass 'consumed override cannot be reused'
+expect_code 3 "$rc" 'a token file must never authorize a capped fix'
+assert_contains "$out" 'review-round cap reached (2 of 2): stop and send the findings to firstmate for triage' 'cap refusal must name triage'
+[ -f "$NM_CAP_OVERRIDE_DIR/$RUN.review-3" ] || fail 'read-only preflight changed a token file'
+[ -z "$(ls -A "$NM_CAP_OVERRIDE_DIR/consumed")" ] || fail 'read-only preflight wrote token state'
+pass 'token file cannot authorize a capped fix and remains untouched'
 
 sqlite3 "$NM_CAP_DB" "DELETE FROM agent_invocations WHERE run_id='$RUN' AND purpose='review' AND round=2;"
 for state in awaiting_approval fix_review; do
@@ -96,8 +82,7 @@ pass 'valid plus branch resolves within the current repository'
 
 out=$(cd "$TMP/other-repo" && sh "$GUARD" axi respond fix 2>&1); rc=$?
 expect_code 3 "$rc" 'the same branch in another repository must use its own run'
-assert_contains "$out" 'review-round cap reached (2 of 2): ask firstmate' 'foreign repository count must not leak into current lookup'
-assert_contains "$out" "$NM_CAP_OVERRIDE_DIR/$OTHER_RUN.review-3" 'foreign repository must resolve its own run token'
+assert_contains "$out" 'review-round cap reached (2 of 2)' 'foreign repository count must not leak into current lookup'
 pass 'implicit lookup is scoped by repository and branch'
 
 sqlite3 "$NM_CAP_DB" "INSERT INTO agent_invocations VALUES ('$RUN', 'review', 'review', 3);"
