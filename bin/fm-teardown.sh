@@ -3428,6 +3428,14 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
     echo "error: the pending backlog $BACKLOG_TRANSITION for $ID is not replayable; refusing destructive teardown" >&2
     exit 1
   }
+  FM_BACKLOG_FLOW_LANDING=none
+  if [ "$BACKLOG_TRANSITION" = close ] && [ "$FORCE" != --force ] && [ "$KIND" = ship ]; then
+    if [ "$MODE" = local-only ]; then
+      FM_BACKLOG_FLOW_LANDING=local
+    elif [ -n "$PR_URL" ]; then
+      FM_BACKLOG_FLOW_LANDING=merge
+    fi
+  fi
 # Roll the accepted legacy incarnation's stamp back to the record's exact
 # pre-stamp bytes. Uses perl - already in the teardown lifecycle's curated PATH
 # (truncate is not, and is absent on stock macOS) - and verifies the restored
