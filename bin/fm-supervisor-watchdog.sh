@@ -24,12 +24,15 @@
 # Stall: while the home needs supervision, progress is a newer watcher beacon
 # while Claude is natively idle or done, a change of the oldest main-owned wake
 # row (an acknowledgement), a newer transcript file, or a semantic pane change.
-# Spinner rows, elapsed durations and token counters are ignored, while other
-# numbers remain semantic progress. A visible usage-limit notice counts as
-# progress because Claude resumes by itself and typing would cancel that. After
-# STALL_SECS without progress the watchdog sends one guarded nudge. By default,
-# another STALL_SECS without progress never stops the supervisor and sends one
-# urgent alert that it needs restarting by hand. FM_WATCHDOG_STALL_RESTART=1
+# Spinner rows, elapsed durations, token counters, Claude's rotating footer
+# hints, and a composer row containing only an unstyled `Try "..."` suggestion
+# are ignored, while other numbers remain semantic progress. The unstyled
+# suggestion remains pending for every typing guard. A visible usage-limit
+# notice counts as progress because Claude resumes by itself and typing would
+# cancel that. After STALL_SECS without progress, the watchdog sends one guarded
+# nudge. With the default FM_WATCHDOG_STALL_RESTART=0, another STALL_SECS
+# without progress never stops the supervisor and sends one urgent alert that
+# it needs restarting by hand. FM_WATCHDOG_STALL_RESTART=1
 # opts into restart from the latest handoff only when a fresh verified frame
 # proves the composer is empty. Otherwise it holds the restart and sends one
 # urgent alert because unsent input may be in the box. A permitted restart

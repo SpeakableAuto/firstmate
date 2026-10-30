@@ -22,7 +22,8 @@ A confirmed ring repeats after another stable idle interval and the backoff whil
 ## Stall recovery
 
 While the home needs supervision, the watchdog treats a newer watcher beacon only while Claude is natively idle or done, and it also treats an acknowledged wake, a newer supervisor transcript file, or a semantic screen change as progress.
-Spinner rows, elapsed durations, token counters and Claude's rotating hint row below the prompt are ignored, while other numbers remain semantic progress.
+For the progress fingerprint, spinner rows, elapsed durations, token counters, Claude's rotating hint row below the prompt and a composer row containing only an unstyled `Try "..."` suggestion are normalized away, while other numbers remain semantic progress.
+That unstyled suggestion still reads as pending input under every typing guard, so its rotation cannot hide a stall and the watchdog does not type over it.
 A visible usage-limit notice counts as progress, because Claude resumes by itself and typing would cancel that.
 After `FM_WATCHDOG_STALL_SECS` (1800 seconds by default) without progress it sends one guarded nudge, which is withheld when the supervisor is busy or its version is unverified.
 By default, a second quiet interval never stops the supervisor and sends one urgent alert that it did not recover after the nudge and needs restarting by hand.
