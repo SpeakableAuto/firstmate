@@ -22,13 +22,17 @@
 # alerted once per open episode; a recent successful reading can still refuse a
 # known-behind account. An override states why the task class needs this profile,
 # and the decision keeps it.
+# Remote transfer: copy the resolver's parent_placement into the receiver's
+# placement.json and copy its task and correlation into placement.json.route.
+# Version 2 binds that sender task and unique routing correlation, target home,
+# profile, provider/account and a 900-second expiry. The receiver may use its
+# own task id and rewrite its brief; neither local path nor brief bytes travel.
+# The route object must come with the routed request, not a new local identity.
+# This is supervisor-owned dispatch metadata, not a cryptographic attestation.
 # Needs SCRIPT_DIR, FM_HOME, CONFIG, DATA, and STATE from the sourcing caller.
 
-# Remote transfer: the resolver emits parent_placement for a remote pick.
-# Carry that object unchanged into the receiving data/<id>/placement.json.
-# It binds version=1, at (15-minute lifetime), task, brief_sha256, target
-# (.fm-secondmate-home), provider, account and profile. It authorizes the pool
-# choice, not a reserve/capacity exception. An invalid supplied record refuses.
+# A transferred decision authorizes the pool choice, not a reserve/capacity
+# exception. An invalid supplied record refuses.
 # A sixth argument "preflight" returns charge evidence without writing a
 # charge; fm_quota_balance_charge commits it only after a successful launch.
 
@@ -176,13 +180,15 @@ fm_quota_balance_gate() {
   [ -z "$override" ] || extra=(--override "$override")
   [ "$inferred" = 0 ] || extra+=(--global-check)
   if jq -e 'has("parent_placement")' "$work" >/dev/null 2>&1; then
-    local parent target brief_hash
+    local parent target
     target=$(cat "$FM_HOME/.fm-secondmate-home" 2>/dev/null || true)
-    brief_hash=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$brief") || return 1
-    parent=$(jq -ce --arg target "$target" --arg hash "$brief_hash" --arg id "$id" \
+    parent=$(jq -ce --arg target "$target" \
       --arg h "$harness" --arg m "$model" --arg e "$effort" --argjson now "$(date +%s)" '
-      .parent_placement | select(.version == 1 and .task == $id and .target == $target and $target != ""
-        and .brief_sha256 == $hash and (.at|type)=="number" and $now-.at >= 0 and $now-.at < 900
+      .route as $route | .parent_placement | select(.version == 2
+        and (.task|type)=="string" and .task != "" and .task == $route.task
+        and (.correlation|type)=="string" and .correlation != "" and .correlation == $route.correlation
+        and .target == $target and $target != ""
+        and (.at|type)=="number" and $now-.at >= 0 and $now-.at < 900
         and .profile.harness == $h and (.profile.model // "") == $m and (.profile.effort // "") == $e
         and (.provider|type)=="string" and (.account|type)=="string")' "$work") || {
       FM_QUOTA_BALANCE_REASON='quota balance: parent placement is invalid, expired, or does not match this task, machine and profile'

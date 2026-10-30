@@ -1325,7 +1325,8 @@ Each successful resolver reading that measures more than one allowance in the gl
 Every machine in the task's [pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines) is judged, so a pick on a second mate's machine refuses the local start and names that second mate.
 A non-empty `balance_override` in `placement.json` states why the task class needs that profile and is kept with the decision, including on the last-reading path.
 Ordinary overrides cannot pass the reserve or an exhausted window.
-An explicit `impact: "P0"` together with that override may use the reserve down to a hard 5% after its own draw, with one supervisor alert per task.
+An explicit `impact: "P0"` together with that override may start when every applicable allowance reading is strictly above 5% before its own expected draw, with one supervisor alert per task.
+The P0 may then consume reserve toward the hard floor; this admission check does not stop an already running worker.
 This deliberate P0 exception follows Kitchen rule 20, which requires a P0 to drop everything.
 Machine fit and room still apply.
 A parent's fresh, task-bound `parent_placement` can be carried with the remote task classification; the receiving home honors that pool decision while checking its own allowance reserve.
