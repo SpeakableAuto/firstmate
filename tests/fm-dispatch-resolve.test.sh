@@ -8,6 +8,8 @@
 # network, and the absent-key case proves the tool makes no call
 # at all.
 set -u
+# A real key in the caller environment must not leak into the absent-key cases.
+unset TYPESAFE_API_KEY
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -1792,6 +1794,134 @@ TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" "profile: --harness 'cursor'" 'quota tie cannot waive Claude 40 percent floor'
 rm "$HOME_DIR/config/crew-placement.json"
 pass 'placement selection keeps task fit, ranks by quota, and gives Claude only ties above its floor'
+
+# --- quota balance: pace headroom, reserve, spread, and the spawn-time check ---
+# Pace headroom (points left minus window still to run) ranks every allowance
+# with no preferred provider; configured order matters only within one account.
+BAL_RULES="$TMP_ROOT/balance-rules.json"
+cat > "$BAL_RULES" <<'JSON'
+{
+  "quota_balance": { "reserve_percent": 10, "spread_points": 20 },
+  "rules": [
+    { "when": "Hard engineering.",
+      "use": [ { "harness": "codex", "model": "gpt-6-astra", "effort": "high" },
+               { "harness": "claude", "model": "opus", "effort": "high" } ] },
+    { "when": "Design work.", "select": "candidate-order",
+      "use": [ { "harness": "claude", "model": "fable", "effort": "high" },
+               { "harness": "claude", "model": "opus", "effort": "high" } ] }
+  ],
+  "default": [ { "harness": "codex", "model": "gpt-6-sol", "effort": "high" },
+               { "harness": "claude", "model": "sonnet", "effort": "high" } ]
+}
+JSON
+write_balance_quota() {  # <path> <claude pct> <claude headroom> <codex pct> <codex headroom> [claude session pct]
+  local session=${6:-$2}
+  cat > "$1" <<JSON
+{ "generatedAt": "2030-01-01T00:00:00Z", "schemaVersion": 5, "providers": [
+  { "provider": "claude", "state": { "status": "fresh", "stale": false },
+    "windows": [ { "id": "five_hour", "kind": "session", "percentRemaining": $session } ],
+    "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": $2, "limitingWindowIds": ["seven_day"],
+        "pace": { "worstReservePercentPoints": $3 }, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.1 } },
+      { "scope": "model:fable", "status": "known", "effectivePercentRemaining": $2, "limitingWindowIds": ["seven_day"],
+        "pace": { "worstReservePercentPoints": $3 }, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.1 } } ] } },
+  { "provider": "codex", "state": { "status": "fresh", "stale": false },
+    "windows": [ { "id": "weekly", "kind": "weekly", "percentRemaining": $4 } ],
+    "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": $4, "limitingWindowIds": ["weekly"],
+        "pace": { "worstReservePercentPoints": $5 }, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.9 } } ] } } ] }
+JSON
+}
+balance_run() {  # [args...]: known rule, no key, no network
+  reset_log
+  run code out err "$@"
+}
+cp "$BAL_RULES" "$RULES"
+mkdir -p "$HOME_DIR/state"
+rm -f "$HOME_DIR/state"/crew*.meta "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
+
+# A known rule needs no key and sends nothing.
+write_balance_quota "$QUOTA" 70 -5 60 -30
+balance_run "$BRIEF" --rule rule_1
+expect_code 0 "$code" 'known rule exits 0 without a key'
+assert_absent "$LOG/argv" 'a known rule never calls the network'
+assert_contains "$out" 'model: known-rule' 'a known rule is reported as such'
+# The fuller allowance by pace wins although Codex is listed first and has the
+# higher spendPriority; Codex is 25 points behind, past the 20-point alarm.
+assert_contains "$out" "profile: --harness 'claude' --model 'opus' --effort 'high'" 'higher pace headroom wins over configured Codex-first order'
+assert_contains "$out" 'headroom=-30' 'candidates show their pace headroom'
+assert_contains "$out" 'allowance 25 points of headroom behind claude; new work moves to the fuller allowance' 'the behind allowance is named and passed over'
+assert_contains "$out" 'spread: claude is 25 points of headroom ahead of codex (alarm above 20)' 'the spread alarm is shown'
+assert_contains "$(cat "$HOME_DIR/state/.wake-queue")" 'check: quota-spread: claude has 25 more points of headroom than codex' 'firstmate hears the spread alarm'
+balance_run "$BRIEF" --rule rule_1
+assert_equals 1 "$(grep -c 'quota-spread' "$HOME_DIR/state/.wake-queue")" 'one alarm per open spread condition'
+
+# Close allowances: no provider preference, the higher headroom still wins.
+write_balance_quota "$QUOTA" 70 -10 60 -4
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" 'Codex wins when it is fuller by pace'
+assert_not_contains "$out" 'spread:' 'no alarm inside 20 points'
+assert_absent "$HOME_DIR/state/quota-spread.json" 'a closed spread clears its condition'
+write_balance_quota "$QUOTA" 70 -5.2 60 -5
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" 'near-tie broken by stable task-key hash' 'a near-tie across allowances prefers no provider'
+
+# The reserve replaces the 40% floor: below 10% is ineligible, 15% is not.
+write_balance_quota "$QUOTA" 70 -5 1 -69
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" 'below the 10% reserve at all_models' 'an allowance under the reserve is not eligible'
+write_balance_quota "$QUOTA" 15 3 60 -30 30
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" 'Claude at 15% with headroom still takes work'
+
+# Spawn-time check: one JSON line, the requested profile against the pick.
+write_balance_quota "$QUOTA" 70 -5 60 -30
+balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high
+expect_code 0 "$code" 'check exits 0'
+assert_equals refused "$(jq -r .check.verdict <<<"$out")" 'a non-balanced profile is refused'
+assert_contains "$(jq -r .check.reason <<<"$out")" 'the balanced pick is claude:opus on claude (headroom -5)' 'the refusal names the balanced pick'
+assert_absent "$HOME_DIR/state/dispatch-charges.jsonl" 'a refused check charges nothing'
+KEEP_LEDGER=0 balance_run "$BRIEF" --rule rule_1 --check claude opus high
+assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'the balanced profile passes'
+assert_equals claude "$(jq -r .provider "$HOME_DIR/state/dispatch-charges.jsonl")" 'a passing check charges its allowance'
+balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high --override 'needs browser computer use'
+assert_equals override "$(jq -r .check.verdict <<<"$out")" 'a recorded override passes a spread hold'
+assert_equals codex "$(jq -r .provider "$HOME_DIR/state/dispatch-charges.jsonl")" 'an override charges the allowance it uses'
+write_balance_quota "$QUOTA" 70 -5 5 -60
+balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high --override 'needs browser computer use'
+assert_equals refused "$(jq -r .check.verdict <<<"$out")" 'an override never passes the reserve'
+balance_run "$BRIEF" --rule rule_2 --check claude opus high
+assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'a model choice within one allowance is not a balance question'
+balance_run "$BRIEF" --check claude opus high
+expect_code 2 "$code" '--check without --rule is a usage error'
+
+# A fuller allowance with no free seat holds the task instead of draining the
+# behind one.
+write_balance_quota "$QUOTA" 70 -5 60 -30
+jq '.claude_admission = {max_concurrent: 1}' "$BAL_RULES" > "$RULES"
+live_claude "$HOME_DIR/state" 1
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" 'status: escalate' 'a spread hold escalates'
+assert_contains "$out" 'holding rather than draining a behind allowance: claude is 25 points of headroom ahead and has no free seat' 'the hold names the fuller allowance'
+rm -f "$HOME_DIR/state"/crew*.meta
+cp "$BAL_RULES" "$RULES"
+
+# Measured draw: samples showing Codex losing 6 points an hour per crew charge
+# the next placement with draw over its measured span, not the fixed 5 points.
+now=$(date +%s)
+{
+  printf '{"at":%s,"rows":[{"provider":"codex","account":"","pct":40,"limiting":"weekly","resets":"r"}],"crews":[{"task":"a","provider":"codex","model":"gpt-6-astra"},{"task":"b","provider":"codex","model":"gpt-6-astra"}]}\n' $((now - 7200))
+  printf '{"at":%s,"rows":[{"provider":"codex","account":"","pct":28,"limiting":"weekly","resets":"r"}],"crews":[{"task":"a","provider":"codex","model":"gpt-6-astra"}]}\n' $((now - 3600))
+  printf '{"at":%s,"rows":[{"provider":"codex","account":"","pct":25,"limiting":"weekly","resets":"r"}],"crews":[]}\n' $((now - 1800))
+} > "$HOME_DIR/state/quota-samples.jsonl"
+write_balance_quota "$QUOTA" 70 -10 60 -4
+balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high
+assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'Codex is the pick by pace'
+assert_equals '6000:3600' "$(jq -r '"\(.draw * 1000 | round):\(.span)"' "$HOME_DIR/state/dispatch-charges.jsonl")" 'the charge carries the measured draw and span'
+rm -f "$HOME_DIR/state/quota-samples.jsonl" "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue"
+cp "$BASE_RULES" "$RULES"
+write_quota "$QUOTA" 0.7597
+pass 'quota balance ranks by pace with no preferred provider, keeps a 10% reserve, alarms on spread, and checks spawns'
 
 placement_s16
 printf '# all fm-dispatch-resolve tests passed\n'
