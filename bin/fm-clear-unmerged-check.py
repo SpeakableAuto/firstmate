@@ -24,7 +24,9 @@ more than two hours. This is an alert, not a grant of merge authority.
 
 Carve-out declarations are honored and never override fm-pr-lint.py's classifier
 on body, paths and added code. Eligible overdue PRs require a complete bounded
-gh-axi diff plus a head recheck; missing evidence refuses. Malformed declarations refuse. All non-Done
+gh-axi diff plus a head recheck; missing evidence refuses. Already-alerted PR+head
+identities, and every PR after this pass selects its alert, skip that diff read so
+they cannot spend the scan budget. Malformed declarations refuse. All non-Done
 captain holds are read through fm-tasks-axi.sh, including URL-linked backlog
 rows and tasks bound by state/*.meta pr= or a matching review task id.
 
