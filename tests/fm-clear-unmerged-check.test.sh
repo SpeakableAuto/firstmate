@@ -95,6 +95,75 @@ print((h/'tasks').read_text())
         calls = [json.loads(line) for line in (self.home/'calls').read_text().splitlines()]
         self.assertEqual(sum(call[:3] == ['api', 'POST', 'graphql'] for call in calls), 2)
 
+    def assert_report_skipped(self, path, reason):
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertIn('CLEAR unmerged report diagnostics:', out)
+        self.assertIn(str(path), out)
+        self.assertIn(reason, out)
+        self.assertNotIn('check unavailable', out)
+        self.assertEqual(self.run_check(), '')
+
+    def test_large_unrelated_report_does_not_silence_valid_review(self):
+        path = self.home/'data/oversized/report.md'
+        path.parent.mkdir()
+        path.write_text('x' * (3*1024*1024))
+        self.assert_report_skipped(path, 'prefix')
+
+    def test_unreadable_report_does_not_silence_valid_review(self):
+        if os.geteuid() == 0:
+            self.skipTest('mode 000 requires an unprivileged test runner')
+        path = self.home/'data/unreadable/report.md'
+        path.parent.mkdir()
+        path.write_text('# CLEAR\n'+URL+' '+SHA)
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o600)
+        self.assert_report_skipped(path, 'Permission denied')
+
+    def test_bad_utf8_report_does_not_silence_valid_review(self):
+        path = self.home/'data/bad-utf8/report.md'
+        path.parent.mkdir()
+        path.write_bytes(b'# CLEAR\n\xff')
+        self.assert_report_skipped(path, 'decode')
+
+    def test_large_clear_report_uses_identity_in_prefix(self):
+        self.report('# CLEAR\n'+URL+' '+SHA+'\n'+'x'*(3*1024*1024), NOW-7260)
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertNotIn('unavailable', out)
+
+    def test_clear_identity_beyond_prefix_does_not_alert(self):
+        for prefix in ('# CLEAR\n'+URL+'\n', '# CLEAR\n'+SHA+'\n'):
+            (self.home/'state/.clear-unmerged.json').unlink(missing_ok=True)
+            self.report(prefix+'x'*(3*1024*1024)+'\n'+URL+' '+SHA, NOW-7260)
+            out = self.run_check()
+            self.assertNotIn('CLEAR unmerged: ', out)
+            self.assertIn('missing PR URL or full head SHA', out)
+            self.assertIn('report.md', out)
+            self.assertNotIn('unavailable', out)
+
+    def test_utf8_character_across_prefix_boundary_is_not_corruption(self):
+        head = '# CLEAR\n'+URL+' '+SHA+'\n'
+        self.report(head+'x'*(64*1024-len(head)-1)+'é\n', NOW-7260)
+        self.assertIn('CLEAR unmerged: '+URL, self.run_check())
+
+    def test_partial_sha_at_prefix_boundary_cannot_alert(self):
+        head = '# CLEAR\n'+URL+'\n'
+        self.report(head+'x'*(64*1024-len(head)-41)+' '+SHA+'a\n', NOW-7260)
+        out = self.run_check()
+        self.assertNotIn('CLEAR unmerged: ', out)
+        self.assertIn('missing PR URL or full head SHA', out)
+
+    def test_report_directory_is_skipped(self):
+        path = self.home/'data/directory/report.md'
+        path.parent.mkdir()
+        path.mkdir()
+        self.assert_report_skipped(path, 'Is a directory')
+
+    def test_clear_must_start_on_line_one(self):
+        self.report('Introduction\n# CLEAR\n'+URL+' '+SHA, NOW-7260)
+        self.assertEqual(self.run_check(), '')
+
     def test_not_due_at_119_minutes_or_exactly_two_hours(self):
         for age in (7140,7200):
             self.report('# CLEAR\n'+URL+' '+SHA, NOW-age)
@@ -187,7 +256,7 @@ print((h/'tasks').read_text())
         for text in ('# Findings\n# CLEAR\n'+URL+' '+SHA, '# CLEARANCE\n'+URL+' '+SHA,
                      '# CLEAR\n'+URL+' '+SHA[:12], '# CLEAR\n'+URL+'0 '+SHA, '# CLEAR\n'+URL+'extra '+SHA):
             self.report(text, NOW-7260)
-            self.assertEqual(self.run_check(), '')
+            self.assertNotIn('CLEAR unmerged: ', self.run_check())
         self.report('# CLEAR - independent review\n'+URL+' '+SHA, NOW-7260)
         self.assertIn(URL, self.run_check())
 

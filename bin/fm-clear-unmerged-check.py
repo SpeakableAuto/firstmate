@@ -10,9 +10,12 @@ one per line, with # comments. Registry rows naming Michael are also excluded.
 No inference about ownership is made from an organization name.
 
 A report in data/*/report.md names a PR when its text contains the full PR URL
-and head SHA. The latest such report (by mtime) decides: it must have a first
-Markdown heading starting with '# CLEAR' as a whole word; a later non-CLEAR
-review at the same head blocks the alert. Report time is the file mtime only;
+and head SHA within its first 64 KiB (complete lines only when truncated).
+Unreadable or incomplete report prefixes are skipped with separate diagnostics;
+large reports with complete prefix evidence remain eligible.
+The latest such report (by mtime) decides: its first line must start with
+'# CLEAR' as a whole word; a later non-CLEAR review at the same head blocks the
+alert. Report time is the file mtime only;
 a future mtime is clamped to the first poll that saw it, retained while that
 mtime is unchanged. The clock starts at the later of that time and the PR
 creation/latest force-push/head push.
@@ -32,7 +35,8 @@ rows and tasks bound by state/*.meta pr= or a matching review task id.
 
 state/.clear-unmerged.json stores schema=1, alerted PR+head identities, observed
 head clocks (pruned per repository after a complete PR list), clamped future
-report times, and the last diagnostic for repeat suppression. A nonblocking flock serializes checks.
+report times, and the last error and report-skip diagnostics for repeat
+suppression. A nonblocking flock serializes checks.
 A failed project, repository or PR read is reported and skipped; the remaining
 items are still evaluated, and the failed item is never marked alerted.
 At most one new alert per pass keeps watcher output bounded; subsequent polls
@@ -43,6 +47,7 @@ they never mark a PR alerted. A test-only FM_CLEAR_UNMERGED_NOW freezes age
 calculation, never the real-time budget. No credentials or shell code are read.
 """
 import base64
+import codecs
 import datetime
 import fcntl
 import importlib.util
@@ -63,6 +68,7 @@ LINT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(LINT)
 SLUG = r'[A-Za-z0-9_.-]+'
 URL = re.compile(r'https://[A-Za-z0-9.-]+/'+SLUG+'/'+SLUG+r'/pull/[1-9][0-9]*(?![A-Za-z0-9_/?#=-])')
+REPORT_PREFIX_BYTES = 64 * 1024
 SHA = re.compile(r'(?<![a-fA-F0-9])[a-fA-F0-9]{40}(?![a-fA-F0-9])')
 
 
@@ -151,25 +157,39 @@ class Poll:
                 repos.add((host.lower(), repo))
         return sorted(repos)
 
-    def reports(self, record):
+    def reports(self, record, diagnostics):
         reports, previous, clamped = [], record.get('clamped', {}), {}
         for path in sorted(self.data.glob('*/report.md')):
             if len(reports) > 10000:
                 raise Unavailable('report scan exceeds 10000 reports')
-            text = self.read(path)
-            urls = set(URL.findall(text))
-            if not urls:
+            self.remaining()
+            try:
+                with path.open('rb') as stream:
+                    prefix = stream.read(REPORT_PREFIX_BYTES)
+                    truncated = bool(stream.read(1))
+                    mtime = os.fstat(stream.fileno()).st_mtime
+                # A valid UTF-8 character can straddle the byte boundary.
+                text = codecs.getincrementaldecoder('utf-8')().decode(prefix, final=not truncated)
+                if truncated:
+                    # Never accept a URL or SHA cut short at the prefix boundary.
+                    text = text.rpartition('\n')[0]
+            except (OSError, UnicodeError) as error:
+                diagnostics.append(f'{path}: skipped report: {error}')
                 continue
-            heading = re.search(r'^#{1,6} .+$', LINT.prose(text), re.M)
-            clear = bool(heading and re.match(r'^# CLEAR(?:\s|$)', heading[0]))
-            mtime = path.stat().st_mtime
+            urls = set(URL.findall(text))
+            shas = {s.lower() for s in SHA.findall(text)}
+            clear = bool(re.match(r'^# CLEAR(?:\s|$)', text))
+            if not urls or not shas:
+                if clear or truncated:
+                    diagnostics.append(f'{path}: skipped report: missing PR URL or full head SHA in report prefix')
+                continue
             seen = previous.get(str(path))
             if seen and seen['mtime'] == mtime:
                 clamped[str(path)] = seen
             elif mtime > self.now:
                 clamped[str(path)] = {'mtime': mtime, 'at': self.now}
             stamp = clamped[str(path)]['at'] if str(path) in clamped else mtime
-            reports.append((path, urls, {s.lower() for s in SHA.findall(text)}, stamp, clear))
+            reports.append((path, urls, shas, stamp, clear))
         record['clamped'] = clamped
         return reports
 
@@ -382,10 +402,10 @@ def check():
         record = json.loads(poll.read(record_path)) if record_path.exists() else {'schema': 1, 'alerted': [], 'error': ''}
         if not isinstance(record, dict) or record.get('schema') != 1 or not isinstance(record.get('alerted'), list):
             raise Unavailable('invalid clear-unmerged history; preserve it and repair the record')
-        errors = []
+        errors, diagnostics = [], []
         try:
             repos = poll.repos(errors)
-            reports = poll.reports(record) if repos else []
+            reports = poll.reports(record, diagnostics) if repos else []
             held_ids, held_urls = poll.holds() if repos else (set(), set())
             candidate = None
             heads = record.setdefault('heads', {})
@@ -421,6 +441,10 @@ def check():
             if note != record.get('error'):
                 print(note, flush=True)
         record['error'] = note
+        diagnostic = '; '.join(' '.join(d.split()) for d in diagnostics)
+        if diagnostic and diagnostic != record.get('report_diagnostics'):
+            print('CLEAR unmerged report diagnostics: '+diagnostic, flush=True)
+        record['report_diagnostics'] = diagnostic
         save(record_path, record)
 
 
