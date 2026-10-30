@@ -38,7 +38,7 @@ class Check(unittest.TestCase):
         subprocess.run(['git', '-C', str(self.home/'projects/demo'), 'remote', 'add', 'origin', 'https://github.com/example/demo.git'], check=True)
         (self.home/'data/projects.md').write_text('- demo [no-mistakes +yolo] - demo\n')
         (self.home/'fakebin/gh-axi').write_text('''#!/usr/bin/env python3
-import os, sys, pathlib, time, json
+import os, sys, pathlib, time, json, re, base64
 h = pathlib.Path(os.environ['FM_HOME'])
 with (h/'calls').open('a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
 if (h/'forge-error').exists():
@@ -51,16 +51,41 @@ if sys.argv[1:3] == ['pr', 'diff']:
 elif sys.argv[1] == 'api' and '/pulls/' in sys.argv[2]:
     print('response:\\n  body: '+json.dumps((h/'head').read_text()))
 else:
-    print((h/'forge').read_text())
+    query = next((a for a in sys.argv if a.startswith('query=')), '')
+    match = re.search(r'pullRequest\(number:([0-9]+)\)', query)
+    if match:
+        number = match[1]
+        if (h/('slow-pr-'+number)).exists(): time.sleep(10)
+        if (h/('fail-pr-'+number)).exists(): print('error: forbidden'); sys.exit(1)
+        raw = (h/'forge').read_text()
+        lines = raw.splitlines()
+        if len(lines)-1 != int(re.search(r'chunks\[([0-9]+)\]', lines[0])[1]):
+            print(raw); sys.exit(0)
+        listed = json.loads(base64.b64decode(''.join(line[2:] for line in lines[1:])))['data']['repository']['pullRequests']
+        rows = listed['nodes']
+        if listed['pageInfo']['hasNextPage']:
+            for row in rows: row['files']['pageInfo']['hasNextPage'] = True
+        pr = next((p for p in rows if p['url'].endswith('/'+number)), None)
+        response = dict(data=dict(repository=dict(pullRequest=pr)))
+        if pr is None and (h/'not-found-errors').exists():
+            response['errors'] = [dict(type='NOT_FOUND', path=['repository', 'pullRequest'],
+                                       message='Could not resolve to a PullRequest')]
+        encoded = base64.b64encode(json.dumps(response).encode()).decode()
+        chunks = [encoded[i:i+1000] for i in range(0,len(encoded),1000)]
+        print('chunks['+str(len(chunks))+']{part}:\\n'+''.join('  '+c+'\\n' for c in chunks), end='')
+    else:
+        print((h/'forge').read_text())
 ''')
         (self.home/'fakebin/tasks-axi').write_text('''#!/usr/bin/env python3
 import os, pathlib
+import time
 h = pathlib.Path(os.environ['FM_HOME'])
+if (h/'tasks-sleep').exists(): time.sleep(10)
 print((h/'tasks').read_text())
 ''')
         for p in (self.home/'fakebin').iterdir(): p.chmod(0o755)
         (self.home/'tasks').write_text('count: 0\ntasks: 0 tasks in this backlog\n')
-        self.pr = dict(additions=1, url=URL, headRefOid=SHA, body='Goal: improve monitoring.\nCarve-outs: none',
+        self.pr = dict(state='OPEN', isDraft=False, additions=1, url=URL, headRefOid=SHA, body='Goal: improve monitoring.\nCarve-outs: none',
                        createdAt=iso(NOW-20000), updatedAt=iso(NOW-10000),
                        files=dict(pageInfo=dict(hasNextPage=False), nodes=[dict(path='bin/monitor.sh')]),
                        commits=dict(nodes=[dict(commit=dict(oid=SHA, pushedDate=iso(NOW-10000)))]),
@@ -85,6 +110,263 @@ print((h/'tasks').read_text())
         r = subprocess.run(['bash', str(CHECK), action], env=self.env, text=True, capture_output=True, timeout=15)
         self.assertEqual(r.returncode, 0, r.stdout+r.stderr)
         return r.stdout
+
+    def metadata_calls(self):
+        path = self.home/'calls'
+        return [json.loads(line) for line in path.read_text().splitlines()
+                if json.loads(line)[:3] == ['api', 'POST', 'graphql']] if path.exists() else []
+
+    def record(self):
+        return json.loads((self.home/'state/.clear-unmerged.json').read_text())
+
+    def drafts(self, count):
+        prs = []
+        for number in range(1, count+1):
+            pr = json.loads(json.dumps(self.pr))
+            pr['url'] = 'https://github.com/example/demo/pull/'+str(number)
+            pr['isDraft'] = True
+            prs.append(pr)
+        self.forge(prs=prs)
+        self.report('# CLEAR\n'+' '.join(pr['url'] for pr in prs)+' '+SHA, NOW-7260)
+        return prs
+
+    def project(self, name, origin=None, tags='no-mistakes'):
+        subprocess.run(['git', 'init', '-q', str(self.home/'projects'/name)], check=True)
+        if origin:
+            subprocess.run(['git', '-C', str(self.home/'projects'/name), 'remote', 'add', 'origin', origin], check=True)
+        with (self.home/'data/projects.md').open('a') as registry:
+            registry.write('- '+name+' ['+tags+'] - '+name+'\n')
+
+    def two_reports(self):
+        other = json.loads(json.dumps(self.pr))
+        other['url'] = 'https://github.com/example/other/pull/8'
+        other['isDraft'] = True
+        subprocess.run(['git', 'init', '-q', str(self.home/'projects/other')], check=True)
+        subprocess.run(['git', '-C', str(self.home/'projects/other'), 'remote', 'add', 'origin',
+                        'https://github.com/example/other.git'], check=True)
+        (self.home/'data/projects.md').write_text('- demo [no-mistakes] - demo\n- other [no-mistakes] - other\n')
+        path = self.home/'data/review2/report.md'
+        path.parent.mkdir()
+        path.write_text('# CLEAR\n'+other['url']+' '+SHA)
+        os.utime(path, (NOW-7260, NOW-7260))
+        self.forge(prs=[self.pr, other])
+        return other
+
+    def test_thirty_repos_read_only_two_clear_candidates(self):
+        self.two_reports()
+        with (self.home/'data/projects.md').open('a') as registry:
+            for i in range(28):
+                name = 'unreviewed'+str(i)
+                subprocess.run(['git', 'init', '-q', str(self.home/'projects'/name)], check=True)
+                subprocess.run(['git', '-C', str(self.home/'projects'/name), 'remote', 'add',
+                                'origin', 'https://github.com/example/'+name+'.git'], check=True)
+                registry.write('- '+name+' [no-mistakes] - demo\n')
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertEqual(len(self.metadata_calls()), 2)
+        calls = (self.home/'calls').read_text().splitlines()
+        self.assertEqual(len(calls), 4)  # two metadata reads, eligible diff and head recheck
+
+    def test_origin_spelled_in_other_case_still_alerts(self):
+        subprocess.run(['git', '-C', str(self.home/'projects/demo'), 'remote', 'set-url', 'origin',
+                        'https://github.com/Example/Demo.git'], check=True)
+        canonical = 'https://github.com/Example/Demo/pull/7'
+        self.pr['url'] = canonical
+        self.forge()
+        out = self.run_check()
+        self.assertEqual(out.splitlines()[0].split(' head=')[0], 'CLEAR unmerged: '+canonical)
+        self.assertNotIn('diagnostics', out)
+        self.assertEqual(self.record()['alerted'], [canonical+'@'+SHA])
+        self.assertEqual(self.run_check(), '')
+
+    def test_clear_url_without_registered_origin_is_named(self):
+        subprocess.run(['git', '-C', str(self.home/'projects/demo'), 'remote', 'set-url', 'origin',
+                        'https://github.com/example/old-demo.git'], check=True)
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged scan diagnostics: ', out)
+        self.assertIn(URL+': skipped: no registered project has this repository as origin', out)
+        self.assertNotIn('check unavailable', out)
+        self.assertFalse((self.home/'calls').exists())
+        self.assertEqual(self.run_check(), '')
+
+    def test_local_only_and_gerrit_projects_stay_quiet(self):
+        self.project('scratch', tags='local-only')
+        self.project('gr', 'ssh://me@review.example:29418/gr', 'no-mistakes forge=gerrit')
+        out = self.run_check()
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertIn('CLEAR unmerged: '+URL, out)
+
+    def test_whole_check_failures_say_unavailable(self):
+        (self.home/'tasks').write_text('error: backend unavailable\n')
+        self.assertIn('CLEAR unmerged check unavailable: captain hold', self.run_check())
+        (self.home/'tasks').write_text('count: 0\ntasks: 0 tasks in this backlog\n')
+        (self.home/'data/projects.md').unlink()
+        self.assertIn('CLEAR unmerged check unavailable: ', self.run_check())
+
+    def test_call_budget_too_small_for_one_alert_is_refused(self):
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '2'
+        out = self.run_check()
+        self.assertIn('check unavailable: FM_CLEAR_UNMERGED_MAX_CALLS must be at least 3', out)
+        self.assertFalse((self.home/'calls').exists())
+
+    def test_missing_pr_is_not_reread_every_tick(self):
+        for errors in (False, True):
+            (self.home/'state/.clear-unmerged.json').unlink(missing_ok=True)
+            (self.home/'calls').unlink(missing_ok=True)
+            if errors:
+                (self.home/'not-found-errors').touch()
+            self.forge(prs=[dict(self.pr, url='https://github.com/example/demo/pull/9')])
+            self.assertEqual(self.run_check(), '')
+            self.assertEqual(self.record()['finished'][URL]['state'], 'MISSING')
+            self.assertEqual(self.run_check(), '')
+            self.assertEqual(len(self.metadata_calls()), 1)
+
+    def test_time_budget_in_registry_keeps_rotation_cursor(self):
+        self.two_reports()
+        real = subprocess.run(['/bin/sh', '-c', 'command -v git'], capture_output=True, text=True, check=True).stdout.strip()
+        (self.home/'fakebin/git').write_text('#!/bin/sh\nsleep 10\nexec '+real+' "$@"\n')
+        (self.home/'fakebin/git').chmod(0o755)
+        cursor = 'https://github.com/example/other/pull/8'
+        (self.home/'state/.clear-unmerged.json').write_text(json.dumps(
+            dict(schema=1, alerted=[], error='', cursor=cursor)))
+        self.env['FM_CHECK_TIMEOUT'] = '3'
+        out = self.run_check()
+        self.assertIn('deferred 2', out)
+        self.assertNotIn('check unavailable', out)
+        self.assertEqual(self.record()['cursor'], cursor)
+
+    def test_head_clock_pruned_when_clear_report_is_gone(self):
+        self.env['FM_CLEAR_UNMERGED_NOW'] = str(NOW-3600)
+        self.run_check()
+        self.assertIn(URL, self.record()['heads'])
+        (self.home/'data/review/report.md').unlink()
+        self.run_check()
+        self.assertEqual(self.record()['heads'], {})
+
+    def test_merged_clear_prs_are_not_reread_and_overdue_pr_checked_each_tick(self):
+        prs, words = [], []
+        for number in range(1, 41):
+            pr = json.loads(json.dumps(self.pr))
+            pr['url'] = 'https://github.com/example/demo/pull/'+str(number)
+            if number <= 38:
+                pr['state'] = 'MERGED'
+            prs.append(pr)
+            words.append(pr['url'])
+        self.forge(prs=prs)
+        self.report('# CLEAR\n'+' '.join(words)+' '+SHA, NOW-3600)
+        for _ in range(4):
+            out = self.run_check()
+            if 'deferred' not in out and not self.record()['deferred']:
+                break
+        self.assertFalse(self.record()['deferred'])
+        self.assertNotIn('CLEAR unmerged: ', out)
+        self.assertEqual(len(self.record()['finished']), 38)
+        (self.home/'calls').unlink()
+        self.env['FM_CLEAR_UNMERGED_NOW'] = str(NOW+3700)
+        out = self.run_check()
+        self.assertEqual(len(self.metadata_calls()), 2)
+        self.assertRegex(out, r'CLEAR unmerged: https://github.com/example/demo/pull/(39|40) ')
+        self.assertNotIn('diagnostics', out)
+
+    def test_deferral_note_is_stable_across_ticks(self):
+        self.drafts(4)
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '3'
+        self.assertIn('read 3, deferred 1, finished-skipped 0', self.run_check())
+        self.assertEqual(self.run_check(), '')
+        self.assertEqual(len(self.metadata_calls()), 6)
+
+    def test_closed_pr_with_newer_clear_report_is_reread(self):
+        self.pr['state'] = 'CLOSED'
+        self.forge()
+        self.run_check()
+        self.assertEqual(self.record()['finished'][URL]['state'], 'CLOSED')
+        self.run_check()
+        self.assertEqual(len(self.metadata_calls()), 1)
+        self.pr['state'] = 'OPEN'
+        self.forge()
+        self.env['FM_CLEAR_UNMERGED_NOW'] = str(NOW+600)
+        self.report('# CLEAR\n\n'+URL+' at `'+SHA+'`.\n', NOW+300)
+        self.run_check()
+        self.assertEqual(len(self.metadata_calls()), 2)
+        self.assertNotIn(URL, self.record()['finished'])
+
+    def test_call_budget_defers_and_resumes_next_candidate(self):
+        # No candidate needs a diff, so each call must advance one candidate.
+        prs = self.drafts(4)
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '3'
+        out = self.run_check()
+        self.assertIn('read 3, deferred 1', out)
+        self.assertEqual(self.record()['deferred'], [prs[3]['url']])
+        self.assertNotIn('check unavailable', out)
+        self.assertEqual(len(self.metadata_calls()), 3)
+        self.run_check()
+        calls = self.metadata_calls()
+        self.assertEqual(len(calls), 6)
+        self.assertIn('pullRequest(number:4)', ' '.join(calls[3]))
+
+    def test_one_candidate_failure_does_not_hide_other_alert(self):
+        other = self.two_reports()
+        (self.home/'fail-pr-8').touch()
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertIn(other['url'], out)
+        self.assertIn('skipped', out)
+        self.assertNotIn('check unavailable', out)
+
+    def test_overdue_candidate_deferred_after_metadata_then_alerts_next_tick(self):
+        other = self.two_reports()
+        self.pr['isDraft'] = True
+        other['isDraft'] = False
+        self.forge(prs=[self.pr, other])
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '3'
+        first = self.run_check()
+        self.assertNotIn('CLEAR unmerged: ', first)
+        self.assertIn('deferred 1', first)
+        self.assertEqual(self.record()['deferred'], [other['url']])
+        second = self.run_check()
+        self.assertIn('CLEAR unmerged: '+other['url'], second)
+        self.assertNotIn('check unavailable', second)
+
+    def test_failed_first_candidate_still_allows_next_repo_alert(self):
+        other = self.two_reports()
+        other['isDraft'] = False
+        self.forge(prs=[self.pr, other])
+        (self.home/'fail-pr-7').touch()
+        out = self.run_check()
+        self.assertIn(URL+': skipped:', out)
+        self.assertIn('CLEAR unmerged: '+other['url'], out)
+        self.assertNotIn('check unavailable', out)
+
+    def test_timed_out_repo_defers_other_repo_to_next_tick(self):
+        other = self.two_reports()
+        other['isDraft'] = False
+        self.forge(prs=[self.pr, other])
+        (self.home/'slow-pr-7').touch()
+        self.env['FM_CHECK_TIMEOUT'] = '4'
+        first = self.run_check()
+        self.assertIn('scan time budget exhausted reading gh-axi', first)
+        self.assertIn('deferred 2', first)
+        self.assertEqual(self.record()['deferred'], [other['url'], URL])
+        self.assertNotIn('check unavailable', first)
+        second = self.run_check()
+        self.assertIn('CLEAR unmerged: '+other['url'], second)
+        self.assertNotIn('check unavailable', second)
+
+    def test_closed_merged_draft_and_moved_head_stop_after_metadata(self):
+        for changes in ({'state': 'CLOSED'}, {'state': 'MERGED'}, {'isDraft': True},
+                        {'headRefOid': 'b'*40}):
+            pr = dict(self.pr, **changes)
+            self.forge(prs=[pr])
+            (self.home/'calls').unlink(missing_ok=True)
+            (self.home/'state/.clear-unmerged.json').unlink(missing_ok=True)
+            self.assertEqual(self.run_check(), '')
+            self.assertEqual(len((self.home/'calls').read_text().splitlines()), 1)
+
+    def test_no_clear_reports_means_no_forge_reads(self):
+        (self.home/'data/review/report.md').unlink()
+        (self.home/'forge-error').touch()
+        self.assertEqual(self.run_check(), '')
+        self.assertFalse((self.home/'calls').exists())
 
     def test_due_once_with_evidence_and_merge_instruction(self):
         out = self.run_check()
@@ -241,6 +523,15 @@ print((h/'tasks').read_text())
         self.forge()
         self.assertIn(URL, self.run_check())
 
+    def test_hold_read_killed_by_time_budget_is_deferred(self):
+        (self.home/'tasks-sleep').touch()
+        self.env['FM_CHECK_TIMEOUT'] = '4'
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged scan diagnostics: scan time budget exhausted reading', out)
+        self.assertIn('read 0, deferred 1', out)
+        self.assertNotIn('check unavailable', out)
+        self.assertEqual(self.record()['cursor'], URL)
+
     def test_bad_hold_read_is_diagnostic(self):
         (self.home/'tasks').write_text('error: backend unavailable\n')
         self.assertIn('hold', self.run_check())
@@ -265,7 +556,9 @@ print((h/'tasks').read_text())
         self.forge()
         original = (self.home/'forge').read_text()
         (self.home/'forge').write_text('\n'.join(original.splitlines()[:-1])+'\n')
-        self.assertIn('missing complete PR data', self.run_check())
+        out = self.run_check()
+        self.assertIn('missing complete PR data', out)
+        self.assertNotIn('check unavailable', out)
         (self.home/'forge').write_text(original)
         self.assertIn(URL, self.run_check())
 
@@ -347,7 +640,7 @@ print((h/'tasks').read_text())
         self.assertEqual(record['alerted'], [alerted['url']+'@'+SHA, URL+'@'+SHA])
         self.assertEqual(set(record['heads']), {alerted['url'], URL, later['url']})
 
-    def test_closed_pr_heads_pruned_after_complete_list(self):
+    def test_closed_pr_head_pruned_after_individual_read(self):
         self.run_check()
         state = self.home/'state/.clear-unmerged.json'
         self.assertIn(URL, json.loads(state.read_text())['heads'])
@@ -356,11 +649,11 @@ print((h/'tasks').read_text())
         self.assertIn(URL, json.loads(state.read_text())['heads'])
         (self.home/'forge-error').unlink()
         other = json.loads(json.dumps(self.pr))
-        other['url'] = 'https://github.com/example/demo/pull/8'
+        other['state'] = 'CLOSED'
         self.forge(prs=[other])
         self.run_check()
         record = json.loads(state.read_text())
-        self.assertEqual(list(record['heads']), [other['url']])
+        self.assertEqual(record['heads'], {})
         self.assertIn(URL+'@'+SHA, record['alerted'])
 
     def test_missing_paths_and_malformed_declaration_refuse(self):

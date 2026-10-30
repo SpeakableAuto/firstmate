@@ -1659,6 +1659,7 @@ The [check's help](../bin/fm-clear-unmerged-check.py) owns evidence matching, cl
 GitHub can omit a head push timestamp; in that case unrelated PR activity can conservatively delay the alert.
 The check requires complete GitHub and task-hold reads; an incomplete read raises a diagnostic instead of a merge recommendation.
 A failed project, repository or PR read is reported alongside any alert while the remaining repositories and PRs are still checked.
+Only PRs named by a local CLEAR review report are read from the forge, so registered repositories without such a report cost nothing; candidates a tick's budget cannot reach are counted as deferred and resumed first on the next poll instead of making the whole check unavailable.
 `bash tests/fm-clear-unmerged-check.test.sh` exercises the check and the real watcher in isolated fixture homes.
 
 ## Watched tool updates (config/watched-tools.json)
