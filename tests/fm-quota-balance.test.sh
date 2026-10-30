@@ -58,6 +58,7 @@ GATE_HOME="$TMP_ROOT/gate"
 GATE_BIN=$(fm_fakebin "$TMP_ROOT/gate-fake")
 fake_quota_axi "$GATE_BIN"
 mkdir -p "$GATE_HOME/config" "$GATE_HOME/data/t1" "$GATE_HOME/state"
+rm -f "$GATE_HOME/state/quota-balance-"* "$GATE_HOME/state/.wake-queue"*
 printf '# Task\n' > "$GATE_HOME/data/t1/brief.md"
 
 gate() {  # <harness> <model> <effort>; prints "<rc>|<reason>|<record>"
@@ -83,15 +84,41 @@ result=$(gate codex gpt-6-astra high)
 assert_equals 1 "${result%%|*}" 'the gate applies without any quota_balance key'
 jq 'del(.providers[1])' "$QUOTA_FIXTURE" > "$TMP_ROOT/claude-only.json"
 printf '%s\n' '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-6-astra","effort":"high"}]}]}' > "$GATE_HOME/config/crew-dispatch.json"
+rm -f "$GATE_HOME/state/quota-balance-last.json"
 result=$(QUOTA_FIXTURE="$TMP_ROOT/claude-only.json" gate codex gpt-6-astra high)
 assert_equals 0 "${result%%|*}" 'no candidate with quota evidence proceeds'
 assert_equals unverifiable "$(printf '%s\n' "${result##*|}" | jq -r .verdict)" 'and records that the balance was unverifiable'
+assert_equals 1 "$(wc -l < "$GATE_HOME/state/quota-balance-unverifiable.jsonl" | tr -d ' ')" 'a home without placement config records the degraded start'
+assert_equals 1 "$(grep -c 'check: quota-balance-unverifiable' "$GATE_HOME/state/.wake-queue")" 'the first degraded start alerts firstmate'
+[ -f "$GATE_HOME/state/quota-balance-unverifiable.open" ] || fail 'the degraded episode remains open'
+result=$(QUOTA_FIXTURE="$TMP_ROOT/claude-only.json" gate codex gpt-6-astra high)
+assert_equals 0 "${result%%|*}" 'another degraded start in the episode still proceeds'
+assert_equals 2 "$(wc -l < "$GATE_HOME/state/quota-balance-unverifiable.jsonl" | tr -d ' ')" 'every degraded start is recorded'
+assert_equals 1 "$(grep -c 'check: quota-balance-unverifiable' "$GATE_HOME/state/.wake-queue")" 'an open episode alerts only once'
 
 balance_rules "$GATE_HOME/config"
 result=$(gate codex gpt-6-astra high)
 assert_equals 1 "${result%%|*}" 'a profile off the balanced allowance is refused'
 assert_contains "$result" 'quota balance: the balanced pick is claude:opus on claude (headroom -5)' 'the refusal names the pick'
 assert_equals refused "$(printf '%s\n' "${result##*|}" | jq -r .verdict)" 'the refusal is recorded'
+assert_absent "$GATE_HOME/state/quota-balance-unverifiable.open" 'a refused verdict closes the degraded episode'
+rm -f "$GATE_HOME/state/quota-balance-last.json"
+printf '%s\n' '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-6-astra","effort":"high"}]}]}' > "$GATE_HOME/config/crew-dispatch.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/claude-only.json" gate codex gpt-6-astra high)
+assert_equals 0 "${result%%|*}" 'a later degraded episode proceeds independently'
+assert_equals 2 "$(grep -c 'check: quota-balance-unverifiable' "$GATE_HOME/state/.wake-queue")" 'a later degraded episode alerts again'
+
+now=$(date +%s)
+jq -n --argjson at "$now" '{at:$at,accounts:[
+  {home:"local",provider:"claude",account:"",headroom:-5,label:"claude"},
+  {home:"local",provider:"codex",account:"",headroom:-30,label:"codex"}]}' > "$GATE_HOME/state/quota-balance-last.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/claude-only.json" gate codex gpt-6-astra high)
+assert_equals 1 "${result%%|*}" 'a fresh last reading refuses a known-behind allowance when live evidence disappears'
+assert_contains "$result" 'last known reading' 'the refusal names its evidence source'
+assert_contains "$result" 'codex is 25 points behind claude' 'the refusal names the known spread'
+assert_absent "$GATE_HOME/state/quota-balance-unverifiable.open" 'the last-reading refusal closes the degraded episode'
+
+balance_rules "$GATE_HOME/config"
 result=$(gate claude opus high)
 assert_equals 0 "${result%%|*}" 'the balanced profile proceeds'
 assert_equals 'balanced:rule_1:claude' "$(printf '%s\n' "${result##*|}" | jq -r '"\(.verdict):\(.rule):\(.pick.provider)"')" 'the pass is recorded with its rule and pick'
@@ -108,9 +135,14 @@ assert_equals 'override:needs the Codex computer-use skill for this browser jour
   "$(printf '%s\n' "${result##*|}" | jq -r '"\(.verdict):\(.override)"')" 'the override and its reason are kept'
 rm "$GATE_HOME/data/t1/placement.json"
 result=$(gate grok grok-4 high)
-assert_equals 0 "${result%%|*}" 'a profile in no rule starts as an explicit choice outside the rules'
-assert_equals outside-rules "$(printf '%s\n' "${result##*|}" | jq -r .verdict)" 'and that verdict is recorded'
-pass 'the spawn gate enforces the balanced pick by default, refuses broken config, honors only recorded overrides, and records every verdict'
+assert_equals 1 "${result%%|*}" 'a profile in no rule is refused without an override'
+assert_contains "$result" 'record balance_override in data/t1/placement.json' 'the refusal names the required record'
+jq -n '{balance_override:"raw harness required by this task fixture"}' > "$GATE_HOME/data/t1/placement.json"
+result=$(gate grok grok-4 high)
+assert_equals 0 "${result%%|*}" 'a profile in no rule proceeds with a recorded override'
+assert_equals 'override:profile is in no dispatch rule:raw harness required by this task fixture' \
+  "$(printf '%s\n' "${result##*|}" | jq -r '"\(.verdict):\(.reason):\(.override)"')" 'the no-rule override and reason are recorded'
+pass 'the spawn gate enforces the balanced pick, alerts degraded starts, uses fresh evidence, and honors recorded overrides'
 
 # --- measured draw --------------------------------------------------------------
 BURN="$TMP_ROOT/burn"

@@ -1865,6 +1865,19 @@ assert_contains "$out" 'spread: claude is 25 points of headroom ahead of codex (
 assert_contains "$(cat "$HOME_DIR/state/.wake-queue")" 'check: quota-spread: claude has 25 more points of headroom than codex' 'firstmate hears the spread alarm'
 balance_run "$BRIEF" --rule rule_1
 assert_equals 1 "$(grep -c 'quota-spread' "$HOME_DIR/state/.wake-queue")" 'one alarm per open spread condition'
+assert_equals '2' "$(jq '.accounts | length' "$HOME_DIR/state/quota-balance-last.json")" 'the last successful spread reading keeps both allowances'
+assert_equals 'local:claude:-5,local:codex:-30' \
+  "$(jq -r '[.accounts[] | "\(.home):\(.provider):\(.headroom)"] | sort | join(",")' "$HOME_DIR/state/quota-balance-last.json")" \
+  'the last successful spread reading keeps local provider headroom'
+
+# Missing pace evidence cannot demote the candidates that still publish it.
+jq 'del(.providers[1].quotaSemantics.effectiveAvailability[0].pace)' "$QUOTA" > "$TMP_ROOT/missing-codex-pace.json"
+mv "$TMP_ROOT/missing-codex-pace.json" "$QUOTA"
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" 'a candidate with pace evidence outranks one without it'
+assert_contains "$out" 'pace headroom missing; candidates with pace evidence rank first' 'the missing-headroom candidate is visibly unranked'
+balance_run "$BRIEF" --rule rule_1 --check claude opus high
+assert_equals 'pace headroom' "$(jq -r .ranked_by <<<"$out")" 'the result records the ranking that chose the profile'
 
 # Close allowances: no provider preference, the higher headroom still wins.
 write_balance_quota "$QUOTA" 70 -10 60 -4

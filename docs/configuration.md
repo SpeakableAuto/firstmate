@@ -1274,7 +1274,8 @@ Optional top-level `quota_balance` only tunes the numbers: `reserve_percent` is 
 A candidate's pace headroom is the worst, over every window that bounds it, of the percentage points it has left minus the percentage of that window still to run; quota-axi publishes it per scope as `pace.worstReservePercentPoints`.
 Positive headroom means the allowance is on track to reach its reset unused, zero means it is exactly on pace, and negative means it is being drawn faster than its reset can refill it.
 Because the short windows count too, a Claude account whose five-hour window is nearly spent early in that window ranks low until the window refills.
-Headroom ranks when every rankable candidate publishes it, as quota-axi does; a snapshot without it falls back to `spendPriority` ranking under **Candidate selection policy**, and the result's `ranked_by` field says which ranking was used.
+When any rankable candidate publishes headroom, candidates with it rank first and candidates without it remain eligible but unranked with the reason `pace headroom missing; candidates with pace evidence rank first`.
+Only when no candidate publishes headroom does the pool fall back to `spendPriority` ranking under **Candidate selection policy**, and the result's `ranked_by` field says which ranking was used.
 
 **Selection**
 
@@ -1313,8 +1314,11 @@ Supervisor use on an account is attributed to its crew, which overstates rather 
 Before anything is provisioned, `fm-spawn.sh` asks the resolver for the balanced pick for every crewmate and scout start, fresh or relaunch, with a known rule (`--rule`) and the requested profile (`--check`), and refuses unless the requested profile is on the pick's allowance.
 An unreadable or malformed `config/crew-dispatch.json` refuses the start rather than skipping the check.
 The rule is `data/<id>/placement.json`'s `dispatch_rule`, else the default profiles when they hold the requested profile, else the first rule that does.
-A profile in no rule is an explicit choice outside the rules, such as a captain override or a raw launch; it starts with that verdict recorded, and homes with crew placement still refuse it at the fit check.
-When no candidate has quota evidence at all, the start proceeds with the verdict `unverifiable` recorded, because unknown quota is disclosed uncertainty, never a block.
+A profile in no rule refuses unless `data/<id>/placement.json` carries a non-empty `balance_override` stating why the task class needs it; a passing no-rule override is recorded with the reason `profile is in no dispatch rule`.
+When no candidate has quota evidence at all, the start proceeds with the verdict `unverifiable` recorded, because unknown quota is disclosed uncertainty rather than an unconditional block.
+On a home without `config/crew-placement.json`, each such start is also appended to `state/quota-balance-unverifiable.jsonl`, and the first start in an open episode raises one `check: quota-balance-unverifiable:` wake.
+A balanced or refused verdict closes the episode, so a later degraded episode alerts again.
+Each successful resolver reading saves `state/quota-balance-last.json`; while that reading is under 24 hours old, an unverifiable start is refused when its local provider allowance was more than `spread_points` behind the fullest allowance in the reading.
 Every machine in the task's [pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines) is judged, so a pick on a second mate's machine refuses the local start and names that second mate.
 A non-empty `balance_override` in `placement.json`, stating why the task class needs that profile, is the only way past a refusal; it never passes the reserve or an exhausted window, and it is kept with the decision.
 The verdict, rule, pick, and any override are recorded as `quota.balance` in the `state/capacity.json` decision, and a passing start charges its allowance.

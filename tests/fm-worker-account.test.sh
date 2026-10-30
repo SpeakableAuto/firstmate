@@ -98,6 +98,10 @@ spawn_ship() {
   local id=$1
   shift
   fm_test_spawn_brief "$HOME_DIR" "$id"
+  if [ -f "$HOME_DIR/config/crew-dispatch.json" ]; then
+    jq -n '{balance_override:"worker-account fixture exercises admission outside dispatch classification"}' \
+      > "$HOME_DIR/data/$id/placement.json"
+  fi
   signed_in_claude_root "$CASE/ambient-claude"
   : > "$CASE/launch.log"
   FM_FAKE_LAUNCH_LOG="$CASE/launch.log" FM_TEST_CLAUDE_CONFIG_DIR="$CASE/ambient-claude" \
