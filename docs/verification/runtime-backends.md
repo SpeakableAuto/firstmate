@@ -2432,7 +2432,7 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --m
 
 Verified on 2026-10-04 AEST with Herdr 0.9.3 through `bin/fm-test-run.sh tests/fm-supervisor-watchdog-herdr-e2e.test.sh`, using the guarded named-session lab helper.
 This uses a stub supervisor, not a real Claude login or renderer, and does not certify provider credentials.
-The real-supervisor acceptance check remains an operator step after installation, as [the setup guide](../supervisor-watchdog.md) specifies.
+That transport run still required a separate real-supervisor check; the current token-free live renderer guard and its result are recorded below.
 
 ```text
 ok - real Herdr transport withholds input while network fixture is down
