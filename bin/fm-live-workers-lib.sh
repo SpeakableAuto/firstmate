@@ -74,6 +74,8 @@ fm_live_workers_count() {
     task=${meta##*/}; task=${task%.meta}
     counted="${counted:+$counted, }$task"
   done
+  # shellcheck disable=SC2034 # Shared output read by admission, pacing, placement and spawn callers.
   FM_LIVE_WORKERS_COUNT=$count
+  # shellcheck disable=SC2034 # Shared output read by admission and pacing callers.
   FM_LIVE_WORKERS_COUNTED=$counted
 }
