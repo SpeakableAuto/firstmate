@@ -230,6 +230,12 @@ sizes a=1
 out=$(run_check --dry-run)
 assert_equals created "$(printf '%s\n' "$out" | jq -r .baseline)" 'dry run reports the measurement'
 [ ! -e "$fm/state/internal-growth" ] || fail 'dry run wrote state'
+touch "$case_dir/du.fail"
+set +e; out=$(run_check --dry-run); rc=$?; set -e
+assert_equals 1 "$rc" 'dry run refuses a failed measurement'
+assert_contains "$out" 'du produced no total' 'dry run names measurement failure'
+[ ! -e "$fm/state/internal-growth" ] || fail 'failed dry run wrote state'
+rm "$case_dir/du.fail"
 printf 'volume=%s\nscan=%s\nscan=%s/a\n' "$case_dir" "$scan" "$scan" > "$fm/config/internal-growth"
 set +e; run_check >/dev/null 2>&1; rc=$?; set -e
 assert_equals 2 "$rc" 'overlapping scan paths are invalid'
