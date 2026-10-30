@@ -1,16 +1,11 @@
 #!/bin/sh
 # Refuse another review fix after the configured number of completed reviews.
 # Exit 0 permits the response; exit 3 asks firstmate to triage it.
-# Normal checks are read-only and never submit a pipeline response. At the cap,
-# a matching one-use token is atomically moved into consumed/ as its audit log.
+# This is a read-only preflight: it never submits a pipeline response.
 # Invoke with the same arguments as no-mistakes before executing its binary.
 # NM_REVIEW_ROUND_CAP defaults to 2; NM_CAP_DB selects the SQLite run store;
-# NM_CAP_OVERRIDE_DIR selects the token state (default: review-round-overrides
-# beside the database); NM_CAP_BINARY selects the underlying executable;
-# NM_CAP_DRYRUN prints verdicts without changing enforcement. Defaults match the
-# standard per-user install. To authorize one round, firstmate creates consumed/
-# and the empty token file named by the refusal. The token name is
-# <run-id>.review-<next-round> and successful use moves it into consumed/.
+# NM_CAP_BINARY selects the underlying executable; NM_CAP_DRYRUN prints verdicts
+# without changing enforcement. Defaults match the standard per-user install.
 # Activation after review: install -m 755 bin/fm-nm-review-round-cap.sh
 #   "$HOME/.no-mistakes/bin/review-round-cap.sh"
 # The installed no-mistakes launcher must call that preflight before exec.
@@ -18,7 +13,6 @@
 # one-based review rounds, purpose=review (review-fix invocations do not count).
 cap=${NM_REVIEW_ROUND_CAP:-2}
 db=${NM_CAP_DB:-"$HOME/.no-mistakes/state.sqlite"}
-override_dir=${NM_CAP_OVERRIDE_DIR:-"$(dirname "$db")/review-round-overrides"}
 binary=${NM_CAP_BINARY:-"$HOME/.local/libexec/no-mistakes"}
 say() { [ -n "${NM_CAP_DRYRUN:-}" ] && echo "review-round-cap: $*" >&2; }
 refuse_unreadable() {
@@ -66,17 +60,6 @@ if row is None or not isinstance(row[0], str):
 print(row[0])
 PY
 }
-consume_override() {
-  next_round=$((rounds + 1))
-  token=$override_dir/$run.review-$next_round
-  consumed_dir=$override_dir/consumed
-  [ -f "$token" ] && [ -d "$consumed_dir" ] || return 1
-  used=$consumed_dir/$run.review-$next_round.$(date -u +%Y%m%dT%H%M%SZ).$$
-  mv "$token" "$used" 2>/dev/null || return 1
-  echo "no-mistakes review-round cap: consumed one-use override for run $run review round $next_round; audit $used" >&2
-  return 0
-}
-
 axi=0 respond=0 action='' run='' step='' expect=''
 for arg in "$@"; do
   if [ -n "$expect" ]; then
@@ -125,11 +108,7 @@ fi
 rounds=$(query "select max(round) from agent_invocations where run_id='$run' and step_name='review' and purpose='review'") || refuse_unreadable
 case "$rounds" in ''|*[!0-9]*|0) refuse_unreadable ;; esac
 if [ "$rounds" -ge "$cap" ]; then
-  if consume_override; then
-    exit 0
-  fi
-  token=$override_dir/$run.review-$((rounds + 1))
-  echo "review-round cap reached ($rounds of $cap): ask firstmate; it may allow one more round with token file $token (create its consumed/ directory too)" >&2
+  echo "review-round cap reached ($rounds of $cap): stop and send the findings to firstmate for triage" >&2
   exit 3
 fi
 say "review round $rounds of $cap: fix allowed"
