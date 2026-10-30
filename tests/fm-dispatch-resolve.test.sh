@@ -1391,7 +1391,7 @@ child_gate() {
   ( export PATH="$FAKEBIN:$BASE_PATH" QUOTA_AXI_FIXTURE="$TMP_ROOT/child-quota.json"
     # shellcheck disable=SC2034
     SCRIPT_DIR="$ROOT/bin" FM_HOME="$REMOTE_HOME" CONFIG="$REMOTE_HOME/config" DATA="$REMOTE_HOME/data" STATE="$REMOTE_HOME/state"
-    # shellcheck source=bin/fm-quota-balance-lib.sh
+    # shellcheck source=/dev/null
     . "$ROOT/bin/fm-quota-balance-lib.sh"
     rc=0
     fm_quota_balance_gate child-task cursor cursor-grok-4.6-medium '' "$REMOTE_HOME/projects/pager" preflight || rc=$?
