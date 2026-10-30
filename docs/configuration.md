@@ -1305,6 +1305,7 @@ The alarm is for firstmate, which reaches the captain only when work cannot self
 Each resolver call records one sample of this machine's allowances and its live crew by model in `state/quota-samples.jsonl` (8 days kept).
 A placement's charge is measured separately for each bounding window of its provider and model: points lost per crew-hour times the median finished-crew lifetime, owed in proportion to the unexpired part of that lifetime.
 Each window keeps its own `draw` and `span`; session points are never subtracted from weekly points.
+A snapshot window without a numeric remaining percentage is not charged and cannot by itself limit admission.
 Reset timestamps within five minutes are treated as one reset unless the percentage refilled, and remote candidates use their own machine's measured rates.
 A model or provider with under half a crew-hour of evidence keeps the fixed 5-point, 900-second charge described under **Charging placements**.
 Between two samples, a crew seen at both ends carries a full share of the loss and one seen at only one end (started or finished in between) carries half.
@@ -1326,10 +1327,10 @@ Every machine in the task's [pool](../.agents/skills/quota-array-dispatch/SKILL.
 A non-empty `balance_override` in `placement.json` states why the task class needs that profile and is kept with the decision, including on the last-reading path.
 Ordinary overrides cannot pass the reserve or an exhausted window.
 An explicit `impact: "P0"` together with that override may start when every applicable allowance reading is strictly above 5% before its own expected draw, with one supervisor alert per task.
-The P0 may then consume reserve toward the hard floor; this admission check does not stop an already running worker.
+The P0 may then consume through the 5% boundary by its expected draw; this admission check does not stop an already running worker.
 This deliberate P0 exception follows Kitchen rule 20, which requires a P0 to drop everything.
 Machine fit and room still apply.
-A parent's fresh, task-bound `parent_placement` can be carried with the remote task classification; the receiving home honors that pool decision while checking its own allowance reserve.
+A parent's fresh, route-bound `parent_placement` can be carried with the remote task classification; the receiving home honors that pool decision while checking its own allowance reserve.
 The [gate header](../bin/fm-quota-balance-lib.sh) owns the transfer record and expiry checks.
 The verdict, rule, pick, and any override are recorded as `quota.balance` in the `state/capacity.json` decision, and a successful launch charges its allowance after admission, brief and provisioning checks pass.
 Controlled relaunches apply this gate through the [relaunch transaction](agent-control.md#transactional-relaunch).
