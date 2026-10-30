@@ -1,0 +1,73 @@
+== tick 1 (30 registered projects, 4 CLEAR reports: PR45+PR48 merged, PR46 open, repo3#1 nonexistent repo) ==
+CLEAR unmerged scan diagnostics: https://github.com/speakableauto/lab-nonexistent-repo3/pull/1: skipped: gh-axi read unavailable; check access and complete output
+exit=0
+bash /tmp/fmlab-run.sh  0.63s user 0.27s system 26% cpu 3.438 total
+-- forge calls (real gh-axi, logged) --
+api POST graphql --hostname github.com --field query=query { repository(owner:"speakableauto",name:"firstmate") {
+          pullRequest(number:45) {
+              url state isDraft headRefOid body createdAt updatedAt additions
+              files(first:100) { pageInfo { hasNextPage } nodes { path } }
+              commits(last:1) { nodes { commit { oid pushedDate } } }
+              timelineItems(last:1,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]) {
+                nodes { ... on HeadRefForcePushedEvent { createdAt } }
+              }
+          }
+        }} --jq @base64 | {chunks: [scan(".{1,1000}") | {part: .}]}
+api POST graphql --hostname github.com --field query=query { repository(owner:"speakableauto",name:"firstmate") {
+          pullRequest(number:46) {
+              url state isDraft headRefOid body createdAt updatedAt additions
+              files(first:100) { pageInfo { hasNextPage } nodes { path } }
+              commits(last:1) { nodes { commit { oid pushedDate } } }
+              timelineItems(last:1,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]) {
+                nodes { ... on HeadRefForcePushedEvent { createdAt } }
+              }
+          }
+        }} --jq @base64 | {chunks: [scan(".{1,1000}") | {part: .}]}
+api POST graphql --hostname github.com --field query=query { repository(owner:"speakableauto",name:"firstmate") {
+          pullRequest(number:48) {
+              url state isDraft headRefOid body createdAt updatedAt additions
+              files(first:100) { pageInfo { hasNextPage } nodes { path } }
+              commits(last:1) { nodes { commit { oid pushedDate } } }
+              timelineItems(last:1,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]) {
+                nodes { ... on HeadRefForcePushedEvent { createdAt } }
+              }
+          }
+        }} --jq @base64 | {chunks: [scan(".{1,1000}") | {part: .}]}
+api POST graphql --hostname github.com --field query=query { repository(owner:"speakableauto",name:"lab-nonexistent-repo3") {
+          pullRequest(number:1) {
+              url state isDraft headRefOid body createdAt updatedAt additions
+              files(first:100) { pageInfo { hasNextPage } nodes { path } }
+              commits(last:1) { nodes { commit { oid pushedDate } } }
+              timelineItems(last:1,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]) {
+                nodes { ... on HeadRefForcePushedEvent { createdAt } }
+              }
+          }
+        }} --jq @base64 | {chunks: [scan(".{1,1000}") | {part: .}]}
+-- state --
+{
+    "schema": 1,
+    "alerted": [],
+    "error": "CLEAR unmerged scan diagnostics: https://github.com/speakableauto/lab-nonexistent-repo3/pull/1: skipped: gh-axi read unavailable; check access and complete output",
+    "clamped": {},
+    "heads": {
+        "https://github.com/speakableauto/firstmate/pull/46": {
+            "sha": "165ee073f1b674f1bf8bb56082679ca56da7fbd0",
+            "changed_at": 1793323987.0
+        }
+    },
+    "finished": {
+        "https://github.com/speakableauto/firstmate/pull/45": {
+            "state": "MERGED",
+            "head": "c9bfa5511e98501d807216a34979853d7a2b66e5",
+            "seen_at": 1793334415.553239
+        },
+        "https://github.com/speakableauto/firstmate/pull/48": {
+            "state": "MERGED",
+            "head": "155da738b7882e30d4ac8a56b26cdffc571c90e2",
+            "seen_at": 1793334415.553239
+        }
+    },
+    "cursor": null,
+    "deferred": [],
+    "report_diagnostics": ""
+}

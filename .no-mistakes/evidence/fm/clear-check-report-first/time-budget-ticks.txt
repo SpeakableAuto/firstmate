@@ -1,0 +1,23 @@
+== time-budget tick 1 (FM_CHECK_TIMEOUT=3 => 1s scan budget; real gh-axi; alert receipt cleared so PR50 needs diff+recheck) ==
+CLEAR unmerged scan diagnostics: scan time budget exhausted reading gh-axi; read 1, deferred 3, finished-skipped 11
+exit=0
+real 1.19
+   forge calls: api POST graphql;
+   deferred: ['https://github.com/speakableauto/firstmate/pull/50', 'https://github.com/speakableauto/lab-nonexistent-repo3/pull/1', 'https://github.com/speakableauto/firstmate/pull/46'] cursor: https://github.com/speakableauto/firstmate/pull/50 alerted: []
+== time-budget tick 2 (FM_CHECK_TIMEOUT=3 => 1s scan budget; real gh-axi; alert receipt cleared so PR50 needs diff+recheck) ==
+exit=0
+real 1.11
+   forge calls: api POST graphql;
+   deferred: ['https://github.com/speakableauto/lab-nonexistent-repo3/pull/1', 'https://github.com/speakableauto/firstmate/pull/46', 'https://github.com/speakableauto/firstmate/pull/50'] cursor: https://github.com/speakableauto/lab-nonexistent-repo3/pull/1 alerted: []
+== time-budget tick 3 (FM_CHECK_TIMEOUT=3 => 1s scan budget; real gh-axi; alert receipt cleared so PR50 needs diff+recheck) ==
+CLEAR unmerged scan diagnostics: https://github.com/speakableauto/lab-nonexistent-repo3/pull/1: skipped: gh-axi read unavailable; check access and complete output; scan time budget exhausted reading gh-axi; read 2, deferred 2, finished-skipped 11
+exit=0
+real 1.06
+   forge calls: api POST graphql;api POST graphql;
+   deferred: ['https://github.com/speakableauto/firstmate/pull/50', 'https://github.com/speakableauto/firstmate/pull/46'] cursor: https://github.com/speakableauto/firstmate/pull/50 alerted: []
+== time-budget tick 4 (FM_CHECK_TIMEOUT=3 => 1s scan budget; real gh-axi; alert receipt cleared so PR50 needs diff+recheck) ==
+CLEAR unmerged scan diagnostics: scan time budget exhausted reading gh-axi; read 1, deferred 3, finished-skipped 11
+exit=0
+real 1.06
+   forge calls: api POST graphql;
+   deferred: ['https://github.com/speakableauto/lab-nonexistent-repo3/pull/1', 'https://github.com/speakableauto/firstmate/pull/46', 'https://github.com/speakableauto/firstmate/pull/50'] cursor: https://github.com/speakableauto/lab-nonexistent-repo3/pull/1 alerted: []

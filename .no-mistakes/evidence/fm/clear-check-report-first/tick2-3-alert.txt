@@ -1,0 +1,25 @@
+== tick 2 (30 registered projects; CLEAR reports: PR45+PR48 merged [finished], PR46 open carve-out, PR50 open non-carve-out, repo3#1 nonexistent; age clock frozen at now+3h: FM_TEST_SEAM=1 FM_CLEAR_UNMERGED_NOW=1793345293; forge is real gh-axi) ==
+CLEAR unmerged: https://github.com/SpeakableAuto/firstmate/pull/50 head=26665d0f1f4b509e4e9dc8839de6526b74de8789 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.bvdtJl/data/rev50/report.md age=10846s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+exit=0
+-- forge calls this tick --
+api POST graphql
+api POST graphql
+pr diff 50
+api /repos/SpeakableAuto/firstmate/pulls/50 
+api POST graphql
+pullRequest(number:46)
+pullRequest(number:50)
+pullRequest(number:1)
+-- alerted --
+['https://github.com/SpeakableAuto/firstmate/pull/50@26665d0f1f4b509e4e9dc8839de6526b74de8789']
+finished: ['https://github.com/speakableauto/firstmate/pull/45', 'https://github.com/speakableauto/firstmate/pull/48']
+
+== tick 3 (same inputs) ==
+exit=0
+-- forge calls this tick --
+api POST graphql
+api POST graphql
+api POST graphql
+pullRequest(number:46)
+pullRequest(number:50)
+pullRequest(number:1)
