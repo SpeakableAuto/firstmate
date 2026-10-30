@@ -339,14 +339,15 @@ make_fallback_bin() {  # <case-dir> <tasks-axi-stub-script>
 }
 
 run_bounded_fm_tasks_axi() {  # <fallback-bin> <bound> [args...]
-  local fb=$1 bound=$2 out rc=0
+  local fb=$1 bound=$2 out rc=0 fallback_timeout
   shift 2
+  fallback_timeout=$bound
   # The fallback shape itself: a PATH with no timeout variant on it, in force
   # for the bounded call only. The library is sourced first under the ordinary
   # PATH, as every real caller does.
   out=$(
     . "$ROOT/bin/fm-backlog-transition-lib.sh"
-    PATH="$fb" FM_TASKS_AXI_TIMEOUT="$bound" fm_tasks_axi "$@" 2>&1
+    PATH="$fb" FM_TASKS_AXI_TIMEOUT="$fallback_timeout" fm_tasks_axi "$@" 2>&1
   ) || rc=$?
   printf '%s' "$out"
   return "$rc"
