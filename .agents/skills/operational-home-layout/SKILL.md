@@ -45,6 +45,7 @@ config/wedge-defer-parked-gate  optional presence flag opting this home into the
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional shared supervision active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
+config/clear-unmerged-skip-repos  optional owner/repo exclusion list for the cleared-PR check armed with bin/fm-clear-unmerged-check.sh; LOCAL, gitignored, and not inherited; see docs/configuration.md "Cleared PR monitoring"
 config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
 config/workflow-context  private scoped workflow-context opt-in; LOCAL, gitignored; see docs/configuration.md "Private workflow context"
 data/                personal fleet records; LOCAL, gitignored as a whole
@@ -90,6 +91,7 @@ state/               runtime records and signals; gitignored
   x-watch.check.sh   generated Relay poll shim; present only when opted in (section 14)
   tool-updates.check.sh  generated watched-tool update poll shim and its .check-trust binding; present only after bin/fm-tool-update-check.sh arm; its report record .tool-updates is what keeps one pending update from being reported on every poll
   mail.check.sh      generated received-mail poll shim and its .check-trust binding; present only after bin/fm-mail-check.sh arm; report record .mail-check (mail schema: docs/configuration.md "Mail plane")
+  clear-unmerged.check.sh  generated cleared-PR poll shim and its .check-trust binding; present only after bin/fm-clear-unmerged-check.sh arm; .clear-unmerged.json (alert history, kept on disarm) and .clear-unmerged.lock are owned by bin/fm-clear-unmerged-check.py
   .mail-seen .mail-woken .mail-retry .mail-retry-pos .mail-turn .mail-seen.lock  mail-plane poll cursor, emission journal, transient-fetch retry set, retry-scan position, contended-slot turn flag, and overlapping-poll lock; written only by bin/fm-mail.sh (mail schema: docs/configuration.md "Mail plane")
   dispatch-charges.jsonl  recent placements the typed dispatch resolver charges against each machine's accounts for its charge window; written only by bin/fm-dispatch-resolve.sh, safe to delete
   quota-remote/      briefly reused remote quota snapshots and failure back-offs; written only by bin/fm-quota-snapshot.sh
