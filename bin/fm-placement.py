@@ -3,6 +3,7 @@
 
 Usage: fm-placement.py assess CONFIG DATA ID HARNESS MODEL EFFORT
        fm-placement.py memory
+       fm-placement.py worktree CONFIG PROJECT [WORKTREE]
        fm-placement.py record STATE ID [spawn|recheck]
        fm-placement.py waits STATE
        fm-placement.py drop STATE ID
@@ -126,6 +127,10 @@ def external_checks(profile, project, worktree=None):
         except (OSError, ValueError, KeyError, TypeError) as error:
             checks["data-disk"] = failure(f"data volume measurement absent: {error}", "missing-data-measurement")
     checks["treehouse-root"] = treehouse_root(profile, project, worktree)
+    # A pool root on an unavailable drive fails as a consequence of the drive
+    # check; keep it named in the refusal but alert once, for the drive itself.
+    if checks["drive"]["status"] != "pass" and checks["treehouse-root"]["status"] != "pass":
+        checks["treehouse-root"] = result(False, checks["treehouse-root"]["reason"] + " (drive unavailable)")
     return checks
 
 
@@ -422,8 +427,11 @@ def main():
         free, swap = memory()
         output = {"free_percent": free, "swap_mib": swap}
     elif operation == "worktree":
-        config, project, worktree = args
-        output = treehouse_root(read(Path(config) / "crew-placement.json"), project, worktree)
+        config, project, *worktrees = args
+        if len(worktrees) > 1:
+            raise ValueError("worktree accepts CONFIG PROJECT [WORKTREE]")
+        output = treehouse_root(read(Path(config) / "crew-placement.json"), project,
+                                worktrees[0] if worktrees else None)
     elif operation == "assess":
         config, data, task, harness, model, effort = args
         output = assess(Path(config), Path(data), task, harness, model, effort)
