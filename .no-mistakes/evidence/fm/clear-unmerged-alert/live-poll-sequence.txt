@@ -1,0 +1,33 @@
+--- poll 1 (01:04:37Z)
+exit=0
+--- poll 2 (01:04:40Z)
+exit=0
+--- poll 3 (01:04:43Z)
+exit=0
+--- poll 4 (01:04:46Z)
+exit=0
+--- state
+{
+    "schema": 1,
+    "alerted": [],
+    "error": "",
+    "clamped": {},
+    "heads": {
+        "https://github.com/SpeakableAuto/claude-config/pull/42": {
+            "sha": "6d57b7429767f22d63d29c38ec3f435deb4386a2",
+            "changed_at": 1791336415.0
+        },
+        "https://github.com/SpeakableAuto/claude-config/pull/83": {
+            "sha": "b8522b488933289e5b299bdbcd50cd6e74223525",
+            "changed_at": 1793269233.0
+        },
+        "https://github.com/SpeakableAuto/firstmate/pull/45": {
+            "sha": "9f14f756841b8426a4bc7e650427401c10a79126",
+            "changed_at": 1793321952.0
+        },
+        "https://github.com/SpeakableAuto/kitchen/pull/18": {
+            "sha": "62fa26e8d0ef1ee09f17bcfa1b65cbff760a766a",
+            "changed_at": 1793277579.0
+        }
+    }
+}

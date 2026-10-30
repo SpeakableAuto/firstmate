@@ -1,0 +1,18 @@
+$ fm-clear-unmerged-check.sh arm
+armed: state/clear-unmerged.check.sh
+exit=0
+-rw-------@ 1 mac-mini-0002  staff  613 Oct 30 11:04 .clear-unmerged.json
+-rw-r--r--@ 1 mac-mini-0002  staff    0 Oct 30 11:04 .clear-unmerged.lock
+-rw-------@ 1 mac-mini-0002  staff   84 Oct 30 11:05 clear-unmerged.check-trust
+-rwx------@ 1 mac-mini-0002  staff  232 Oct 30 11:05 clear-unmerged.check.sh
+--- shim
+#!/usr/bin/env bash
+export FM_HOME=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.rEai6a
+exec /Users/mac-mini-0002/.no-mistakes/worktrees/9db47e05032d/01M6553QW5XY4Q8QGWW40NDS2V/bin/fm-clear-unmerged-check.sh check
+--- run shim (as fm-watch would)
+exit=0
+$ disarm
+unregistered: state/clear-unmerged.check.sh
+exit=0
+-rw-------@ 1 mac-mini-0002  staff  613 Oct 30 11:05 .clear-unmerged.json
+-rw-r--r--@ 1 mac-mini-0002  staff    0 Oct 30 11:04 .clear-unmerged.lock

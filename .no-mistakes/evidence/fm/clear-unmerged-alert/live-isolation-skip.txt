@@ -1,0 +1,9 @@
+# registry: broken (non-GitHub origin) listed FIRST; kitchen in skip list
+$ check
+CLEAR unmerged check unavailable: gh-axi read unavailable; check access and complete output
+exit=0
+$ check (repeat; diagnostic deduped)
+exit=0
+--- observed heads after pass
+['https://github.com/SpeakableAuto/claude-config/pull/42', 'https://github.com/SpeakableAuto/claude-config/pull/83', 'https://github.com/SpeakableAuto/firstmate/pull/45']
+alerted []
