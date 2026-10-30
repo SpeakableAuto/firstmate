@@ -54,6 +54,11 @@ mv "$TMP_ROOT/profile" "$CONFIG/crew-placement.json"
 bad=$(assess "$(jq '.slots={status:"fail",reason:"refuse: slot cap reached"}' <<< "$base")")
 assert_equals fail "$(jq -r .checks.slots.status <<< "$bad")" 'named slot refusal'
 assert_contains "$(jq -r .checks.slots.reason <<< "$bad")" 'slot cap reached' 'slot seam reason retained'
+pool_full=$(python3 "$TOOL" pool "$CONFIG" 2)
+assert_equals false "$(jq .available <<<"$pool_full")" 'the quota pool excludes a full machine before ranking'
+assert_contains "$(jq -r .reason <<<"$pool_full")" 'crew cap: 2/2' 'the pool publishes its concrete room refusal'
+pool_unknown=$(python3 "$TOOL" pool "$CONFIG" -1)
+assert_equals false "$(jq .available <<<"$pool_unknown")" 'unknown live crew count cannot promise room'
 pass 'fit, room, quota, locks and missing evidence refuse bad placement'
 
 blocked=$(assess "$(jq '.crew_count=2' <<< "$base")")
