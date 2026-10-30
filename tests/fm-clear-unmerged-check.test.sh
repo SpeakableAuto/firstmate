@@ -38,7 +38,7 @@ class Check(unittest.TestCase):
         subprocess.run(['git', '-C', str(self.home/'projects/demo'), 'remote', 'add', 'origin', 'https://github.com/example/demo.git'], check=True)
         (self.home/'data/projects.md').write_text('- demo [no-mistakes +yolo] - demo\n')
         (self.home/'fakebin/gh-axi').write_text('''#!/usr/bin/env python3
-import os, sys, pathlib, time, json
+import os, sys, pathlib, time, json, re, base64
 h = pathlib.Path(os.environ['FM_HOME'])
 with (h/'calls').open('a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
 if (h/'forge-error').exists():
@@ -51,7 +51,27 @@ if sys.argv[1:3] == ['pr', 'diff']:
 elif sys.argv[1] == 'api' and '/pulls/' in sys.argv[2]:
     print('response:\\n  body: '+json.dumps((h/'head').read_text()))
 else:
-    print((h/'forge').read_text())
+    query = next((a for a in sys.argv if a.startswith('query=')), '')
+    match = re.search(r'pullRequest\(number:([0-9]+)\)', query)
+    if match:
+        number = match[1]
+        if (h/('slow-pr-'+number)).exists(): time.sleep(10)
+        if (h/('fail-pr-'+number)).exists(): print('error: forbidden'); sys.exit(1)
+        raw = (h/'forge').read_text()
+        lines = raw.splitlines()
+        if len(lines)-1 != int(re.search(r'chunks\[([0-9]+)\]', lines[0])[1]):
+            print(raw); sys.exit(0)
+        listed = json.loads(base64.b64decode(''.join(line[2:] for line in lines[1:])))['data']['repository']['pullRequests']
+        rows = listed['nodes']
+        if listed['pageInfo']['hasNextPage']:
+            for row in rows: row['files']['pageInfo']['hasNextPage'] = True
+        pr = next((p for p in rows if p['url'].endswith('/'+number)), None)
+        response = dict(data=dict(repository=dict(pullRequest=pr)))
+        encoded = base64.b64encode(json.dumps(response).encode()).decode()
+        chunks = [encoded[i:i+1000] for i in range(0,len(encoded),1000)]
+        print('chunks['+str(len(chunks))+']{part}:\\n'+''.join('  '+c+'\\n' for c in chunks), end='')
+    else:
+        print((h/'forge').read_text())
 ''')
         (self.home/'fakebin/tasks-axi').write_text('''#!/usr/bin/env python3
 import os, pathlib
@@ -60,7 +80,7 @@ print((h/'tasks').read_text())
 ''')
         for p in (self.home/'fakebin').iterdir(): p.chmod(0o755)
         (self.home/'tasks').write_text('count: 0\ntasks: 0 tasks in this backlog\n')
-        self.pr = dict(additions=1, url=URL, headRefOid=SHA, body='Goal: improve monitoring.\nCarve-outs: none',
+        self.pr = dict(state='OPEN', isDraft=False, additions=1, url=URL, headRefOid=SHA, body='Goal: improve monitoring.\nCarve-outs: none',
                        createdAt=iso(NOW-20000), updatedAt=iso(NOW-10000),
                        files=dict(pageInfo=dict(hasNextPage=False), nodes=[dict(path='bin/monitor.sh')]),
                        commits=dict(nodes=[dict(commit=dict(oid=SHA, pushedDate=iso(NOW-10000)))]),
@@ -85,6 +105,118 @@ print((h/'tasks').read_text())
         r = subprocess.run(['bash', str(CHECK), action], env=self.env, text=True, capture_output=True, timeout=15)
         self.assertEqual(r.returncode, 0, r.stdout+r.stderr)
         return r.stdout
+
+    def metadata_calls(self):
+        path = self.home/'calls'
+        return [json.loads(line) for line in path.read_text().splitlines()
+                if json.loads(line)[:3] == ['api', 'POST', 'graphql']] if path.exists() else []
+
+    def two_reports(self):
+        other = json.loads(json.dumps(self.pr))
+        other['url'] = 'https://github.com/example/other/pull/8'
+        other['isDraft'] = True
+        subprocess.run(['git', 'init', '-q', str(self.home/'projects/other')], check=True)
+        subprocess.run(['git', '-C', str(self.home/'projects/other'), 'remote', 'add', 'origin',
+                        'https://github.com/example/other.git'], check=True)
+        (self.home/'data/projects.md').write_text('- demo [no-mistakes] - demo\n- other [no-mistakes] - other\n')
+        path = self.home/'data/review2/report.md'
+        path.parent.mkdir()
+        path.write_text('# CLEAR\n'+other['url']+' '+SHA)
+        os.utime(path, (NOW-7260, NOW-7260))
+        self.forge(prs=[self.pr, other])
+        return other
+
+    def test_thirty_repos_read_only_two_clear_candidates(self):
+        self.two_reports()
+        with (self.home/'data/projects.md').open('a') as registry:
+            for i in range(28):
+                name = 'unreviewed'+str(i)
+                subprocess.run(['git', 'init', '-q', str(self.home/'projects'/name)], check=True)
+                subprocess.run(['git', '-C', str(self.home/'projects'/name), 'remote', 'add',
+                                'origin', 'https://github.com/example/'+name+'.git'], check=True)
+                registry.write('- '+name+' [no-mistakes] - demo\n')
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertEqual(len(self.metadata_calls()), 2)
+        calls = (self.home/'calls').read_text().splitlines()
+        self.assertEqual(len(calls), 4)  # two metadata reads, eligible diff and head recheck
+
+    def test_call_budget_defers_and_resumes_next_candidate(self):
+        other = self.two_reports()
+        # Neither candidate needs a diff, so one call must advance one candidate.
+        self.pr['isDraft'] = True
+        self.forge(prs=[self.pr, other])
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '1'
+        out = self.run_check()
+        self.assertIn('deferred', out)
+        self.assertIn(other['url'], out)
+        self.assertNotIn('check unavailable', out)
+        self.assertEqual(len(self.metadata_calls()), 1)
+        self.run_check()
+        calls = self.metadata_calls()
+        self.assertEqual(len(calls), 2)
+        self.assertIn('pullRequest(number:8)', ' '.join(calls[-1]))
+
+    def test_one_candidate_failure_does_not_hide_other_alert(self):
+        other = self.two_reports()
+        (self.home/'fail-pr-8').touch()
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertIn(other['url'], out)
+        self.assertIn('skipped', out)
+        self.assertNotIn('check unavailable', out)
+
+    def test_overdue_candidate_deferred_after_metadata_then_alerts_next_tick(self):
+        other = self.two_reports()
+        self.pr['isDraft'] = True
+        other['isDraft'] = False
+        self.forge(prs=[self.pr, other])
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '3'
+        first = self.run_check()
+        self.assertNotIn('CLEAR unmerged: ', first)
+        self.assertIn('deferred: '+other['url'], first)
+        second = self.run_check()
+        self.assertIn('CLEAR unmerged: '+other['url'], second)
+        self.assertNotIn('check unavailable', second)
+
+    def test_failed_first_candidate_still_allows_next_repo_alert(self):
+        other = self.two_reports()
+        other['isDraft'] = False
+        self.forge(prs=[self.pr, other])
+        (self.home/'fail-pr-7').touch()
+        out = self.run_check()
+        self.assertIn(URL+': skipped:', out)
+        self.assertIn('CLEAR unmerged: '+other['url'], out)
+        self.assertNotIn('check unavailable', out)
+
+    def test_timed_out_repo_defers_other_repo_to_next_tick(self):
+        other = self.two_reports()
+        other['isDraft'] = False
+        self.forge(prs=[self.pr, other])
+        (self.home/'slow-pr-7').touch()
+        self.env['FM_CHECK_TIMEOUT'] = '4'
+        first = self.run_check()
+        self.assertIn(URL+': skipped:', first)
+        self.assertIn('deferred: '+other['url'], first)
+        self.assertNotIn('check unavailable', first)
+        second = self.run_check()
+        self.assertIn('CLEAR unmerged: '+other['url'], second)
+        self.assertNotIn('check unavailable', second)
+
+    def test_closed_merged_draft_and_moved_head_stop_after_metadata(self):
+        for changes in ({'state': 'CLOSED'}, {'state': 'MERGED'}, {'isDraft': True},
+                        {'headRefOid': 'b'*40}):
+            pr = dict(self.pr, **changes)
+            self.forge(prs=[pr])
+            (self.home/'calls').unlink(missing_ok=True)
+            self.assertEqual(self.run_check(), '')
+            self.assertEqual(len((self.home/'calls').read_text().splitlines()), 1)
+
+    def test_no_clear_reports_means_no_forge_reads(self):
+        (self.home/'data/review/report.md').unlink()
+        (self.home/'forge-error').touch()
+        self.assertEqual(self.run_check(), '')
+        self.assertFalse((self.home/'calls').exists())
 
     def test_due_once_with_evidence_and_merge_instruction(self):
         out = self.run_check()
@@ -265,7 +397,9 @@ print((h/'tasks').read_text())
         self.forge()
         original = (self.home/'forge').read_text()
         (self.home/'forge').write_text('\n'.join(original.splitlines()[:-1])+'\n')
-        self.assertIn('missing complete PR data', self.run_check())
+        out = self.run_check()
+        self.assertIn('missing complete PR data', out)
+        self.assertNotIn('check unavailable', out)
         (self.home/'forge').write_text(original)
         self.assertIn(URL, self.run_check())
 
@@ -347,7 +481,7 @@ print((h/'tasks').read_text())
         self.assertEqual(record['alerted'], [alerted['url']+'@'+SHA, URL+'@'+SHA])
         self.assertEqual(set(record['heads']), {alerted['url'], URL, later['url']})
 
-    def test_closed_pr_heads_pruned_after_complete_list(self):
+    def test_closed_pr_head_pruned_after_individual_read(self):
         self.run_check()
         state = self.home/'state/.clear-unmerged.json'
         self.assertIn(URL, json.loads(state.read_text())['heads'])
@@ -356,11 +490,11 @@ print((h/'tasks').read_text())
         self.assertIn(URL, json.loads(state.read_text())['heads'])
         (self.home/'forge-error').unlink()
         other = json.loads(json.dumps(self.pr))
-        other['url'] = 'https://github.com/example/demo/pull/8'
+        other['state'] = 'CLOSED'
         self.forge(prs=[other])
         self.run_check()
         record = json.loads(state.read_text())
-        self.assertEqual(list(record['heads']), [other['url']])
+        self.assertEqual(record['heads'], {})
         self.assertIn(URL+'@'+SHA, record['alerted'])
 
     def test_missing_paths_and_malformed_declaration_refuse(self):
