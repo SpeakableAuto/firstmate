@@ -64,8 +64,7 @@ fm_claude_admission_limits() {
     (if has("claude_admission") then .claude_admission else {} end) as $c |
     ($c | if has("max_concurrent") then .max_concurrent else 3 end) as $cap |
     # Quota balance keeps only a small reserve for the supervisor'"'"'s own session.
-    (has("quota_balance")) as $balanced |
-    ($c | if has("min_session_percent") then .min_session_percent elif $balanced then 10 else 40 end) as $floor |
+    ($c | if has("min_session_percent") then .min_session_percent else 10 end) as $floor |
     (if $floor_min_percent == "" then null else (try ($floor_min_percent | tonumber) catch null) end) as $profile_min |
     if ($c | type) != "object" or ($cap | type) != "number" or $cap < 1 or $cap > 3 or $cap != ($cap | floor)
       or ($floor | type) != "number" or $floor < 10 or $floor > 100

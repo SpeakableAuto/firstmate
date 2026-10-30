@@ -62,6 +62,7 @@ printf '# Task\n' > "$GATE_HOME/data/t1/brief.md"
 
 gate() {  # <harness> <model> <effort>; prints "<rc>|<reason>|<record>"
   ( PATH="$GATE_BIN:$PATH"
+    # shellcheck disable=SC2034  # read by the sourced gate library
     SCRIPT_DIR="$ROOT/bin" FM_HOME="$GATE_HOME" CONFIG="$GATE_HOME/config" DATA="$GATE_HOME/data" STATE="$GATE_HOME/state"
     # shellcheck source=bin/fm-quota-balance-lib.sh
     . "$ROOT/bin/fm-quota-balance-lib.sh"
@@ -70,9 +71,21 @@ gate() {  # <harness> <model> <effort>; prints "<rc>|<reason>|<record>"
     printf '%s|%s|%s\n' "$rc" "$FM_QUOTA_BALANCE_REASON" "$FM_QUOTA_BALANCE_RECORD" )
 }
 
-printf '%s\n' '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-6-astra","effort":"high"}]}]}' > "$GATE_HOME/config/crew-dispatch.json"
 write_quota -5 -30
-assert_equals '0||null' "$(gate codex gpt-6-astra high)" 'no quota_balance: the gate does not apply'
+assert_equals '0||null' "$(gate codex gpt-6-astra high)" 'no crew-dispatch.json: no rules, no gate'
+printf '{"rules":[\n' > "$GATE_HOME/config/crew-dispatch.json"
+result=$(gate codex gpt-6-astra high)
+assert_equals 1 "${result%%|*}" 'malformed dispatch config refuses instead of skipping the gate'
+assert_contains "$result" 'is unreadable or malformed' 'the refusal names the broken config'
+# Quota balance is the default: with no quota_balance key the gate still applies.
+printf '%s\n' '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-6-astra","effort":"high"},{"harness":"claude","model":"opus","effort":"high"}]}]}' > "$GATE_HOME/config/crew-dispatch.json"
+result=$(gate codex gpt-6-astra high)
+assert_equals 1 "${result%%|*}" 'the gate applies without any quota_balance key'
+jq 'del(.providers[1])' "$QUOTA_FIXTURE" > "$TMP_ROOT/claude-only.json"
+printf '%s\n' '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-6-astra","effort":"high"}]}]}' > "$GATE_HOME/config/crew-dispatch.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/claude-only.json" gate codex gpt-6-astra high)
+assert_equals 0 "${result%%|*}" 'no candidate with quota evidence proceeds'
+assert_equals unverifiable "$(printf '%s\n' "${result##*|}" | jq -r .verdict)" 'and records that the balance was unverifiable'
 
 balance_rules "$GATE_HOME/config"
 result=$(gate codex gpt-6-astra high)
@@ -95,9 +108,9 @@ assert_equals 'override:needs the Codex computer-use skill for this browser jour
   "$(printf '%s\n' "${result##*|}" | jq -r '"\(.verdict):\(.override)"')" 'the override and its reason are kept'
 rm "$GATE_HOME/data/t1/placement.json"
 result=$(gate grok grok-4 high)
-assert_equals 1 "${result%%|*}" 'a profile in no rule is refused'
-assert_contains "$result" 'is in no dispatch rule' 'the refusal says why'
-pass 'the spawn gate enforces the balanced pick, honors only recorded overrides, and records every verdict'
+assert_equals 0 "${result%%|*}" 'a profile in no rule starts as an explicit choice outside the rules'
+assert_equals outside-rules "$(printf '%s\n' "${result##*|}" | jq -r .verdict)" 'and that verdict is recorded'
+pass 'the spawn gate enforces the balanced pick by default, refuses broken config, honors only recorded overrides, and records every verdict'
 
 # --- measured draw --------------------------------------------------------------
 BURN="$TMP_ROOT/burn"
@@ -117,11 +130,32 @@ jq '.providers[1].quotaSemantics.effectiveAvailability[0].effectivePercentRemain
 printf '[]\n' > "$BURN/crews3.json"
 python3 "$ROOT/bin/fm-quota-burn.py" sample "$BURN" "$BURN/q3.json" "$BURN/crews3.json" $((now + 5400))
 rates=$(python3 "$ROOT/bin/fm-quota-burn.py" rates "$BURN" $((now + 5400)))
-# 10 points over 2 crew-hours, then 5 points over half a crew-hour: 6 per crew-hour.
-assert_equals '6000:2500:3600' "$(jq -r '.models["codex:gpt-6-astra"] | "\(.points_per_hour * 1000 | round):\(.crew_hours * 1000 | round):\(.run_seconds)"' <<<"$rates")" \
+# Interval 1: a at both ends (weight 1), b only at the start (0.5): 10 points
+# over 1.5 crew-hours. Interval 2: a only at the start: 5 points over 0.25.
+assert_equals '8571:1750:3600' "$(jq -r '.models["codex:gpt-6-astra"] | "\(.points_per_hour * 1000 | round):\(.crew_hours * 1000 | round):\(.run_seconds)"' <<<"$rates")" \
   'points per crew-hour and finished-crew lifetime are measured'
-assert_equals '6000:3600' "$(jq -r '.models["codex:gpt-6-astra"] | "\(.draw * 1000 | round):\(.span)"' <<<"$rates")" 'draw is rate times run, owed over the run'
+assert_equals '8571:3600' "$(jq -r '.models["codex:gpt-6-astra"] | "\(.draw * 1000 | round):\(.span)"' <<<"$rates")" 'draw is rate times run, owed over the run'
 assert_equals null "$(jq -c '.models["claude:opus"] // null' <<<"$rates")" 'an allowance with no crew evidence keeps the fixed default'
+# A crew that starts between two samples carries that interval's loss, and a
+# later model does not absorb an earlier crew's loss alone.
+BURN2="$TMP_ROOT/burn2"
+mkdir -p "$BURN2"
+printf '[]\n' > "$BURN2/none.json"
+printf '%s\n' '[{"task":"a","provider":"codex","model":"gpt-6-astra"}]' > "$BURN2/a.json"
+printf '%s\n' '[{"task":"a","provider":"codex","model":"gpt-6-astra"},{"task":"b","provider":"codex","model":"gpt-6-sol"}]' > "$BURN2/ab.json"
+while read -r offset pct crews; do
+  jq --argjson pct "$pct" '.providers[1].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining = $pct' "$QUOTA_FIXTURE" > "$BURN2/q.json"
+  python3 "$ROOT/bin/fm-quota-burn.py" sample "$BURN2" "$BURN2/q.json" "$BURN2/$crews.json" $((now + offset))
+done <<'STEPS'
+0 60 none
+3600 54 a
+7200 48 ab
+STEPS
+rates=$(python3 "$ROOT/bin/fm-quota-burn.py" rates "$BURN2" $((now + 7200)))
+assert_equals '10000:1500' "$(jq -r '.models["codex:gpt-6-astra"] | "\(.points_per_hour * 1500 | round):\(.crew_hours * 1000 | round)"' <<<"$rates")" \
+  'a crew that started inside an interval is charged its share of that loss'
+assert_equals '2000:500' "$(jq -r '.models["codex:gpt-6-sol"] | "\(.points_per_hour * 500 | round):\(.crew_hours * 1000 | round)"' <<<"$rates")" \
+  'a later model takes only its own share'
 pass 'measured draw comes from sampled allowance loss per crew-hour and crew lifetimes'
 
 # --- one real spawn: refused off-balance, launched on-balance --------------------
