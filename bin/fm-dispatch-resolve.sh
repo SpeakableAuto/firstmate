@@ -15,8 +15,9 @@
 # profile is on the balanced pick's allowance), override (--override recorded,
 # only past a balance refusal, never past the reserve or an exhausted window),
 # --no-charge emits check.charge for later launch commit; --global-check checks
-# an inferred rule against the full pool. --p0 with an override uses a hard 5%
-# admission threshold before its own draw. --parent-placement consumes the
+# an inferred rule against the full pool. --p0 with an override requires every
+# applicable reading above 5% before its own draw, which may cross that boundary.
+# --parent-placement consumes the
 # gate-validated remote transfer record.
 # A refusal carries check.reason; only a passing verdict charges the requested
 # profile. Empty model or effort are passed as ''.

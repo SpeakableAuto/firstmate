@@ -249,7 +249,7 @@ fm_quota_balance_gate() {
       return 0 ;;
     override)
       if jq -e '.impact == "P0"' "$work" >/dev/null 2>&1 && (set -C; : > "$STATE/quota-p0-$id.open") 2>/dev/null; then
-        fm_quota_balance_wake_append check "quota-p0-$id" "check: quota-p0: $id may use the reserve down to the hard 5% floor" || true
+        fm_quota_balance_wake_append check "quota-p0-$id" "check: quota-p0: $id may start because every applicable reading is above 5% before its draw; the draw may cross that boundary" || true
       fi
       echo "quota balance: override recorded for $id: $override" >&2
       return 0 ;;
