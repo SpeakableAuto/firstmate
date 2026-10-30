@@ -811,7 +811,7 @@ CANDIDATE_JQ='
          spendPriority: $limiting.selection.spendPriority, score: $limiting.selection.spendPriority,
          runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
-      | . + {account: (prov($p; $lane).accountKey // ""), charged: ([$rows[].firstmateCharged // 0] | max // 0),
+      | . + {account: (prov($p; $lane).accountKey // ""), signature: signature(prov($p; $lane)), charged: ([$rows[].firstmateCharged // 0] | max // 0),
              feed: (prov($p; $lane).firstmateFeed // null)}
     end | . + {cache: (if $p == null then null else (prov($p; $lane).firstmateCache // null) end)};
 '
@@ -834,6 +834,12 @@ POOL_JQ='
   def draw_percent: 5;
   def draw_priority: 0.1;
   def round4: (. * 10000 | round) / 10000;
+  # One account seen from several machines reports the same window resets, so
+  # the resets name the account across the pool (a shared Codex account).
+  def signature($row):
+    if $row == null then null
+    else ([$row.windows[]? | select((.resetsAt | type) == "string") | "\(.id)@\(.resetsAt)"] | sort) as $w |
+      if ($w | length) == 0 then null else "\($row.provider)|" + ($w | join(",")) end end;
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
@@ -844,10 +850,13 @@ POOL_JQ='
   def recent($home): [$ledger.entries[] | select(.home == $home and .key != $key)];
   def recent_account($home; $provider; $account):
     [recent($home)[] | select(.provider == $provider and .account == $account)];
-  def charge_entries($home; $provider; $account; $scope):
-    [recent_account($home; $provider; $account)[] | select(
+  def charge_entries($home; $provider; $account; $scope; $sig):
+    [$ledger.entries[] | select(.key != $key and (
+      (.home == $home and .provider == $provider and .account == $account)
+      or ($sig != null and .signature == $sig))) | select(
       ((.scopes | type) == "array") and (.scopes | index($scope)) != null
     )];
+  def charge_entries($home; $provider; $account; $scope): charge_entries($home; $provider; $account; $scope; null);
   def charges($home; $provider; $account; $scope): charge_entries($home; $provider; $account; $scope) | length;
   # A measured placement carries draw (points) and span (seconds) and is still
   # owed in proportion to its unexpired span; an unmeasured one owes the fixed
@@ -856,16 +865,17 @@ POOL_JQ='
     if ($e.draw | type) == "number" and ($e.span | type) == "number" and $e.span > 0 then
       ($e.draw * (1 - (($now - $e.at) / $e.span))) | if . < 0 then 0 else . end
     else draw_percent end;
-  def charge_points($home; $provider; $account; $scope):
-    [charge_entries($home; $provider; $account; $scope)[] | owed(.)] | add // 0;
+  def charge_points($home; $provider; $account; $scope; $sig):
+    [charge_entries($home; $provider; $account; $scope; $sig)[] | owed(.)] | add // 0;
   def slots($home; $counted):
     [recent($home)[] | select(.claude) | .key as $k | select(($counted // []) | index($k) | not)] | length;
   def charged($snap; $home):
     $snap | .providers |= map(. as $row |
       if ((.quotaSemantics.effectiveAvailability | type) != "array") then .
       else .quotaSemantics.effectiveAvailability |= map(
-        charges($home; $row.provider; ($row.accountKey // ""); .scope) as $n |
-        charge_points($home; $row.provider; ($row.accountKey // ""); .scope) as $points |
+        (if $balance == null then null else signature($row) end) as $sig |
+        (charge_entries($home; $row.provider; ($row.accountKey // ""); .scope; $sig) | length) as $n |
+        charge_points($home; $row.provider; ($row.accountKey // ""); .scope; $sig) as $points |
         .firstmateCharged = $n |
         if $n == 0 then . else
           (if (.effectivePercentRemaining | type) == "number"
@@ -946,7 +956,7 @@ POOL_JQ='
   def rank_key: [.order, -(.score // .spendPriority), .home, .profile.harness, (.profile.model // ""), (.profile.effort // "")];
   # Quota balance (docs/configuration.md "Quota balance") names each allowance
   # by machine, provider, and account, and prefers no provider.
-  def acct($c): "\($c.home)|\($c.provider)|\($c.account)";
+  def acct($c): if ($c.signature // null) != null then "sig:\($c.signature)" else "\($c.home)|\($c.provider)|\($c.account)" end;
   def acct_label($a):
     (if $a.home == "local" then "" else "\($a.home) " end) + "\($a.provider)"
     + (if ($a.account // "") == "" or $a.account == "default" then "" else "/\($a.account)" end);
@@ -964,7 +974,7 @@ POOL_JQ='
   # quota for it, counting one whose only obstacle is a free seat.
   def task_spread($cs):
     spread_from([$cs[] | select(.headroom != null and ((.unranked // false) | not) and (.eligible or (.seat // false)))
-      | {acct: acct(.), home, provider, account, headroom}]);
+      | {acct: acct(.), home, provider, account, signature, headroom}]);
   def task_hash: reduce ($key | explode[]) as $cp (5381; ((. * 33 + $cp) % 2147483647));
   def exact_tie_pick($xs):
     if ([$xs[].home] | unique | length) < 2 then {best: $xs[0]}
@@ -1139,10 +1149,10 @@ POOL_JQ='
   (if $balance == null then null else
     spread_from([$homes[] | select(.snapshot != null) | .id as $hid | .snapshot.providers[]?
       | select(.provider as $p | $configured | index($p)) |
-      {home: $hid, provider, account: (.accountKey // ""),
+      {home: $hid, provider, account: (.accountKey // ""), signature: signature(.),
        headroom: ([.quotaSemantics.effectiveAvailability[]? | select(.scope == "all_models" or .scope == "all_products")
          | .pace.worstReservePercentPoints | select(type == "number")] | min)}
-      | select(.headroom != null) | . + {acct: "\(.home)|\(.provider)|\(.account)"}]) end) as $global |
+      | select(.headroom != null) | . + {acct: acct(.)}]) end) as $global |
   ($result + (if $global != null then {global_spread: $global} else {} end)) as $result |
   # Spawn-time check: is the requested profile on the balanced pick'"'"'s allowance?
   (if $check == null then null else
@@ -1169,6 +1179,7 @@ POOL_JQ='
     {at: $now, key: $key, home: $c.home, provider: $c.provider, account: $c.account,
      model: ($c.profile.model // ""), scopes: ([$c.bounds[]?.scope] | unique),
      claude: ($fmap[$c.profile.harness] == "claude")}
+    + (if ($c.signature // null) != null then {signature: $c.signature} else {} end)
     + (if $measured != null and ($measured.draw | type) == "number" and ($measured.span | type) == "number"
        then {draw: $measured.draw, span: $measured.span} else {} end);
   {result: $result,
