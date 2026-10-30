@@ -44,6 +44,7 @@ A send that may have reached the phone but was not confirmed never closes the in
 The job pins the complete `claude --version` output that passed the live check.
 A different installed version raises one check wake and one active alert per newly seen version and switches the watchdog to a degraded mode rather than disabling it.
 In that mode nothing is typed into the supervisor, because the network nudge, queue ring and stall nudge depend on verified screen reading, and an enabled restart is held.
+Semantic pane changes do not count as progress during drift, while idle or done watcher beacons, wake acknowledgements and transcript movement still do.
 The wake-age alert and stall timer keep running, and after the second quiet interval one urgent supervisor-down alert is sent.
 
 After every Claude upgrade, run the live guard and move the pin only when it passes:

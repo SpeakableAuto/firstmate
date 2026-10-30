@@ -20,6 +20,8 @@
 # version-specific screen parsing. The wake-age alert and stall timer keep
 # running, and the second stall interval sends one urgent supervisor-down
 # alert. An enabled restart remains held while the version is unverified. A
+# semantic pane change is not progress during drift, while watcher beacons,
+# wake acknowledgements and transcript movement remain valid progress signals. A
 # matching version ends drift; repeat the live check before moving the pin.
 # Stall: while the home needs supervision, progress is a newer watcher beacon
 # while Claude is natively idle or done, a change of the oldest main-owned wake
@@ -696,7 +698,7 @@ watchdog_stall() {
     watchdog_stall_update '.usage_since=0'
   fi
   prev=$(printf '%s' "$SREC" | jq -r .pane)
-  if [ "$pane" != unreadable ]; then
+  if [ "${DRIFT:-0}" = 0 ] && [ "$pane" != unreadable ]; then
     [ "$prev" = unreadable ] || [ "$pane" = "$prev" ] || moved=1
   fi
   ! watchdog_transcript_moved || moved=1

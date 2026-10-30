@@ -603,6 +603,30 @@ check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'failed drift wakes still reach t
 eval "$real_fm_wake_append"
 DRIFT=0
 
+stall_case
+IDENTITY=$'claude\tidle'
+DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)' FM_WATCHDOG_CLAUDE_VERSION='2.1.295 (Claude Code)'
+for t in 1000 1900 2800 3700 4600; do
+  PANE=$'❯ run it\n⠋ Unrecognized activity frame '"$t"$'\n────────────────────\n❯ \n────────────────────'
+  TICK=$t; watchdog_tick
+done
+check "$SENT" 0 'rotating unverified pane content is never typed into'
+check "$(stage)" down 'rotating unverified pane content cannot hide a drift stall'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'a drift stall with rotating pane content sends one urgent alert'
+
+stall_case
+IDENTITY=$'claude\tidle'
+DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)' FM_WATCHDOG_CLAUDE_VERSION='2.1.295 (Claude Code)'
+watchdog_tick
+for t in 2800 4600 6400; do
+  BEACON=$((BEACON + 1))
+  TICK=$t; watchdog_tick
+done
+check "$(stage)" watching 'an idle moving beacon remains progress during drift'
+[ ! -e "$DIR/urgent" ] || fail 'a healthy idle drift beacon alerted the captain'
+pass 'a healthy idle drift beacon does not alert'
+DRIFT=0
+
 hung_case; URGENT_RESULT=failed:delivery-failed
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$(jq -r .alerted "$DIR/stall.json")" false 'failed default urgent delivery leaves the incident open'
