@@ -7,17 +7,11 @@
 # shellcheck source=bin/fm-control-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-control-lib.sh"
 
-fm_quota_pacing_agent_state() { # <backend> <target>
-  local backend=$1 target=$2 verdict
-  [ -n "$target" ] || { printf 'unreadable'; return 0; }
-  verdict=$(fm_backend_agent_state "$backend" "$target")
-  if [ "$backend:$verdict" = herdr:unreadable ] \
-     && fm_backend_herdr_parse_target "$target" \
-     && [ "$(fm_backend_herdr_pane_process_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" = shell ]; then
-    verdict=dead
-  fi
-  printf '%s' "$verdict"
-}
+# shellcheck source=bin/fm-live-workers-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-live-workers-lib.sh"
+
+# Compatibility for placement callers; the shared library owns the classifier.
+fm_quota_pacing_agent_state() { fm_live_workers_agent_state "$@"; }
 
 fm_quota_pacing_meta_identity() { # <snapshot-file> <meta>
   local snapshot=$1 meta=$2 harness family model provider lane account
@@ -32,45 +26,21 @@ fm_quota_pacing_meta_identity() { # <snapshot-file> <meta>
   printf '%s\t%s\n' "$provider" "$account"
 }
 
+fm_quota_pacing_meta_matches() { # <meta> <snapshot> <provider> <account>
+  local identity worker_provider worker_account
+  identity=$(fm_quota_pacing_meta_identity "$2" "$1" 2>/dev/null) || return 1
+  worker_provider=${identity%%$'\t'*}
+  worker_account=${identity#*$'\t'}
+  [ "$worker_provider" = "$3" ] || return 1
+  [ "$worker_account" = unknown ] || [ "$worker_account" = "$4" ]
+}
+
 fm_quota_pacing_count() { # <state> <snapshot-file> <exclude-id> <provider> <account-key>
-  local state=$1 snapshot=$2 exclude=$3 provider=$4 account=$5
-  local meta identity worker_provider worker_account backend target verdict absence gen started now task count=0 counted=''
-  now=$(date +%s)
-  for meta in "$state"/*.meta; do
-    [ -f "$meta" ] || continue
-    [ "$meta" != "$state/$exclude.meta" ] || continue
-    [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
-    identity=$(fm_quota_pacing_meta_identity "$snapshot" "$meta" 2>/dev/null) || continue
-    worker_provider=${identity%%$'\t'*}
-    worker_account=${identity#*$'\t'}
-    [ "$worker_provider" = "$provider" ] || continue
-    [ "$worker_account" = unknown ] || [ "$worker_account" = "$account" ] || continue
-    backend=$(fm_backend_of_meta "$meta")
-    target=$(fm_backend_target_of_meta "$meta")
-    if fm_backend_source "$backend"; then
-      verdict=$(fm_quota_pacing_agent_state "$backend" "$target")
-    else
-      verdict=unverified
-    fi
-    if [ "$verdict" = missing ]; then
-      absence=$(fm_control_endpoint_absence_verdict "$backend" "$target")
-      case "${absence%%$'\t'*}" in
-        gone|dead) verdict=dead ;;
-        *) verdict=unreadable ;;
-      esac
-    fi
-    if [ "$verdict" = dead ]; then
-      gen=$(fm_meta_get "$meta" spawn_gen)
-      started=${gen#s}; started=${started%%.*}
-      case "$started" in ''|*[!0-9]*) continue ;; esac
-      [ "$((now - started))" -lt 60 ] || continue
-    fi
-    count=$((count + 1))
-    task=${meta##*/}; task=${task%.meta}
-    counted="${counted:+$counted, }$task"
-  done
-  FM_QUOTA_PACING_COUNT=$count
-  FM_QUOTA_PACING_COUNTED=$counted
+  FM_QUOTA_PACING_COUNT=0
+  FM_QUOTA_PACING_COUNTED=''
+  fm_live_workers_count "$1" "$3" fm_quota_pacing_meta_matches "$2" "$4" "$5" || return 2
+  FM_QUOTA_PACING_COUNT=$FM_LIVE_WORKERS_COUNT
+  FM_QUOTA_PACING_COUNTED=$FM_LIVE_WORKERS_COUNTED
 }
 
 fm_quota_pacing_state() { # <config-file> <state> <snapshot-file> [epoch-seconds] [exclude-id]
@@ -85,7 +55,7 @@ fm_quota_pacing_state() { # <config-file> <state> <snapshot-file> [epoch-seconds
   out=$calculated
   while IFS=$'\t' read -r provider account; do
     [ -n "$provider" ] || continue
-    fm_quota_pacing_count "$state" "$snapshot" "$exclude" "$provider" "$account"
+    fm_quota_pacing_count "$state" "$snapshot" "$exclude" "$provider" "$account" || return 2
     out=$(printf '%s\n' "$out" | jq -c --arg provider "$provider" --arg account "$account" \
       --argjson count "$FM_QUOTA_PACING_COUNT" --arg counted "$FM_QUOTA_PACING_COUNTED" '
       .accounts |= map(if .provider == $provider and .accountKey == $account then
@@ -181,7 +151,7 @@ fm_quota_pacing_admission_check() { # <config-dir> <state> <id> <harness> <model
   count=$(printf '%s\n' "$applicable" | jq '.[0].liveCount')
   counted=$(printf '%s\n' "$applicable" | jq -r '.[0].countedTaskIds | join(", ")')
   if [ "$count" -ge "$cap" ]; then
-    echo "error: quota pacing admission refused for provider $provider account $account: $count live or unverified crew, limit $cap; counted tasks: $counted" >&2
+    echo "error: quota pacing admission refused for provider $provider account $account: $count live crew, limit $cap; counted tasks: $counted" >&2
     return 1
   fi
 }

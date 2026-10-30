@@ -1374,10 +1374,10 @@ Account identity is the declared worker pin or a provable absolute ambient Claud
 An unpinned canonical launch refuses when a higher-precedence Claude credential is set because that credential cannot be mapped to a quota profile.
 Every admitted launch removes higher-precedence pane credentials and explicitly selects the same config root used for its quota snapshot.
 Unpinned raw commands count against every account and are refused because their credential selection and quota cannot be proved.
-Backend recovery-grade liveness excludes confirmed dead agents and endpoints whose absence is proven; uncertain liveness counts conservatively, and a just-published launch reserves its slot for 60 seconds while the process starts.
-For Herdr, an unreadable agent registration falls back to the existing process probe: a shell-only pane with no harness descendants releases its slot, while an unreadable process view still counts.
+Admission uses the shared live-worker count in [`bin/fm-live-workers-lib.sh`](../bin/fm-live-workers-lib.sh), also used by the away spend cap and quota pacing; its header owns liveness, startup reservations, and unreadable-backend refusals.
+For Herdr, an unreadable agent registration falls back to the existing process probe: a shell-only pane with no harness descendants releases its slot, while an unreadable process view refuses admission with a named liveness error.
 A concurrency refusal lists every counted task.
-Backends without a recovery classifier retain their recorded slots conservatively until teardown removes the record.
+Backends without a recovery classifier refuse admission as unreadable once the startup reservation expires.
 A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
 Typed dispatch resolution applies the same cap and five-hour floor to each machine's Claude candidates before recommending one: `bin/fm-quota-snapshot.sh` attaches that home's limits, live crew count, and session reading to every snapshot it prints, so a parent judges a remote machine from that machine's own crew and account.

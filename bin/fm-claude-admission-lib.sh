@@ -32,11 +32,6 @@ fm_claude_profile_floor_valid() {
   ' >/dev/null 2>&1
 }
 
-# Admission needs proof of an agent-free pane, not a usable registration.
-fm_claude_admission_agent_state() {  # <backend> <target>
-  fm_quota_pacing_agent_state "$@"
-}
-
 # Session-floor evidence from one Claude quota row: {pct} from the session
 # windows when the row is explicitly fresh, otherwise {unknown}. Shared by the
 # admission verdict and the dispatch state so both read the floor identically.
@@ -81,56 +76,25 @@ fm_claude_admission_limits() {
   }
 }
 
+# Account selection only; liveness and startup grace belong to the shared count.
+fm_claude_admission_meta_matches() { # <meta> <identity>
+  local meta=$1 identity=$2 recorded_harness recorded_family account
+  recorded_harness=$(fm_meta_get "$meta" harness)
+  recorded_family=$(fm_control_harness_family "$recorded_harness") || return 1
+  [ "$recorded_family" = claude ] || return 1
+  account=$(fm_meta_get "$meta" claude_quota_identity)
+  [ -n "$account" ] || account=$(fm_meta_get "$meta" account)
+  # Legacy unpinned workers have no proven identity and match every account.
+  [ -z "$account" ] || [ "$identity" = unknown ] || [ "$account" = unknown ] || [ "$account" = "$identity" ]
+}
+
 # fm_claude_admission_count <state> <exclude-id> <identity>
-# Sets FM_CLAUDE_ADMISSION_COUNT and FM_CLAUDE_ADMISSION_COUNTED (a ", " list)
-# for this home's live or unverified direct Claude crew charged to identity,
-# excluding the named task. It runs in the caller's shell so backends it
-# loads stay loaded there.
 fm_claude_admission_count() {
-  local state=$1 id=$2 identity=$3
-  local meta account backend target verdict absence count=0 counted='' task gen started now recorded_harness recorded_family
-  now=$(date +%s)
-  for meta in "$state"/*.meta; do
-    [ -f "$meta" ] || continue
-    [ "$meta" != "$state/$id.meta" ] || continue
-    recorded_harness=$(fm_meta_get "$meta" harness)
-    recorded_family=$(fm_control_harness_family "$recorded_harness") || continue
-    [ "$recorded_family" = claude ] || continue
-    [ "$(fm_meta_get "$meta" kind)" != secondmate ] || continue
-    account=$(fm_meta_get "$meta" claude_quota_identity)
-    [ -n "$account" ] || account=$(fm_meta_get "$meta" account)
-    # Legacy unpinned workers and raw commands have no proven identity.
-    [ -z "$account" ] || [ "$identity" = unknown ] || [ "$account" = unknown ] || [ "$account" = "$identity" ] || continue
-    backend=$(fm_backend_of_meta "$meta")
-    target=$(fm_backend_target_of_meta "$meta")
-    if fm_backend_source "$backend"; then
-      verdict=$(fm_claude_admission_agent_state "$backend" "$target")
-    else
-      verdict=unverified
-    fi
-    if [ "$verdict" = missing ]; then
-      absence=$(fm_control_endpoint_absence_verdict "$backend" "$target")
-      case "${absence%%$'\t'*}" in
-        gone|dead) verdict=dead ;;
-        *) verdict=unreadable ;;
-      esac
-    fi
-    case "$verdict" in
-      dead)
-        # Launch publication precedes vendor startup. Reserve that slot while
-        # a newly launched process is still coming up in its shell.
-        gen=$(fm_meta_get "$meta" spawn_gen)
-        started=${gen#s}; started=${started%%.*}
-        case "$started" in ''|*[!0-9]*) continue ;; esac
-        [ "$((now - started))" -lt 60 ] || continue
-        ;;
-    esac
-    count=$((count + 1))
-    task=${meta##*/}; task=${task%.meta}
-    counted="${counted:+$counted, }$task"
-  done
-  FM_CLAUDE_ADMISSION_COUNT=$count
-  FM_CLAUDE_ADMISSION_COUNTED=$counted
+  FM_CLAUDE_ADMISSION_COUNT=0
+  FM_CLAUDE_ADMISSION_COUNTED=''
+  fm_live_workers_count "$1" "$2" fm_claude_admission_meta_matches "$3" || return 2
+  FM_CLAUDE_ADMISSION_COUNT=$FM_LIVE_WORKERS_COUNT
+  FM_CLAUDE_ADMISSION_COUNTED=$FM_LIVE_WORKERS_COUNTED
 }
 
 # fm_claude_admission_quota_row <identity>
@@ -181,11 +145,11 @@ fm_claude_admission_check() {
   cap=$(printf '%s\n' "$limits" | jq -r .cap)
   floor=$(printf '%s\n' "$limits" | jq -r .floor)
   floors=$(printf '%s\n' "$limits" | jq -c .floors)
-  fm_claude_admission_count "$state" "$id" "$identity"
+  fm_claude_admission_count "$state" "$id" "$identity" || return 1
   count=$FM_CLAUDE_ADMISSION_COUNT
   counted=$FM_CLAUDE_ADMISSION_COUNTED
   if [ "$count" -ge "$cap" ]; then
-    echo "error: Claude crew admission refused for account $identity: $count live or unverified crew, limit $cap; counted tasks: $counted; choose Codex or route to a second mate on another account" >&2
+    echo "error: Claude crew admission refused for account $identity: $count live crew, limit $cap; counted tasks: $counted; choose Codex or route to a second mate on another account" >&2
     return 1
   fi
   if [ "$identity" = unknown ]; then
@@ -206,7 +170,7 @@ fm_claude_admission_check() {
     [ "$pacing_cap" -lt "$cap" ] && cap=$pacing_cap
   fi
   if [ "$count" -ge "$cap" ]; then
-    echo "error: Claude crew admission refused for account $identity: $count live or unverified crew, limit $cap; counted tasks: $counted; choose Codex or route to a second mate on another account" >&2
+    echo "error: Claude crew admission refused for account $identity: $count live crew, limit $cap; counted tasks: $counted; choose Codex or route to a second mate on another account" >&2
     return 1
   fi
   printf '%s\n' "$row" | jq -r 'select(.firstmateCache != null) |
@@ -271,7 +235,10 @@ fm_claude_admission_state() {
     jq -nc '{unknown: "the Claude account a launch would use cannot be proved"}'
     return 0
   fi
-  fm_claude_admission_count "$state" '' "$identity"
+  if ! fm_claude_admission_count "$state" '' "$identity"; then
+    jq -nc --arg reason "$FM_LIVE_WORKERS_ERROR" '{unknown:$reason}'
+    return 0
+  fi
   if [ "$identity" = ordinary ] && [ "$ambient" = ordinary ]; then
     row=$(jq -c "$FM_QUOTA_ROW_JQ"'quota_row(.; "claude"; "")' "$snapshot_file" 2>/dev/null) || row=null
   else

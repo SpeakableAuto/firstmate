@@ -69,6 +69,12 @@ refuses 'cap without newline'
 printf '2\n' > "$FM_HOME/config/worktree-slot-cap"
 room || fail "under cap: $FM_WORKTREE_SLOT_ROOM_REASON"
 [ "$FM_WORKTREE_SLOT_HELD" = 1 ] || fail 'did not count slot'
+for n in $(seq 1 65); do
+  printf 'kind=ship\nbackend=tmux\nwindow=firstmate:old-%s\n' "$n" > "$FM_HOME/state/old-$n.meta"
+done
+room || fail 'parked task records consumed disk slots'
+[ "$FM_WORKTREE_SLOT_HELD" = 1 ] || fail 'metadata records inflated disk slot count'
+pass '65 parked records do not consume worktree slots'
 # Reading a real pool must not even run a Treehouse status/preview command.
 cp "$CASE/pool/treehouse-state.json" "$CASE/before"
 printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
