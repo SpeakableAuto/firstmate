@@ -15,6 +15,19 @@ wrapper="$ROOT/bin/fm-tasks-axi.sh"
 report="$ROOT/bin/fm-flow-report.sh"
 out=$(bash "$report" --date 2020-10-30)
 assert_contains "$out" unknown 'missing history must not invent counts'
+receipt_data="$TMP_ROOT/receipt/data"
+receipt_state="$TMP_ROOT/receipt/state"
+mkdir -p "$receipt_data" "$receipt_state"
+receipt_token=$(python3 "$ROOT/bin/fm-flow-history.py" --data "$receipt_data" begin badreceipt 2 none --kind ship)
+FM_STATE_OVERRIDE="$receipt_state" bash -c '
+  . "$1"
+  fm_flow_finish "$2" "$3" start badreceipt 0 malformed
+  fm_flow_finish "$2" "$3" start badreceipt 0 malformed
+' _ "$ROOT/bin/fm-flow-history-lib.sh" "$receipt_data" "$receipt_token"
+assert_contains "$(cat "$receipt_state/.flow-history-warning")" 'receipt missing' 'current receipt failure keeps its warning episode open'
+receipt_alerts=$(awk -F '\t' '$3 == "check" && $4 == "flow-history" { count++ } END { print count + 0 }' "$receipt_state/.wake-queue")
+assert_equals 1 "$receipt_alerts" 'grace-period health does not duplicate an active receipt warning'
+pass 'failed current receipts retain warning deduplication during health grace'
 bash "$wrapper" start candidate >/dev/null
 bash "$wrapper" start candidate >/dev/null
 bash "$wrapper" "done" candidate --note 'test delivered' --no-prune >/dev/null
