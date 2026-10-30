@@ -9,4 +9,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
-exec python3 "$SCRIPT_DIR/fm-flow-history.py" --data "$DATA" report "$@"
+case "${1:-}" in
+  --help|-h) exec python3 "$SCRIPT_DIR/fm-flow-history.py" --data "$DATA" report "$@" ;;
+esac
+python3 "$SCRIPT_DIR/fm-flow-history.py" --data "$DATA" report "$@"
+# The current backlog appendix is independent of historical daily counts.
+if ! bash "$SCRIPT_DIR/fm-finish-first.sh" --report; then
+  printf 'WIP activity: unknown; inspect the admission diagnostic above\n'
+fi

@@ -4,7 +4,7 @@
 # Requires fm-backlog-transition-lib.sh for the bounded priority read.
 FM_FLOW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fm_flow_begin() {  # <data> <verb> <id> <none|merge|local>; sets FM_FLOW_TOKEN
-  local data=$1 verb=$2 id=$3 landing=$4 detail priority kind
+  local data=$1 verb=$2 id=$3 landing=$4 detail priority kind serves parent_detail
   FM_FLOW_TOKEN=
   case "$verb" in start|done|close|reopen) ;; *) return 0 ;; esac
   case "$verb:$landing" in
@@ -16,18 +16,29 @@ fm_flow_begin() {  # <data> <verb> <id> <none|merge|local>; sets FM_FLOW_TOKEN
   # Share placement's impact parsing, including trailing metadata and legacy
   # numeric priorities. Native adapters retain their numeric field fallback.
   priority=$(printf '%s\n' "$detail" | sed -n 's/^  priority: *//p' | head -1)
+  serves=$(printf '%s\n' "$detail" | sed -n 's/^  title:.*(serves: *\([A-Za-z0-9][A-Za-z0-9._-]*\)).*/\1/p' | head -1)
   kind=$(printf '%s\n' "$detail" | sed -n 's/^  kind: *//p' | head -1)
   case "$priority" in ''|'-'|'"-"') priority=2 ;; esac
   if [ -f "$data/backlog.md" ]; then
     # shellcheck source=bin/fm-backlog-lib.sh
     . "$FM_FLOW_SCRIPT_DIR/fm-backlog-lib.sh"
-    detail=$(backlog_json "$data/backlog.md" | jq -r --arg id "$id" '.records[] | select(.id==$id) | [.impact,.kind // "task"] | @tsv')
-    if [ -n "$detail" ]; then priority=${detail%%$'\t'*}; priority=${priority#P}; kind=${detail#*$'\t'}; fi
+    detail=$(backlog_json "$data/backlog.md" | jq -r --arg id "$id" '.records[] | select(.id==$id) | [.impact,.kind // "task",.serves // ""] | @tsv')
+    if [ -n "$detail" ]; then
+      IFS=$'\t' read -r priority kind serves <<< "$detail"
+      priority=${priority#P}
+    fi
+  fi
+  # Only a real In-flight parent establishes this relation at recording time.
+  if [ -n "$serves" ] && [ "$serves" != "$id" ]; then
+    parent_detail=$(fm_backlog_row_show "$data" "$serves") || parent_detail=
+    if ! printf '%s\n' "$parent_detail" | grep -q '^  state: in_flight$'; then serves=; fi
+  else
+    serves=
   fi
   case "$priority" in ''|*[!0-9]*) echo 'flow-history: cannot read task priority' >&2; return 1 ;; esac
   # The sourcing caller reads this output variable after the function returns.
   # shellcheck disable=SC2034
-  FM_FLOW_TOKEN=$(python3 "$FM_FLOW_SCRIPT_DIR/fm-flow-history.py" --data "$data" begin "$id" "$priority" "$landing" --kind "${kind:-task}")
+  FM_FLOW_TOKEN=$(python3 "$FM_FLOW_SCRIPT_DIR/fm-flow-history.py" --data "$data" begin "$id" "$priority" "$landing" --kind "${kind:-task}" --serves "$serves")
 }
 fm_flow_finish() {  # <data> <token> <verb> <id> <status> <output>
   local action=$3 finish_ok=1 health warning_latch
@@ -46,15 +57,5 @@ fm_flow_finish() {  # <data> <token> <verb> <id> <status> <output>
 }
 
 fm_flow_warning() {  # <data> <message>; advisory, deduplicated durable wake
-  (
-    local data=$1 message=$2
-    export FM_STATE_OVERRIDE="${FM_STATE_OVERRIDE:-${data%/*}/state}"
-    # shellcheck source=bin/fm-wake-lib.sh
-    . "$FM_FLOW_SCRIPT_DIR/fm-wake-lib.sh"
-    echo "flow-history: $message" >&2
-    if [ "$(cat "$STATE/.flow-history-warning" 2>/dev/null)" != "$message" ]; then
-      fm_wake_append check flow-history "check: flow-history: $message; inspect flow-history.jsonl; preserve damaged rows" \
-        && printf '%s\n' "$message" > "$STATE/.flow-history-warning"
-    fi
-  )
+  bash "$FM_FLOW_SCRIPT_DIR/fm-flow-warning.sh" "$1" "$2"
 }
