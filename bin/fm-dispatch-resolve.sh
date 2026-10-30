@@ -838,6 +838,12 @@ POOL_JQ='
       end
     end;
   def pool_pick($elig; $mode):
+    # Placement-enabled homes rank task-fit rules before quota; quota then
+    # decides within that fit class, and Claude wins only a quota tie.
+    (if $placement then
+       ($elig | map(.order[0]) | min) as $fit |
+       [$elig[] | select(.order[0] == $fit)]
+     else $elig end) as $elig |
     (any($elig[]; .runway == "through_reset")) as $safe |
     (if $safe then [$elig[] | select(.runway != "projected_exhaustion")] else $elig end) as $safe_eligible |
     ([$safe_eligible[] | select(.pacingNextWindow != null)] | sort_by(.pacingNextWindow)) as $paced |
@@ -860,10 +866,13 @@ POOL_JQ='
     else
       ($eligible) as $kept |
       ($kept | max_by(.spendPriority).spendPriority) as $top |
-      ([$kept[] | select($top - .spendPriority <= near_tie_band + 1e-9)] | sort_by(rank_key)) as $near |
+      ([$kept[] | select($top - .spendPriority <= near_tie_band + 1e-9)]
+       | sort_by((if $placement and $fmap[.profile.harness] == "claude" then 0 else 1 end), rank_key)) as $near |
       ([$near[] | select(.order == $near[0].order and .spendPriority == $near[0].spendPriority)]) as $exact |
       exact_tie_pick($exact) as $tie |
       $tie + {
+        claude_tie: ($placement and $fmap[$tie.best.profile.harness] == "claude"
+          and any($near[]; $fmap[.profile.harness] != "claude")),
         near_tie: (if ([$near[].order] | unique | length) > 1 then $near else null end),
         passed_over: (if $safe then [$elig[] | select(.runway == "projected_exhaustion" and .spendPriority >= $top - near_tie_band - 1e-9)] | sort_by(rank_key) else [] end),
         passed_kind: "pool"
@@ -926,7 +935,8 @@ POOL_JQ='
             {placement: {home: $best.home,
               reason: ((if $best.home == "local" then "local" else $best.home end) + " "
                 + "\($best.profile.harness):\($best.profile.model // "-") "
-                + (if $best.pacingNextWindow then "has headroom in the soonest paced window \($best.pacingNextWindow)"
+                + (if $pick.claude_tie then "wins a quota tie within its task-fit class by Claude preference"
+                   elif $best.pacingNextWindow then "has headroom in the soonest paced window \($best.pacingNextWindow)"
                    elif $pick.exact_tie then "wins an exact cross-home tie at spendPriority \($best.spendPriority) by \($pick.exact_tie.rule)"
                    elif $mode == "candidate-order" then "is the first passing candidate in configured order across the pool"
                    elif $pick.near_tie then "wins a near-tie at spendPriority \($best.spendPriority) by configured order"
@@ -978,7 +988,9 @@ for i in "${!BRIEFS[@]}"; do
     brief_error "$i" "$quota_failure"
     continue
   fi
-  if jq -n --argjson pmap "$PMAP" --argjson fmap "$FMAP" --arg key "$(brief_key "$i")" --argjson now "$NOW" \
+  placement=false
+  if [ -e "$CONFIG/crew-placement.json" ] || [ -L "$CONFIG/crew-placement.json" ]; then placement=true; fi
+  if jq -n --argjson placement "$placement" --argjson pmap "$PMAP" --argjson fmap "$FMAP" --arg key "$(brief_key "$i")" --argjson now "$NOW" \
       --slurpfile answer "$WORK/answer.$i.json" --slurpfile rules "$RULES" \
       --slurpfile homes "$WORK/homes.$i.json" --slurpfile ledger "$WORK/ledger.json" \
       "$FM_QUOTA_ROW_JQ$POOL_JQ" > "$WORK/pool.$i.json" 2>/dev/null; then

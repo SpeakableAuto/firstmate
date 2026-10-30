@@ -1256,6 +1256,109 @@ The file is a dispatch view, refreshed when the resolver runs, rather than a con
 An account's queue is cleared when its reset timestamp changes, and accounts absent from the current pool are removed.
 Only a final `no rankable eligible candidate` result caused by pacing with a known reset adds a task to the queue; approval, ambiguity, unknown pacing evidence, and non-pacing refusals do not.
 
+## Crew placement (config/crew-placement.json)
+
+Install this private per-home profile to enable code-enforced placement for ship and scout launches, including relaunches and individual members of a batch.
+Unconfigured template homes keep their existing launch behavior; once the home has a capacity ledger, removing the profile fails closed rather than disabling the gate.
+Persistent secondmates retain their existing provisioning contract.
+Do not copy a machine profile to another machine without checking its capabilities and limits.
+
+A heavy-machine example:
+
+```json
+{
+  "version": 1,
+  "workloads": ["heavy", "iphone", "website", "large-tests"],
+  "max_crew": 4,
+  "min_free_memory_percent": 15,
+  "max_swap_mib": 1024,
+  "drive": "/Volumes/Kitchen",
+  "required_drive_dirs": ["Build/DerivedData", "Build/Tmp", "Caches/npm", "Caches/Playwright", "SimulatorDevices", "Logs/Codex"],
+  "data_volume": {"path": "/System/Volumes/Data", "min_free_gib": 10}
+}
+```
+
+A light-machine example:
+
+```json
+{
+  "version": 1,
+  "workloads": ["review", "replay", "scout", "backend", "plane"],
+  "max_crew": 2,
+  "min_free_memory_percent": 15,
+  "max_swap_mib": 512,
+  "drive": null
+}
+```
+
+The light-machine cap may be raised to three after measuring its room; the heavy-machine cap cannot exceed four.
+The crew cap counts recorded endpoints positively classified alive by the existing backend liveness owner, plus any record launched within the last 60 seconds, excluding the launching task and persistent secondmates.
+Records whose backend answered that the endpoint is missing, dead or gone, such as retained paused or done records, do not consume crew capacity.
+If a backend cannot be read for an existing record, placement refuses its room check with `crew liveness unreadable: <backend>` instead of counting or admitting.
+Missing memory, disk or quota evidence also refuses placement through its named check; endpoint recovery and duplicate-launch guards keep their separate evidence requirements.
+Workload names are exact configuration values, never inferred from hostnames.
+The drive, when specified, must be an actual mount with no symlink substitution, and a temporary create/unlink must succeed there and in every `required_drive_dirs` entry.
+Required directories must already exist as real directories beneath that mount; placement never creates them or falls back to internal storage.
+A drive profile also requires `data_volume.path` and a positive `data_volume.min_free_gib`; live available bytes on that filesystem must meet the configured floor.
+Missing measurements, missing or unwritable directories, unmounted drives and insufficient internal Data space each produce a named refusal.
+The capacity ledger retains each condition and sends one ordinary wake when it first fails, with another allowed only after recovery or a different condition.
+
+Drive profiles require a repository-local, non-symlinked `treehouse.toml` with an absolute literal top-level `root` naming an existing real directory under the drive.
+Quoted string values and ordinary top-level assignments are supported; complex root syntax, multiline assignments and custom `worktree_path` layouts are refused.
+Placement pins `TREEHOUSE_ROOT` and removes `TREEHOUSE_WORKTREE_PATH` for allocation, then checks the acquired worktree's real path under the pool before launching a worker.
+A wrong allocation amends the same atomic decision to a named refusal and closes only the fresh endpoint; a clean, freshly claimed, unrecorded Treehouse slot is returned through Treehouse's normal guarded return.
+If safe return cannot be proved, the copy is preserved and the refusal reports it for inspection.
+Relaunches never return their recorded copy.
+Memory evidence comes from `memory_pressure -Q` and `sysctl vm.swapusage` on macOS, or `MemAvailable` and swap usage in `/proc/meminfo` on Linux.
+Missing measurements refuse placement.
+`bin/fm-placement.sh effective` prints the effective placement limits, disk floor, Claude admission limits, quota freshness allowance, retry cadence, wait-age threshold, launch grace, and slot seam without starting work.
+The existing disk-guard configuration and its default floor remain authoritative; placement uses its read-only `--check-room` entrypoint and never clears caches.
+
+Intake writes `data/<task-id>/placement.json` beside the brief:
+
+```json
+{
+  "version": 1,
+  "workload": "backend",
+  "requires_drive": false,
+  "dispatch_rule": 0,
+  "brief_sha256": "<SHA-256 of brief.md>"
+}
+```
+
+The classification must name the actual work and the zero-based matched rule in `crew-dispatch.json`; changing the brief requires renewing its classification.
+Missing classification, a disallowed workload, a required drive absent from the machine profile, or a selected harness/model/effort outside that rule refuses fit.
+An iPhone build therefore cannot use the light example, and Plane work cannot use the heavy example.
+The typed resolver keeps matched-rule candidates ahead of default fallbacks in placement-enabled homes, then lets the existing quota selection policy (soonest paced window, spendPriority and its near-tie band) decide within that fit class; an admitted Claude candidate wins only when that quota comparison is an exact or near tie.
+Claude's live account admission and minimum 40% session floor remain owned by the following section.
+Other harnesses must prove a fresh, positive applicable quota bound for their selected account through the existing quota snapshot reader; unknown evidence refuses placement.
+
+The placement lock spans checks, provisioning, and launch publication or rollback.
+Each attempt atomically publishes its complete fit, room, quota, and locks verdict together with any refusal wait in `state/capacity.json`, which is also the capacity log.
+Room is measured even when fit fails, so the log names only the checks that actually failed.
+A fit refusal (disallowed workload, missing required drive, model outside the matched rule, or stale brief binding) is recorded with wait state `unplaceable`: it is not a capacity wait, is never rechecked or flagged as a bottleneck, and stays listed so Firstmate can reroute it to a fitting machine.
+Only room, quota (allowance), and locks refusals become `capacity` waits.
+A spawn that exits before placement for a non-capacity reason (argument, brief, or delivery-contract validation, for example) records a terminal decision and leaves no wait.
+Existing spawn/task-set/project allocation locks retain their ownership.
+`bin/fm-worktree-slots.sh room <project>` contributes the named `slots` verdict with its printed reason retained verbatim.
+Spawn retains the slot owner's safe reclaim step before placement's final check; a persistent refusal queues the task instead of exiting without a decision.
+The slot owner signals successful reclaim and merge-proved slot removal through the same `.capacity-freed` event consumed by `bin/fm-placement.sh freed`.
+
+The ordinary watcher rechecks capacity waits on crew metadata/lock changes, explicit slot-reclaim signals, and at least every 900 seconds while the watcher is running.
+It orders requests by the canonical backlog `(impact: P0)` through `(impact: P3)`, oldest first within each level.
+Missing impact defaults to P2; legacy `(priority: N)` and task-classification fields never override impact.
+The read-only backlog parser strips impact metadata from display titles, and each queue read uses the current backlog impact.
+Rechecks preserve the original wait age, apply current machine/account checks, and append one ordinary `capacity-ready` row to the durable wake queue for Firstmate to reroute through dispatch; they never launch a worker or grant new authority.
+A failing recheck wakes the supervisor once per distinct error, then at most every 900 seconds.
+Backlog captain/external holds suspend admission checks until the row is queued and unheld again.
+A wait whose backlog row is done or no longer exists leaves the queue.
+Capacity and hold waits keep ordinary supervision alive even with no live workers; unplaceable waits do not.
+Firstmate's morning report reads `bin/fm-placement.sh waits` (run from the home, for example `FM_HOME=<home> <home>/bin/fm-placement.sh waits`): a JSON array of the same ledger, ordered P0-P3 then oldest first, where each current-wait row carries `task`, `state` (`capacity`, `ready`, `hold`, or `unplaceable`), `failed` (the named failing checks), `impact`, `since`, `checked`, `request`, and `over_four_hours` (true only for a `capacity` or `ready` wait older than four hours).
+The same read includes `history` rows for capacity waits that exceeded four hours before admission, removal, or a hold, for 48 hours after their last capacity observation so the next morning can report resolved bottlenecks too.
+These rows carry `over_four_hours: true`, `wait_seconds`, and `observed_at`; they never reenter dispatch, and their durable evidence remains in the ledger's `bottlenecks` map after the reporting window expires.
+The per-attempt decision with each check's reason is the matching entry in `state/capacity.json` `.decisions`.
+Script headers own command and ledger mechanics; `tests/fm-placement.test.sh` exercises refusal, atomic publication, ordering, and the executable retry path.
+
 ## Claude crew admission
 
 `fm-spawn.sh` enforces directly classified Claude ship and scout admission, including explicit, raw, batch, and relaunch paths, independently of typed dispatch resolution; raw executable basenames in the shared `claude*` harness family receive the same guard and count.

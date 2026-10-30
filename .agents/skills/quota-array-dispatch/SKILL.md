@@ -114,6 +114,8 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 
 ## Rank by the configured selection policy
 
+Placement-enabled homes apply the [crew placement policy](../../../docs/configuration.md#crew-placement-configcrew-placementjson) before this quota tie-breaker.
+
 When `quota_pacing.accounts` is configured, use the current snapshot's per-window percentages and reset times with the [quota pacing contract](../../../docs/configuration.md#quota-pacing) before the selection policy below.
 Apply its concurrency allowance as an eligibility gate, then prefer the passing paced account with the soonest reset; the selected policy ranks candidates within that window.
 Unknown pacing evidence cannot authorize a paced placement.

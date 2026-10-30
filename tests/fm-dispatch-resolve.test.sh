@@ -195,6 +195,47 @@ run_without_curl() {
 KEY='test-key-9f1c2d3e-never-on-argv'
 code='' out='' err=''
 
+# s16 replays stale Codex-first order with equally fitting models at 62%.
+placement_s16() {
+  cp "$BASE_RULES" "$RULES"
+  jq '.rules[3].when="Independent review" | .rules[3].use=[
+    {harness:"codex",model:"gpt-6-sol",effort:"high"},
+    {harness:"claude",model:"sonnet",effort:"high"}]' "$RULES" > "$TMP_ROOT/s16-rules"
+  mv "$TMP_ROOT/s16-rules" "$RULES"
+  printf '%s\n' '{"version":1,"workloads":["review"],"max_crew":3,"min_free_memory_percent":15,"max_swap_mib":512,"drive":null}' > "$HOME_DIR/config/crew-placement.json"
+  if [ "${FM_TEST_PLACEMENT_GATE_DISABLED:-0}" = 1 ]; then
+    rm "$HOME_DIR/config/crew-placement.json"
+  fi
+  write_quota "$QUOTA" 0.2 0.2
+  jq '(.providers[] | select(.provider=="claude" or .provider=="codex") | .quotaSemantics.effectiveAvailability[]) |=
+      (.effectivePercentRemaining=62 | .runway.status="through_reset" | .selection.spendPriority=0.2) |
+      .providers[0].windows[0].percentRemaining=62' "$QUOTA" > "$TMP_ROOT/s16-quota"
+  mv "$TMP_ROOT/s16-quota" "$QUOTA"
+  write_response "$RESPONSE" rule_4 0.9
+  reset_log
+  TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+  expect_code 0 "$code" 's16 resolver succeeds'
+  assert_contains "$out" "profile: --harness 'claude' --model 'sonnet' --effort 'high'" 's16 equal 62% quota overrides stale Codex-first order'
+  assert_equals 1 "$(wc -l < "$QUOTA_AXI_CALLS" | tr -d ' ')" 's16 reads current machine quota'
+  mkdir -p "$HOME_DIR/data/review" "$HOME_DIR/state"
+  cp "$BRIEF" "$HOME_DIR/data/review/brief.md"
+  local hash decision
+  hash=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$BRIEF")
+  jq -n --arg hash "$hash" '{version:1,workload:"review",requires_drive:false,dispatch_rule:3,brief_sha256:$hash}' > "$HOME_DIR/data/review/placement.json"
+  decision=$(jq '{crew_count:1,memory:{free_percent:80,swap_mib:0},disk:{status:"pass"},slots:{status:"pass"},locks:{status:"pass"},
+    quota:{status:"pass",provider:"claude",bounds:[.providers[]|select(.provider=="claude")|.quotaSemantics.effectiveAvailability[]|select(.scope=="all_models")]}}' "$QUOTA" |
+    python3 "$ROOT/bin/fm-placement.py" assess "$HOME_DIR/config" "$HOME_DIR/data" review claude sonnet high)
+  printf '%s\n' "$decision" | python3 "$ROOT/bin/fm-placement.py" record "$HOME_DIR/state" review spawn > "$TMP_ROOT/s16-decision"
+  assert_equals true "$(jq 'all(.checks.fit,.checks.room,.checks.quota,.checks.locks; .status=="pass")' "$TMP_ROOT/s16-decision")" 's16 records all four passing checks'
+  assert_equals 'claude:sonnet:62' "$(jq -r '[.request.harness,.request.model,(.checks.quota.bounds[0].effectivePercentRemaining|tostring)]|join(":")' "$TMP_ROOT/s16-decision")" 's16 reviewer differs from Codex author and records measured allowance'
+  rm "$HOME_DIR/config/crew-placement.json"
+  pass 's16-model-tie: Codex-first equal-fit equal-62% replay selects Claude and records placement'
+}
+if [ "${FM_TEST_PLACEMENT_SCENARIO_ONLY:-0}" = 1 ]; then
+  placement_s16
+  exit 0
+fi
+
 # --- absent key: off, silent on stdout, no network, no quota read -----------
 reset_log
 write_response "$RESPONSE" rule_4 0.9
@@ -1701,4 +1742,33 @@ assert_equals 1 "$(wc -l < "$QUOTA_AXI_CALLS" | tr -d ' ')" "other failures neve
 unset QUOTA_AXI_RECOVERY_FIXTURE
 pass "bounded Claude cache recovery ranks recent evidence, preserves candidate order, and discloses age"
 
+# Placement mode keeps the matched task-fit rule, lets quota decide within it,
+# and gives Claude only a quota tie; the Claude floor stays an admission check.
+cp "$BASE_RULES" "$RULES"
+printf '{"version":1}\n' > "$HOME_DIR/config/crew-placement.json"
+write_quota "$QUOTA" 0.9 -0.4
+set_runway "$QUOTA" claude through_reset
+write_response "$RESPONSE" rule_4 0.9
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'cursor'" 'clearly better quota wins between equally fitting candidates'
+write_quota "$QUOTA" 0.2 0.2
+set_runway "$QUOTA" claude through_reset
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" 'exact quota tie picks Claude'
+write_quota "$QUOTA" 0.23 0.2
+set_runway "$QUOTA" claude through_reset
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" 'near quota tie picks Claude'
+jq '.providers[0].windows[0].percentRemaining=39' "$QUOTA" > "$TMP_ROOT/low.json"
+mv "$TMP_ROOT/low.json" "$QUOTA"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "profile: --harness 'cursor'" 'quota tie cannot waive Claude 40 percent floor'
+rm "$HOME_DIR/config/crew-placement.json"
+pass 'placement selection keeps task fit, ranks by quota, and gives Claude only ties above its floor'
+
+placement_s16
 printf '# all fm-dispatch-resolve tests passed\n'

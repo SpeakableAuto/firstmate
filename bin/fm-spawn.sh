@@ -657,6 +657,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 # shellcheck source=bin/fm-quota-pacing-lib.sh
 . "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
+# shellcheck source=bin/fm-placement-lib.sh
+. "$SCRIPT_DIR/fm-placement-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -1451,6 +1453,8 @@ spawn_abort_cleanup() {
   if [ "$QUOTA_PACING_ADMISSION_LOCK_HELD" = 1 ]; then
     fm_lock_release "$QUOTA_PACING_ADMISSION_LOCK" || true
   fi
+  fm_placement_abort "${FM_PLACEMENT_REFUSAL:-}" || true
+  fm_placement_release || true
   return "$status"
 }
 trap spawn_abort_cleanup EXIT
@@ -1648,6 +1652,9 @@ spawn_require_relocated_queued_work() {
     exit 1
   fi
 }
+if [ "$KIND" != secondmate ]; then
+  fm_placement_begin "$ID" || exit 1
+fi
 if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_CONTROL_LOCK="$STATE/.control-$ID.lock"
   control_owner=$(cat "$SPAWN_CONTROL_LOCK/pid" 2>/dev/null || true)
@@ -1662,6 +1669,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   elif fm_lock_try_acquire "$SPAWN_CONTROL_LOCK"; then
     SPAWN_CONTROL_LOCK_HELD=1
   else
+    FM_PLACEMENT_REFUSAL="control lock held for task $ID"
     echo "error: another lifecycle action is already running for task $ID" >&2
     exit 1
   fi
@@ -1695,6 +1703,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
+    FM_PLACEMENT_REFUSAL='task-set lock held by another operation'
     echo "error: this home's task set is locked by another operation (a forced teardown is enumerating or removing its tasks); refusing to create task $ID rather than racing it" >&2
     exit 1
   fi
@@ -1739,6 +1748,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
 fi
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
 if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
+  FM_PLACEMENT_REFUSAL="spawn lock held for task $ID"
   echo "error: another spawn is already creating task $ID" >&2
   exit 1
 fi
@@ -2636,6 +2646,7 @@ fi
 # All Claude crew admission paths, including raw launches and relaunches, pass
 # this gate before allocating a worktree or endpoint. The lock survives until
 # EXIT cleanup, so another admission sees the finished launch or its rollback.
+PLACEMENT_QUOTA=unknown
 if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
   if [ "$RAW_LAUNCH" = 1 ] \
      && { [ "$RAW_LAUNCH_IDENTITY_SAFE" != 1 ] || [ "$HARNESS" != claude ]; }; then
@@ -2650,9 +2661,17 @@ if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
   CLAUDE_ADMISSION_LOCK="$STATE/.claude-admission.lock"
   fm_lock_acquire_wait "$CLAUDE_ADMISSION_LOCK" || exit 1
   CLAUDE_ADMISSION_LOCK_HELD=1
-  fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" "$MODEL" || exit 1
+  if fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" "$MODEL"; then
+    PLACEMENT_QUOTA=pass
+  else
+    fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" fail || true
+    exit 1
+  fi
 elif [ "$QUOTA_PACING_APPLIES" = 1 ]; then
-  fm_quota_pacing_admission_check "$CONFIG" "$STATE" "$ID" "$HARNESS" "$MODEL" || exit 1
+  if ! fm_quota_pacing_admission_check "$CONFIG" "$STATE" "$ID" "$HARNESS" "$MODEL"; then
+    fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" fail || true
+    exit 1
+  fi
 fi
 
 secondmate_registry_value() {
@@ -3261,6 +3280,7 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
+    FM_PLACEMENT_REFUSAL="Treehouse project lock held for $PROJ_ABS"
     echo "error: another Treehouse slot allocation or return is in progress for $PROJ_ABS; refusing to race it" >&2
     exit 1
   fi
@@ -3275,12 +3295,13 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
       fm_worktree_slots_reclaim "$STATE" "$SPAWN_TREEHOUSE_PROJECT_LOCK" apply \
         "$((FM_WORKTREE_SLOT_HELD - FM_WORKTREE_SLOT_CAP + 1))" || true
     fi
-    if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
+    if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE" && [ "$FM_PLACEMENT_ACTIVE" != 1 ]; then
       echo "error: refusing spawn: $FM_WORKTREE_SLOT_ROOM_REASON" >&2
       exit 1
     fi
   fi
 fi
+fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" "$PLACEMENT_QUOTA" || exit 1
 [ -f "$BRIEF" ] || {
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
   exit 1
@@ -4502,7 +4523,12 @@ elif [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  if [ -n "${FM_PLACEMENT_ROOT:-}" ]; then
+    placement_root_quoted=${FM_PLACEMENT_ROOT//\'/\'\\\'\'}
+    spawn_send_text_line "$WT_TARGET" "env -u TREEHOUSE_WORKTREE_PATH TREEHOUSE_ROOT='$placement_root_quoted' treehouse get"
+  else
+    spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  fi
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
@@ -4582,6 +4608,18 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     fi
     SPAWN_SLOT_CLAIMED=1
   fi
+fi
+if ! fm_placement_worktree "$PROJ_ABS" "$WT"; then
+  # No worker has started. Close only the endpoint this fresh spawn created;
+  # the ordinary abort path releases its claim under the project lock.
+  if [ "$RELAUNCH" = 0 ]; then
+    rovo_endpoint_cleanup
+    if [ "$BACKEND" != orca ]; then
+      fm_placement_return_rejected "$PROJ_ABS" "$WT" ||
+        echo "warning: rejected allocation retained: safe return could not be proved for $WT" >&2
+    fi
+  fi
+  exit 1
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1

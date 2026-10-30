@@ -2737,6 +2737,21 @@ while :; do
   program_wake=$(fm_program_reconcile_tick "$STATE") || exit 1
   [ -z "$program_wake" ] || wake "$program_wake"
 
+  # Capacity retries share this watcher and deliver only through the durable
+  # wake queue. A failing tick wakes once per distinct error or 900 seconds.
+  if [ -f "$STATE/capacity.json" ]; then
+    if capacity_error=$("$SCRIPT_DIR/fm-placement.sh" tick 2>&1 >/dev/null); then
+      rm -f "$STATE/.capacity-recheck-failed"
+    else
+      capacity_error=$(printf '%s\n' "$capacity_error" | tail -n 1)
+      if [ "$capacity_error" != "$(cat "$STATE/.capacity-recheck-failed" 2>/dev/null)" ] \
+         || [ "$(age_of "$STATE/.capacity-recheck-failed")" -ge 900 ]; then
+        printf '%s\n' "$capacity_error" > "$STATE/.capacity-recheck-failed"
+        wake "check: capacity-recheck failed: ${capacity_error:-no error output}"
+      fi
+    fi
+  fi
+
   # Parent-owned secondmate pending-reply reconciliation: resolve correlated
   # parent reports, observe backend busy/idle turn completion, send one recovery
   # repost after grace, and escalate once if the recovery turn is also missed.

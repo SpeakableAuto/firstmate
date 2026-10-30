@@ -52,6 +52,13 @@ run_guard
 [ ! -e "$case_home/user/docker-calls" ] || fail 'healthy check ran Docker'
 pass 'at the threshold: no cleanup or alert'
 
+run_guard --check-room || fail 'read-only admission refused threshold equality'
+echo 1 > "$case_home/user/free"
+if run_guard --check-room; then fail 'read-only admission accepted low disk'; fi
+[ ! -e "$case_home/fm/state" ] || fail 'read-only admission wrote state'
+[ ! -e "$case_home/user/docker-calls" ] || fail 'read-only admission ran cleanup'
+pass 'read-only room check refuses low disk without cleanup or alerts'
+
 new_case low
 seed_caches
 printf 'cache=xcode-derived-data\ncache=npm\ncache=docker\n' > "$case_home/fm/config/disk-guard"

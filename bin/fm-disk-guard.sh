@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Check free space on the user's home filesystem and clean opted-in caches.
-# Usage: FM_HOME=/absolute/firstmate fm-disk-guard.sh [--dry-run]
+# Usage: FM_HOME=/absolute/firstmate fm-disk-guard.sh [--dry-run|--check-room|--print-config]
+# --check-room is read-only admission: exit 0 iff the measured disk floor passes,
+# exit 1 below the floor or on unknown evidence; never clean caches or emit wakes.
+# --print-config validates config and prints the effective threshold as JSON.
 # Config: $FM_HOME/config/disk-guard, plain lines (never sourced):
 #   threshold_gib=15
 #   cache=xcode-derived-data
@@ -27,9 +30,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() { sed -n '2,/^set /{ /^#/{ s/^# \{0,1\}//; p; }; }' "$0"; }
 dry_run=0
+check_room=0
+print_config=0
 case "${1:-}" in
   --help|-h) usage; exit 0 ;;
   --dry-run) dry_run=1; shift ;;
+  --check-room) dry_run=1; check_room=1; shift ;;
+  --print-config) print_config=1; shift ;;
 esac
 [ "$#" -eq 0 ] || { usage >&2; exit 2; }
 : "${FM_HOME:?set FM_HOME to the receiving Firstmate home}"
@@ -39,7 +46,7 @@ user_home=$(cd "$HOME" && pwd -P)
 [ "$user_home" != / ] || { echo 'refusing root as user home' >&2; exit 2; }
 threshold=15
 caches=()
-config="$FM_HOME/config/disk-guard"
+config="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/disk-guard"
 if [ -e "$config" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
@@ -53,6 +60,10 @@ fi
 case "$threshold" in ''|*[!0-9]*|0*) echo 'invalid threshold_gib' >&2; exit 2 ;; esac
 [ "${#threshold}" -le 7 ] && [ "$threshold" -le 1048576 ] || { echo 'invalid threshold_gib' >&2; exit 2; }
 threshold_kib=$((threshold * 1048576))
+if [ "$print_config" -eq 1 ]; then
+  printf '{"threshold_gib":%s,"threshold_kib":%s}\n' "$threshold" "$threshold_kib"
+  exit 0
+fi
 
 pending="$FM_HOME/state/.disk-guard-alerts"
 pending_journal="$pending/alerts"
@@ -137,8 +148,13 @@ free_kib() {
   printf '%s\n' "$available"
 }
 if ! before=$(free_kib); then
+  [ "$check_room" -eq 0 ] || exit 1
   alert 'free-space measurement failed; no caches touched'
   exit 1
+fi
+if [ "$check_room" -eq 1 ]; then
+  [ "$before" -ge "$threshold_kib" ]
+  exit
 fi
 [ "$before" -lt "$threshold_kib" ] || exit "$retry_status"
 if [ "$dry_run" -eq 1 ]; then
