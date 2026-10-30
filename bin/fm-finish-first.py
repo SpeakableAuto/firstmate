@@ -64,6 +64,8 @@ def read_rows(text):
         row['priority'] = 2 if priority == '-' else int(priority)
         serves = re.search(r'\(serves:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\)', row.get('title', ''))
         row['serves'] = serves[1] if serves else None
+        support = re.search(r'\(support:\s*([a-z-]+)\)', row.get('title', ''))
+        row['support'] = support[1] if support else None
         if row['created'] != '-':
             datetime.date.fromisoformat(row['created'])
         row['order'] = (row['created'] if row['created'] != '-' else '', len(rows))
@@ -125,7 +127,7 @@ def activity(row, state, now):
             except (ValueError, OSError):
                 unknown = True
         return 'unknown' if unknown else 'stale'
-    except OSError:
+    except (OSError, UnicodeError):
         return 'unknown'
 
 
@@ -133,7 +135,7 @@ def wip_settings(config_dir):
     mode_path = config_dir / 'finish-first-wip-mode'
     if mode_path.is_symlink():
         raise ValueError('finish-first-wip-mode must be a regular file')
-    mode = mode_path.read_text().strip() if mode_path.exists() else 'warn'
+    mode = mode_path.read_text().strip() if mode_path.exists() else 'enforce'
     if mode not in ('warn', 'enforce'):
         raise ValueError('finish-first-wip-mode must be warn or enforce')
     placement = config_dir / 'crew-placement.json'
@@ -146,6 +148,19 @@ def wip_settings(config_dir):
     if type(cap) is not int or cap <= 0:
         raise ValueError('crew-placement.json max_crew must be a positive integer')
     return mode, 2 * cap
+
+
+def finishing_parent(rows, row):
+    """A declared support role may serve one runnable, non-support worker."""
+    if (row.get('support') not in ('review', 'replay', 'fix', 'recheck')
+            or row.get('kind') in ('captain', 'secondmate', 'public-followup', 'program')
+            or row.get('hold_reason') or row.get('unresolved_blocker_ids')):
+        return None
+    return next((parent['id'] for parent in rows
+                 if parent['id'] == row.get('serves') and parent['id'] != row['id']
+                 and parent['state'] == 'in_flight' and parent['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')
+                 and not parent.get('serves') and not parent.get('support')
+                 and not parent.get('hold_reason') and not parent.get('unresolved_blocker_ids')), None)
 
 
 def admit(backlog, task_id, config_dir, stop_starting):
@@ -171,9 +186,8 @@ def admit(backlog, task_id, config_dir, stop_starting):
             print(f'finish-first: P0 start allowed for {task_id}')
             return 0
     # A recorded link, never a task-name convention, identifies finishing work.
-    open_ids = {r['id'] for r in rows if r['state'] == 'in_flight'}
     def finishing(row):
-        return row.get('serves') in open_ids and row.get('serves') != row['id']
+        return finishing_parent(rows, row)
     if not report_only and finishing(target):
         print(f"finish-first: {task_id} serves {target['serves']}; finishing work allowed")
         return 0
@@ -196,11 +210,13 @@ def admit(backlog, task_id, config_dir, stop_starting):
     if unknown:
         print('finish-first: activity unavailable (not counted): ' + ', '.join(unknown), file=sys.stderr)
     over_cap = cap is not None and len(finishable) >= cap
-    oldest = ', '.join(r['id'] for r in finishable)
+    oldest = ', '.join(r['id'] for r in finishable[:5])
     if report_only:
         print(f'WIP over cap ({len(finishable)} of {cap})' if over_cap else
               f'WIP active: {len(finishable)}; cap: {cap if cap is not None else "off"}')
         print(f'WIP mode: {mode}; oldest active: {oldest or "-"}')
+        linked = sorted(f"{r['id']}->{r['serves']}" for r in rows if r.get('serves'))
+        print('linked support: ' + (', '.join(linked) or '-'))
         print("stale, for Zac's triage: " + (', '.join(stale) or '-'))
         if unknown:
             print('activity unavailable, for triage: ' + ', '.join(unknown))
@@ -222,7 +238,12 @@ def admit(backlog, task_id, config_dir, stop_starting):
 if __name__ == '__main__':
     try:
         backlog = read_rows(sys.stdin.read()) if '--native' in sys.argv else json.load(sys.stdin)
-        sys.exit(admit(backlog, sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3]))
+        if '--support' in sys.argv:
+            rows = backlog['records']
+            target = next((r for r in rows if r['id'] == sys.argv[1]), {})
+            print(finishing_parent(rows, target) or '')
+        else:
+            sys.exit(admit(backlog, sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3]))
     except (ValueError, OSError, KeyError, TypeError) as exc:
         print(f'finish-first: {exc}', file=sys.stderr)
         sys.exit(2)

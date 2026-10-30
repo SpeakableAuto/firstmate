@@ -88,7 +88,7 @@ cat > "$FM_HOME/data/backlog.md" <<'LINKED'
 - [ ] ship3 - Waiting for fixes (kind: ship) (impact: P2)
 - [ ] ship4 - Waiting for recheck (kind: ship) (impact: P2)
 ## Queued
-- [ ] ship1-review - Independent review (kind: scout) (impact: P2) (serves: ship1)
+- [ ] ship1-review - Independent review (kind: scout) (impact: P2) (serves: ship1) (support: review)
 - [ ] new-job - New implementation (kind: ship) (impact: P2)
 - [ ] fake-review - Unlinked review (kind: scout) (impact: P2) (serves: missing)
 LINKED
@@ -110,6 +110,34 @@ assert_contains "$out" 'serves ship1' 'linked review starts under both bounds'
 native=$(TASKS_AXI_FILE="$FM_HOME/data/backlog.md" tasks-axi list --fields blocked,held,created,priority)
 out=$(printf '%s\n' "$native" | python3 "$ROOT/bin/fm-finish-first.py" ship1-review "$FM_HOME/config" yes --native)
 assert_contains "$out" 'serves ship1' 'native task title preserves the same explicit relation'
+# Reject held, blocked, non-worker, queued, self, chained and cyclic parents.
+python3 - "$ROOT" "$FM_HOME/config" "$linked" <<'PYPARENTS'
+import json, subprocess, sys
+root, config, raw = sys.argv[1:]
+base=json.loads(raw)
+def check(data, task, expected, needle):
+    result=subprocess.run(['python3',root+'/bin/fm-finish-first.py',task,config,'yes'],input=json.dumps(data),text=True,capture_output=True)
+    assert result.returncode==expected and needle in result.stdout, (task,result.returncode,result.stdout,result.stderr)
+for change in ({'hold_reason':'held'}, {'unresolved_blocker_ids':['missing']},
+               {'kind':'captain'}, {'state':'queued'}, {'state':'done'}, {'serves':'ship2'}, {'serves':'ship1-review'}):
+    data=json.loads(raw)
+    next(r for r in data['records'] if r['id']=='ship1').update(change)
+    check(data,'ship1-review',1,'two-day stop' if 'state' in change or 'kind' in change or 'hold_reason' in change or 'unresolved_blocker_ids' in change else 'WIP')
+data=json.loads(raw)
+next(r for r in data['records'] if r['id']=='ship1-review')['serves']='ship1-review'
+check(data,'ship1-review',1,'WIP')
+data=json.loads(raw)
+next(r for r in data['records'] if r['id']=='new-job')['serves']='ship1'
+check(data,'new-job',1,'WIP')
+# Cycles cannot erase existing jobs from WIP either.
+data=json.loads(raw)
+for row in data['records']:
+    if row['id'] in ('ship1','ship2'):
+        row.update(serves='ship2' if row['id']=='ship1' else 'ship1',support='review')
+check(data,'new-job',1,'WIP 4/4')
+PYPARENTS
+out=$(bash "$ROOT/bin/fm-flow-report.sh")
+assert_contains "$out" 'linked support: fake-review->missing, ship1-review->ship1' 'every claimed link is visible from day one, even if invalid'
 bash "$ROOT/bin/fm-tasks-axi.sh" hold ship1-review --reason 'awaiting scope' --kind external >/dev/null
 check 1 held ship1-review
 bash "$ROOT/bin/fm-tasks-axi.sh" unhold ship1-review >/dev/null
@@ -117,17 +145,17 @@ bash "$ROOT/bin/fm-tasks-axi.sh" unhold ship1-review >/dev/null
 python3 - "$FM_HOME/data/backlog.md" <<'PYSERVES'
 from pathlib import Path
 import sys
-p=Path(sys.argv[1]); s=p.read_text().replace('(impact: P2)\n## Queued', '(impact: P2) (serves: ship1)\n## Queued')
+p=Path(sys.argv[1]); s=p.read_text().replace('(impact: P2)\n## Queued', '(impact: P2) (serves: ship1) (support: review)\n## Queued')
 p.write_text(s)
 PYSERVES
 check 0 allowed new-job
 cp "$TMP_ROOT/before-serves.md" "$FM_HOME/data/backlog.md"
 pass 'recorded finishing work starts at the exact WIP bound and under the two-day stop'
 
-# An over-cap installation warns by default; old and held records never charge WIP.
+# An over-cap installation enforces by default; old and held records never charge WIP.
 printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
 rm "$FM_HOME/config/finish-first-wip-mode"
-check 0 'warning: WIP 2/2' candidate
+check 1 'WIP 2/2' candidate
 out=$(bash "$ROOT/bin/fm-flow-report.sh")
 assert_contains "$out" 'WIP over cap (2 of 2)' 'morning report shows the admission bound'
 printf 'warn\n' > "$FM_HOME/config/finish-first-wip-mode"
@@ -160,6 +188,25 @@ cp "$TMP_ROOT/unblocked.md" "$FM_HOME/data/backlog.md"
 printf 'invalid\n' > "$FM_HOME/config/finish-first-wip-mode"
 check 2 'warn or enforce' candidate
 printf 'enforce\n' > "$FM_HOME/config/finish-first-wip-mode"
+# Freeze the CLI clock to pin the inclusive 72-hour status boundary.
+python3 - "$ROOT" "$FM_HOME" <<'PYBOUNDARY'
+import json, os, pathlib, subprocess, sys
+root,home=sys.argv[1:]
+state=pathlib.Path(home)/'state'
+now=2000000000
+rows=[dict(id='old',state='in_flight',kind='ship',structured=True,impact='P2'),
+      dict(id='candidate',state='queued',kind='ship',structured=True,impact='P2')]
+(pathlib.Path(home)/'config'/'crew-placement.json').write_text('{"max_crew":1}')
+# Two active rows are needed to reach the two-item cap.
+rows.insert(1,dict(rows[0],id='other'))
+(state/'other.status').write_text(f'working [at={now}]: active\n')
+script='import runpy,sys,time; time.time=lambda: 2000000000; sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name="__main__")'
+for age,expected in ((72*3600,1),(72*3600-1,1),(72*3600+1,0)):
+    (state/'old.status').write_text(f'working [at={now-age}]: checkpoint\n')
+    result=subprocess.run(['python3','-c',script,root+'/bin/fm-finish-first.py','candidate',home+'/config','no'],input=json.dumps({'present':True,'records':rows}),text=True,capture_output=True)
+    assert result.returncode==expected,(age,result.stdout,result.stderr)
+print('ok - CLI activity includes exactly 72 hours and excludes older evidence')
+PYBOUNDARY
 # Recent PR updates and live launch reservations are independent activity evidence.
 printf 'working [at=1]: old job\n' > "$FM_HOME/state/current.status"
 printf 'pr=https://github.com/example/repo/pull/7\n' > "$FM_HOME/state/current.meta"
@@ -178,6 +225,8 @@ exit 1
 PRFAIL
 check 0 'activity unavailable' candidate
 export PATH=$old_path
+printf '\377' > "$FM_HOME/state/current.meta"
+check 0 'activity unavailable' candidate
 printf 'backend=tmux\nwindow=fixture:current\nkind=ship\nspawn_gen=s%s.1\n' "$(date +%s)" > "$FM_HOME/state/current.meta"
 check 1 'WIP 2/2' candidate
 rm "$FM_HOME/state/current.meta"
@@ -202,6 +251,7 @@ for i in range(79):
 rows.extend(['## Queued','- [ ] candidate - New work (kind: ship) (priority: 2)'])
 (home/'data/backlog.md').write_text('\n'.join(rows)+'\n')
 PYREAL
+printf 'warn\n' > "$FM_HOME/config/finish-first-wip-mode"
 before=$(cksum "$FM_HOME/data/backlog.md")
 check 0 'warning: WIP 22/8' candidate
 out=$(bash "$ROOT/bin/fm-flow-report.sh")
