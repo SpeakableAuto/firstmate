@@ -51,6 +51,7 @@ fm_quota_balance_unverifiable() { # <id> <harness> <model> <reason>
   at=$(date +%s)
   open="$STATE/quota-balance-unverifiable.open"
   mkdir -p "$STATE" || return 0
+  # shellcheck disable=SC2153 # CONFIG is supplied by the sourcing caller.
   if [ ! -e "$CONFIG/crew-placement.json" ] && [ ! -L "$CONFIG/crew-placement.json" ]; then
     jq -cn --argjson at "$at" --arg task "$id" --arg harness "$harness" --arg model "$model" --arg reason "$reason" \
       '{at: $at, task: $task, harness: $harness, model: $model, reason: $reason}' \
