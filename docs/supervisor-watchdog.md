@@ -16,7 +16,7 @@ The watchdog never clears mixed input or retries an ambiguous submission, and it
 Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle or done queues a `check: supervisor-watchdog` row and uses the [configured active-alert channels](wedge-alarm.md).
 That alarm fires once for each unchanged oldest-row episode, rearming when the oldest row changes or the queue drains.
 Because an idle supervisor wakes only on new input, the watchdog then rings it with one short drain line when the prompt stays empty and unchanged for the idle interval, which covers a turn that ended without its Stop hook and so left no watcher running.
-The ring uses the network nudge's guards: native idle or done, no busy footer or usage-limit notice, a dim suggestion counted as empty, fresh checks before typing, and exactly its own line before Enter.
+The ring uses the network nudge's guards: native idle or done, no busy footer or usage-limit notice, a recognized Claude idle suggestion counted as empty only inside a proven composer, fresh checks before typing, and exactly its own line before Enter.
 A confirmed ring repeats after another stable idle interval and the backoff while the same row stays undelivered; an ambiguous ring holds and alerts until the oldest row changes or the queue drains.
 
 ## Stall recovery
@@ -128,7 +128,7 @@ Retain or rotate the local logs according to the home's normal operational polic
 
 Run the portable regression with `bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh`.
 Run the isolated transport test with `bin/fm-test-run.sh tests/fm-supervisor-watchdog-herdr-e2e.test.sh`.
-It uses a guarded, named Herdr lab and a stub supervisor that prints fixture pane text, including a controlled stall that is restarted in its own pane while a neighbouring worker pane keeps running.
+It uses a guarded, named Herdr lab and a stub supervisor that prints fixture pane text, including a controlled stall that exercises the opt-in restart in its own pane while a neighbouring worker pane keeps running.
 It exercises real terminal delivery and native state reporting without contacting any model provider.
 This is transport evidence, not certification of the installed Claude renderer or provider credentials.
 The live guard `tests/fm-supervisor-watchdog-claude-live-e2e.test.sh` certifies the installed Claude renderer: the visible error shape, the empty and drafted prompt, and one confirmed resume turn.

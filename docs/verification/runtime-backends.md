@@ -2469,7 +2469,7 @@ ok - healthy ticks after rearming preserve the existing state file
 These portable fixtures exercise the classifier and state machine, not the live Claude renderer.
 The watchdog pins the operator-selected Claude version and degrades on version drift; that pin is not a claim that the stub test verified Claude itself.
 
-On 2026-10-30 AEST, on macOS with Herdr 0.9.3, the same transport test added a controlled stall: a hung stub that only ticks its spinner was not counted as progressing, was never typed into, was restarted in its own pane from the newest handoff while a neighbouring worker pane kept running, and raised one urgent alert when the restarted stub then made no progress:
+On 2026-10-30 AEST, on macOS with Herdr 0.9.3 and `FM_WATCHDOG_STALL_RESTART=1`, the same transport test added a controlled stall: a hung stub that only ticks its spinner was not counted as progressing, was never typed into, was restarted in its own pane from the newest handoff while a neighbouring worker pane kept running, and raised one urgent alert when the restarted stub then made no progress:
 
 ```text
 ok - real Herdr transport: a ticking spinner on a hung supervisor is not progress
@@ -2493,6 +2493,7 @@ verification: 2.1.295 (Claude Code) on Herdr 0.9.3; pin FM_WATCHDOG_CLAUDE_VERSI
 ```
 
 Claude Code 2.1.295 rotates hints such as the update notice and the effort badge in the row below the prompt's closing rule, so the watchdog excludes that row from its screen comparison; before that exclusion the same run held the nudge as a screen change.
+The same version can render its rotating `Try "..."` composer suggestion without ANSI styling even in Herdr's ANSI viewport, so the classifier accepts that text as empty only inside a glyph-proven separator pair with native Claude idle or done identity.
 
 
 ## Remote parent-route inbox alarm

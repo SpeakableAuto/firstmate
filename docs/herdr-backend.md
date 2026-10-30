@@ -641,7 +641,7 @@ ANSI capture preserves de-emphasized placeholder style.
 `bin/fm-composer-lib.sh` is the fleet-wide owner that strips dim or faint runs and dark truecolor placeholders while retaining bright typed input.
 
 If the ANSI capture ever fails, the plain fallback declares itself unstyled.
-The classifier then degrades a glyph row carrying trailing text to `unknown` instead of misreading ghost suggestions as typed input.
+The classifier then degrades a glyph row carrying trailing text to `unknown` instead of misreading ghost suggestions as typed input, except for a narrowly recognized Claude idle suggestion inside a glyph-proven separator pair with native Claude idle or done identity.
 That safely defers injection and eventually raises the wedge alarm.
 
 ### Away-mode injection

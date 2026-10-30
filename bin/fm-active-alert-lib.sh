@@ -230,8 +230,8 @@ wedge_alarm_notify() {  # <summary> <marker>
 # urgent path below reaches the captain away from the machine, so it accepts
 # only conditions that block all priority progress and that firstmate cannot
 # repair itself, never routine updates:
-#   supervisor-down    the supervisor still makes no progress after a restart
-#                      attempt, or the restart could not be proven
+#   supervisor-down    the supervisor still makes no progress after its nudge,
+#                      or an enabled restart failed or could not be proven
 #   carve-out-blocked  a captain-only decision is blocking every priority task
 #   machine-down       a fleet machine stayed unreachable
 #   test               the explicit setup test message only

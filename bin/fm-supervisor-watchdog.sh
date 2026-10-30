@@ -256,7 +256,8 @@ watchdog_queue_alert() {
 # turn that ended without the Stop hook leaves no watcher to deliver rows.
 # The ring types one short drain line under the same guards as the network
 # nudge: native idle or done, no busy footer or usage-limit notice, a proven
-# empty composer (a dim suggestion is empty) that stays semantically unchanged
+# empty composer (including a narrowly recognized Claude idle suggestion) that
+# stays semantically unchanged
 # for IDLE_SECS, fresh checks before typing, and exactly our payload before
 # Enter, with no clear or Enter retry. A confirmed ring re-rings after another
 # stable idle window and BACKOFF_SECS while the same row stays undelivered; an

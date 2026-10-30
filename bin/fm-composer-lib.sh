@@ -132,8 +132,9 @@
 # GHOST/PLACEHOLDER TEXT (task afk-herdr-false-pending): a harness fills an
 # otherwise-empty composer with de-emphasized ghost text - claude's rotating
 # prompt suggestion, codex's idle suggestion, grok's placeholder, or cursor's
-# idle placeholder - which a
-# plain capture cannot tell apart from text a human typed. codex-cli 0.154.0
+# idle placeholder. A plain capture cannot normally tell that furniture from
+# text a human typed; narrowly proven identity-and-shape exceptions are declared
+# beside their harness-specific patterns below. codex-cli 0.154.0
 # draws its `Ask Codex to do anything` placeholder as SGR-2 dim text after the
 # bare `›` glyph, which fm_composer_strip_ghost removes.
 # fm_composer_strip_ghost is the ONE ANSI-aware extractor of "real typed
