@@ -1,0 +1,3 @@
+READ-ONLY HOST CHECK: gui/501/local.firstmate.internal-growth
+growth_launchagent_loaded=no
+launchctl_exit=113

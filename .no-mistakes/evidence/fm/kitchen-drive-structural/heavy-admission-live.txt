@@ -1,0 +1,38 @@
+SCENARIO: heavy work is held when its required drive is absent
+{
+  "admitted": false,
+  "failed": [
+    "drive",
+    "treehouse-root"
+  ],
+  "drive": {
+    "status": "fail",
+    "reason": "drive unmounted or symlinked: /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-admission.IRtUbJ/Kitchen-missing",
+    "condition": "unmounted:/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-admission.IRtUbJ/Kitchen-missing",
+    "alert": true
+  },
+  "treehouse_root": {
+    "status": "fail",
+    "reason": "treehouse-root: Treehouse root missing, symlinked, or outside required drive (drive unavailable)"
+  }
+}
+SCENARIO: repeating the same outage retains one pending alert condition
+{
+  "wait_count": 1,
+  "state": "capacity",
+  "failed": [
+    "drive",
+    "treehouse-root"
+  ]
+}
+{
+  "alert_count": 1,
+  "alerts": [
+    {
+      "key": "drive",
+      "condition": "unmounted:/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-admission.IRtUbJ/Kitchen-missing",
+      "pending": true
+    }
+  ]
+}
+fallback_path_created=no

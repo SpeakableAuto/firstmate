@@ -1,0 +1,20 @@
+SCENARIO: literal external Treehouse pool and acquired slot pass
+{
+  "status": "pass",
+  "reason": "external Treehouse root: /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-treehouse.jS2NKe/Kitchen/Treehouse",
+  "root": "/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-treehouse.jS2NKe/Kitchen/Treehouse"
+}
+SCENARIO: acquired slot outside the configured pool refuses
+{
+  "status": "fail",
+  "reason": "treehouse-root: acquired worktree is outside the real external pool",
+  "condition": "treehouse-root:/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-treehouse.jS2NKe/project:acquired worktree is outside the real external pool",
+  "alert": true
+}
+SCENARIO: custom layout that could restore an internal slot refuses
+{
+  "status": "fail",
+  "reason": "treehouse-root: custom worktree_path cannot prove external allocation",
+  "condition": "treehouse-root:/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-treehouse.jS2NKe/project:custom worktree_path cannot prove external allocation",
+  "alert": true
+}

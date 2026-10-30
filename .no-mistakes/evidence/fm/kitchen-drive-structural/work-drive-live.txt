@@ -1,0 +1,18 @@
+SCENARIO: healthy drive check
+ok drive /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen
+ok env PLAYWRIGHT_BROWSERS_PATH /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen/Caches/Playwright
+ok npm-cache /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen/Caches/npm
+ok xcode-derived-data /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen/Build/DerivedData
+ok simulator-set /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen/SimulatorDevices
+ok build-tmp /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen/Build/Tmp
+SCENARIO: build command uses drive paths and preserves exit status
+TMPDIR=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen/Build/Tmp/job.3phj5DH3
+PLAYWRIGHT_BROWSERS_PATH=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen/Caches/Playwright
+npm_config_cache=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen/Caches/npm
+build_exit=7
+build_tmp_cleanup=empty
+SCENARIO: missing drive refuses without fallback
+refused drive: /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-drive.ijshiA/Kitchen is missing, not a directory, or reached through a symlink
+missing_drive_exit=3
+command_executed=no
+fallback_path_created=no

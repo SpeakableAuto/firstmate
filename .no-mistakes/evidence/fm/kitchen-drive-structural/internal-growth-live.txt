@@ -1,0 +1,42 @@
+SCENARIO: real df/du dry measurement reports a clean initial baseline
+{
+  "baseline": "created",
+  "used_kib": 173634612,
+  "free_kib": 36284704,
+  "flagged": [],
+  "new": [],
+  "alert": null
+}
+SCENARIO: more than 1 GiB unexplained internal growth opens one alert episode
+{
+  "threshold_gib": 1,
+  "used_delta_kib": 2097180,
+  "allowed_growth_kib": 0,
+  "unexplained_growth_kib": 2097180,
+  "flagged": [
+    {
+      "growth_kib": 2097180,
+      "kind": "unexplained-volume",
+      "path": "/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-growth.BCtxMG"
+    }
+  ],
+  "new": [
+    "!unexplained-volume"
+  ],
+  "alert": "internal growth issue since 2026-10-30T06:21Z: unexplained volume growth (+2.0 GiB); /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-growth.BCtxMG free 34.6 GiB; log /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-growth.BCtxMG/fm/state/internal-growth/log.jsonl"
+}
+1793341280	1	check	internal-growth	check: internal-growth: internal growth issue since 2026-10-30T06:21Z: unexplained volume growth (+2.0 GiB); /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-growth.BCtxMG free 34.6 GiB; log /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-growth.BCtxMG/fm/state/internal-growth/log.jsonl
+wake_count_after_first_run=1
+SCENARIO: the same open episode stays silent on the next daily check
+{
+  "flagged": [
+    {
+      "growth_kib": 2097204,
+      "kind": "unexplained-volume",
+      "path": "/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M65P5PGEZ3MAQAJ2434Z2EEP/.nm-live-growth.BCtxMG"
+    }
+  ],
+  "new": [],
+  "alert": null
+}
+wake_count_after_second_run=1

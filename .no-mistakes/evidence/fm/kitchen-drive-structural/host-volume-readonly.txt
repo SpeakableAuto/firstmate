@@ -1,0 +1,6 @@
+READ-ONLY HOST CHECK: configured volume path exists and is a mounted filesystem
+kitchen_path=present
+Filesystem     1024-blocks      Used Available Capacity  Mounted on
+/dev/disk3s1s1   239362496  12261528  36285336    26%    /
+/dev/disk7s1     976557744  37221296 939134156     4%    /Volumes/Kitchen
+path=/Volumes/Kitchen filesystem=/ device=16777244
