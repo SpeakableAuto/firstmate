@@ -5,7 +5,8 @@
 # move FM_WATCHDOG_CLAUDE_VERSION only when it passes.
 # Claude's API base URL points at a closed local port, so it spends no model
 # tokens and produces the real terminal network-error screen.
-# Proves: idle empty prompt reads clear, a typed draft reads pending and is
+# Proves: an idle empty prompt reads clear or conservatively pending when its
+# only content is Claude's Try suggestion, a typed draft reads pending and is
 # never typed over, the real network error reads error, and one guarded resume
 # is typed, submitted and confirmed as a new turn.
 set -eu
@@ -57,17 +58,37 @@ wait_verdict() {  # <verdict> <seconds>
   done
   return 1
 }
+wait_idle_prompt() {  # <seconds>
+  local attempt content
+  for ((attempt=0; attempt<$1; attempt++)); do
+    watchdog_observe 2>/dev/null
+    if [ "$VERDICT" = clear ]; then
+      IDLE_READING=clear
+      return 0
+    fi
+    if [ "$VERDICT" = composer-pending ]; then
+      content=$(fm_composer_extract_selected_content "$CAPS" "$STYLED") || content=''
+      if [[ $content =~ ^Try\ \"[^\"]+\"$ ]]; then
+        IDLE_READING='composer-pending (Try suggestion)'
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
 printf -v command_line 'cd %q && CLAUDE_CODE_MAX_RETRIES=1 ANTHROPIC_BASE_URL=http://127.0.0.1:9 claude --dangerously-skip-permissions' "$ROOT"
 h pane run "$PANE_ID" "$command_line" >/dev/null
-wait_verdict clear 60 || fail "Claude $version: idle empty prompt not read as clear (got $VERDICT)"
-pass "Claude $version: idle empty prompt reads clear"
+wait_idle_prompt 60 || fail "Claude $version: idle prompt not read safely (got $VERDICT)"
+pass "Claude $version: idle prompt reads $IDLE_READING"
 h pane send-text "$PANE_ID" 'a typed draft' >/dev/null
 sleep 1
 watchdog_observe
 [ "$VERDICT" = composer-pending ] || fail "Claude $version: typed draft not read as pending (got $VERDICT)"
 pass "Claude $version: a typed draft reads pending"
 h pane send-keys "$PANE_ID" ctrl+u >/dev/null
-wait_verdict clear 10 || fail "Claude $version: cleared prompt not read as clear (got $VERDICT)"
+wait_idle_prompt 10 || fail "Claude $version: cleared prompt not read safely (got $VERDICT)"
+pass "Claude $version: cleared prompt reads $IDLE_READING"
 h pane send-text "$PANE_ID" 'hello' >/dev/null
 sleep 0.3
 h pane send-keys "$PANE_ID" enter >/dev/null

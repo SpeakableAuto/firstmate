@@ -132,9 +132,8 @@
 # GHOST/PLACEHOLDER TEXT (task afk-herdr-false-pending): a harness fills an
 # otherwise-empty composer with de-emphasized ghost text - claude's rotating
 # prompt suggestion, codex's idle suggestion, grok's placeholder, or cursor's
-# idle placeholder. A plain capture cannot normally tell that furniture from
-# text a human typed; narrowly proven identity-and-shape exceptions are declared
-# beside their harness-specific patterns below. codex-cli 0.154.0
+# idle placeholder - which a
+# plain capture cannot tell apart from text a human typed. codex-cli 0.154.0
 # draws its `Ask Codex to do anything` placeholder as SGR-2 dim text after the
 # bare `›` glyph, which fm_composer_strip_ghost removes.
 # fm_composer_strip_ghost is the ONE ANSI-aware extractor of "real typed
@@ -472,10 +471,6 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # live, devin 3000.11.1). FM_COMPOSER_IDLE_RE overrides for an unverified harness;
 # matching is case-insensitive.
 FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$'
-# Claude 2.1.295 renders this rotating suggestion without ANSI styling even
-# when Herdr's ANSI viewport format is requested. It is safe only inside a
-# glyph-proven separated Claude composer with native idle or done identity.
-FM_COMPOSER_CLAUDE_IDLE_RE_DEFAULT='^Try "[^"]+"$'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
@@ -1865,29 +1860,9 @@ _fm_composer_classify_bare_pi_overlap() {  # <screen> <styled> <has-identity> <i
   agent=${identity%%$'\t'*}
   if [ "$agent" = pi ]; then
     _fm_composer_pi_verdict "$screen" "$styled" "$has_identity" "$identity"
-  elif [ "$agent" = claude ] \
-    && _fm_composer_claude_idle_suggestion "$screen" "$identity" "$row"; then
-    printf 'empty'
   else
     _fm_composer_classify_bare_row "$screen" "$styled" "$row"
   fi
-}
-
-_fm_composer_claude_idle_suggestion() {  # <screen> <identity> <row>
-  local screen=$1 identity=$2 row=$3 raw plain content glyph=''
-  [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" = 1 ] || return 1
-  case "$identity" in claude$'\t'idle|claude$'\t'done) ;; *) return 1 ;; esac
-  raw=$(_fm_composer_screen_row "$row" "$screen")
-  plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
-  [ "$raw" = "$plain" ] || return 1
-  content=$plain
-  fm_composer_normalize_trim_var content
-  fm_composer_leading_agent_glyph_var glyph "$content" || return 1
-  [ "$glyph" = '❯' ] || return 1
-  content=${content#*"$glyph"}
-  fm_composer_normalize_trim_var content
-  fm_composer_idle_matches "$content" \
-    "${FM_COMPOSER_CLAUDE_IDLE_RE:-$FM_COMPOSER_CLAUDE_IDLE_RE_DEFAULT}" sensitive
 }
 
 # The pi separated-shape verdict: identity + structure conjunction (herdr's
