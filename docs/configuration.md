@@ -1233,7 +1233,7 @@ Applicable scopes on the same account use the strictest allowance.
 The earliest reset among the scopes tied for that strictest allowance supplies the candidate's pacing window.
 The resolver checks live crew and recent placements against that allowance, then prefers the passing paced account whose reset comes soonest.
 Existing runway and selected profile floors still apply.
-Every directly classified crew launch whose harness and model resolve to a configured provider account applies the same pacing allowance against recovery-grade live-worker evidence under a home-wide launch lock.
+Every directly classified crew launch whose harness and model resolve to a configured provider account applies the same pacing allowance against the shared live-worker count in [`bin/fm-live-workers-lib.sh`](../bin/fm-live-workers-lib.sh) under a home-wide launch lock; an unreadable backend attaches its named `livenessError` to only the affected account records, which then refuse, and leaves the rest of the quota snapshot usable.
 Direct Claude launches retain their stricter account-identity and fixed session-floor checks and also apply every configured scope for the selected model.
 A typed profile's explicit `provider` is not yet carried into spawn metadata, so a profile whose declared provider differs from the launch-time harness/model mapping receives resolver pacing but not direct-launch pacing; durable provider/account launch identity is a known follow-up.
 

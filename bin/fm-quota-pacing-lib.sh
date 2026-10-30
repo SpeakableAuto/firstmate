@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared live-worker evidence and launch admission for configured quota pacing.
+# Shared allowance evidence and launch admission for configured quota pacing.
 # docs/configuration.md "Quota pacing" owns the configuration and behavior.
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
