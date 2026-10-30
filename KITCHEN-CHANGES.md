@@ -2,7 +2,7 @@
 
 ## 30 October 2026: alert on cleared work left unmerged
 
-PR: pending creation by the validation pipeline.
+PR: https://github.com/SpeakableAuto/firstmate/pull/45
 An optional registered home check alerts firstmate after a current-head CLEAR review has waited more than two hours.
 It excludes declared or inferred carve-outs, configured owner exclusions and captain holds, and points to the guarded merge command without merging anything.
 Repeated polls suppress the same PR and head alert.
