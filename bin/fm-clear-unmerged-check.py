@@ -58,7 +58,9 @@ metadata, diff and head recheck. Unreached candidates are counted as deferred
 (URLs in the state record) and resumed first next tick. Item failures are named
 as skipped, not whole-check unavailable. Failures that stop every candidate
 (missing gh-axi, unreadable registry or skip list, hold listing, report cap)
-report the whole check unavailable.
+report the whole check unavailable. Running out of scan time, including a
+command killed by the remaining-time bound, is always reported as deferral;
+a PR whose own read was killed moves to the end of the deferred rotation.
 Budget/forge/registry/hold failures never mark a PR alerted. A test-only FM_CLEAR_UNMERGED_NOW freezes age
 calculation, never the real-time budget. No credentials or shell code are read.
 """
