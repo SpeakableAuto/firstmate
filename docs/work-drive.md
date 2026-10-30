@@ -52,13 +52,25 @@ For the example above, the active placement profile includes this contract:
 This fail-closed behavior prevents an incomplete host configuration from being reported as active.
 The tool settings above point at the drive with no fallback, so a tool started while the drive is absent fails instead of writing to internal storage.
 
+## Treehouse project pools
+
+Each primary project clone keeps an untracked, ignored `treehouse.toml` in its repository root with one literal top-level pool root on the work drive, for example:
+
+```toml
+root = "/Volumes/Kitchen"
+```
+
+At spawn, the placement gate reads that file and pins `TREEHOUSE_ROOT` to its root instead of relying on a global export.
+Run `fm-work-drive.sh verify --project /absolute/project` for each primary clone.
+The check refuses unless `treehouse.toml` is a regular non-symlinked file and its literal top-level `root` is an existing real directory at or below the configured work-drive root.
+
 ## Build jobs and simulators
 
 `fm-work-drive.sh exec -- <command>` runs one build job with `TMPDIR` set to a private directory under `build-tmp`, removes that directory afterwards, and returns the command's status.
 It is opt-in because a drive-wide `TMPDIR` lengthens Unix socket paths that some tests need to stay short.
 `fm-work-drive.sh simctl <args>` runs `xcrun simctl --set` against the drive's device set.
 Xcode offers no supported setting that moves the default simulator device set, so `xcodebuild` and Simulator.app keep using the internal default set; only simctl calls made through this command use the drive.
-Codex keeps session history under its home directory beside its sign-in files, and its documented `log_dir` setting moves only local logs while turning on a plaintext log, so session history stays on the internal disk.
+Codex session data is separable through its documented `log_dir` and `sqlite_home` settings, but `log_dir` enables a plaintext TUI log and the work drive is unencrypted, so session data deliberately stays on the internal disk beside its sign-in files.
 
 ## Configure the internal growth check
 
