@@ -2,6 +2,7 @@
 """Placement data contract and atomic capacity ledger (no launch authority).
 
 Usage: fm-placement.py assess CONFIG DATA ID HARNESS MODEL EFFORT
+       fm-placement.py light-count CONFIG DATA [ID...]
        fm-placement.py memory
        fm-placement.py worktree CONFIG PROJECT [WORKTREE]
        fm-placement.py record STATE ID [spawn|recheck]
@@ -10,6 +11,8 @@ Usage: fm-placement.py assess CONFIG DATA ID HARNESS MODEL EFFORT
        fm-placement.py due STATE
 memory reads fresh operating-system memory/swap evidence; assess consumes JSON
 evidence on stdin and prints a complete decision.
+light-count prints how many of the given live crews hold a classification bound
+to their brief that names a light workload; anything else stays heavy.
 record consumes that decision; one replace publishes the decision and its wait
 in state/capacity.json, under an exclusive ledger lock. This is the capacity log.
 waits prints P0-P3, oldest-first waits, with over_four_hours computed at read time
@@ -209,6 +212,49 @@ def memory():
             (values["SwapTotal"] - values["SwapFree"]) / 1024)
 
 
+def light_allowance(profile):
+    """Return (light workloads, max_light_crew), or None when no allowance is configured."""
+    names, cap = profile.get("light_workloads"), profile.get("max_light_crew")
+    if names is None and cap is None:
+        return None
+    if (not isinstance(names, list) or not names or not all(isinstance(x, str) and x for x in names)
+            or len(set(names)) != len(names)):
+        raise ValueError("light_workloads must be a non-empty list of distinct workload names")
+    if type(cap) is not int or not 0 <= cap <= 8:
+        raise ValueError("max_light_crew must be 0..8 alongside light_workloads")
+    return frozenset(names), cap
+
+
+def bound_classification(data, task):
+    """Return a task's classification, refusing one not bound to its current brief."""
+    work = read(data / task / "placement.json")
+    if not isinstance(work, dict) or type(work.get("version")) is not int or work["version"] != 1:
+        raise ValueError("task classification must be a version 1 object")
+    brief = data / task / "brief.md"
+    if hashlib.sha256(brief.read_bytes()).hexdigest() != work.get("brief_sha256"):
+        raise ValueError("task classification is not bound to current brief")
+    return work
+
+
+def light_count(config, data, tasks):
+    """Count live crews charged to the light cap; unproven classifications stay heavy."""
+    try:
+        light = light_allowance(read(config / "crew-placement.json"))
+    except (OSError, ValueError, AttributeError):
+        return 0  # assess refuses a malformed allowance by name.
+    if light is None:
+        return 0
+    count = 0
+    for task in tasks:
+        try:
+            workload = bound_classification(data, task).get("workload")
+        except (OSError, ValueError):
+            continue
+        if isinstance(workload, str) and workload in light[0]:
+            count += 1
+    return count
+
+
 def assess(config, data, task, harness, model, effort):
     evidence = json.load(sys.stdin)
     checks = {name: result(False, "absent evidence") for name in ("fit", "room", "quota", "locks")}
@@ -221,18 +267,16 @@ def assess(config, data, task, harness, model, effort):
         if isinstance(value, dict) and value.get("status") in ("pass", "fail"):
             checks[name] = value
     machine = None
+    workload = None
     try:
         profile = read(config / "crew-placement.json")
         if not isinstance(profile, dict) or profile.get("version") != 1:
             raise ValueError("machine profile must be a version 1 object")
         machine = profile
-        work = read(data / task / "placement.json")
-        if not isinstance(work, dict) or work.get("version") != 1:
-            raise ValueError("task classification must be a version 1 object")
-        brief = data / task / "brief.md"
-        if hashlib.sha256(brief.read_bytes()).hexdigest() != work.get("brief_sha256"):
-            raise ValueError("task classification is not bound to current brief")
+        work = bound_classification(data, task)
         workload = work.get("workload")
+        if not isinstance(workload, str):
+            workload = None
         allowed = profile.get("workloads")
         if not isinstance(allowed, list) or not allowed or not all(isinstance(x, str) for x in allowed):
             raise ValueError("machine workloads absent or invalid")
@@ -272,11 +316,20 @@ def assess(config, data, task, harness, model, effort):
                 raise ValueError("min_free_memory_percent must be >0..100")
             if type(swap_cap) not in (int, float) or not math.isfinite(swap_cap) or not 0 <= swap_cap < 1048576:
                 raise ValueError("max_swap_mib invalid")
+            light = light_allowance(profile)
+            # A spawn is admitted against the cap of its own class only.
+            light_class = light is not None and workload in light[0]
             if evidence.get("crew_liveness"):
                 raise ValueError(evidence["crew_liveness"])
             count = evidence.get("crew_count")
-            if type(count) is not int or count < 0 or count >= cap:
+            if type(count) is not int or count < 0 or (not light_class and count >= cap):
                 raise ValueError(f"crew cap: count={count}, cap={cap}")
+            crew = f"crew={count}/{cap}"
+            if light is not None:
+                light_count, light_cap = evidence.get("light_crew_count"), light[1]
+                if type(light_count) is not int or light_count < 0 or (light_class and light_count >= light_cap):
+                    raise ValueError(f"light crew cap: count={light_count}, cap={light_cap}")
+                crew += f"; light={light_count}/{light_cap}; class={'light' if light_class else 'heavy'}"
             free, swap = evidence.get("memory", {}).get("free_percent"), evidence.get("memory", {}).get("swap_mib")
             if not all(type(v) in (int, float) and math.isfinite(v) and v >= 0 for v in (free, swap)):
                 raise ValueError("memory pressure or swap evidence absent")
@@ -285,7 +338,7 @@ def assess(config, data, task, harness, model, effort):
             disk = evidence.get("disk", {})
             if disk.get("status") != "pass":
                 raise ValueError("disk floor absent or failed")
-            checks["room"] = result(True, f"crew={count}/{cap}; free={free:g}%; swap={swap:g} MiB")
+            checks["room"] = result(True, f"{crew}; free={free:g}%; swap={swap:g} MiB")
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             checks["room"] = result(False, str(error))
         checks["slots"] = evidence.get("slots", result(False, "slots evidence absent"))
@@ -432,6 +485,9 @@ def main():
             raise ValueError("worktree accepts CONFIG PROJECT [WORKTREE]")
         output = treehouse_root(read(Path(config) / "crew-placement.json"), project,
                                 worktrees[0] if worktrees else None)
+    elif operation == "light-count":
+        config, data, *tasks = args
+        output = light_count(Path(config), Path(data), tasks)
     elif operation == "assess":
         config, data, task, harness, model, effort = args
         output = assess(Path(config), Path(data), task, harness, model, effort)
