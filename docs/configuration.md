@@ -1417,7 +1417,7 @@ Intake writes `data/<task-id>/placement.json` beside the brief:
 ```
 
 The classification must name the actual work and the zero-based matched rule in `crew-dispatch.json`; changing the brief requires renewing its classification.
-Missing classification, a disallowed workload, a required drive absent from the machine profile, or a selected harness/model/effort outside that rule refuses fit.
+Missing classification, a disallowed workload, a required drive absent from the machine profile, or a selected harness/model/effort outside that rule without a quota-admitted recorded `balance_override` refuses fit.
 An iPhone build therefore cannot use the light example, and Plane work cannot use the heavy example.
 The typed resolver keeps matched-rule candidates ahead of default fallbacks in placement-enabled homes, then lets the existing quota selection policy (soonest paced window, then pace headroom or fallback `spendPriority`) decide within that fit class; the existing Claude preference applies only to an exact or near tie in the `spendPriority` fallback.
 Claude's live account admission and minimum session floor remain owned by the following section.
