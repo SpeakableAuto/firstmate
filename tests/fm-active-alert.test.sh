@@ -173,6 +173,16 @@ pass 'message file is removed after delivery'
 
 # Machine probe: alert once after a sustained outage, never on one blip.
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+cat > "$TMP/bin/ssh" <<'SSH'
+#!/usr/bin/env bash
+sleep 30
+SSH
+chmod +x "$TMP/bin/ssh"
+at 299000; FM_WEDGE_ALARM_TIMEOUT_SECS=1 run check-machine hung-host hung-host
+check "$RC" 0 'a hung SSH probe returns as an unreachable machine'
+check "$OUT" unreachable 'a hung SSH probe records an outage'
+check "$(jq -r .fails "$FM_HOME/state/urgent-alert/machine-hung-host.json")" 1 'a hung SSH probe counts one failure'
+rm -f "$TMP/bin/ssh"
 cat > "$TMP/probe" <<'PROBE'
 #!/usr/bin/env bash
 [ "$(cat "$(dirname "$0")/probe-state")" = up ]

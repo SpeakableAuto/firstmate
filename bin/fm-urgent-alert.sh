@@ -38,10 +38,11 @@ urgent_send() {  # <condition> <key> <message>
 
 machine_probe() {  # <host>
   if [ -n "${FM_MACHINE_PROBE:-}" ]; then
-    "$FM_MACHINE_PROBE" "$1" >/dev/null 2>&1
+    wedge_alarm_run_bounded machine-probe "$FM_MACHINE_PROBE" "$1" >/dev/null 2>&1
     return
   fi
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$1" true >/dev/null 2>&1 </dev/null
+  wedge_alarm_run_bounded machine-probe \
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$1" true >/dev/null 2>&1 </dev/null
 }
 
 check_machine() {  # <label> <host>
