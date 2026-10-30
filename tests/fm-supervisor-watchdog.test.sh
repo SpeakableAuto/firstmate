@@ -449,8 +449,8 @@ stall_case() {
   reset_case
   rm -f "$DIR/stall.json" "$DIR/transcript-mark" "$DIR/urgent" "$DIR/launches" "$FM_WAKE_QUEUE" "$DIR/queue-alert" "$DIR/queue-nudge.json"
   UNDER_WAY=1 BEACON=500 PANE=$CLEAR CONFIRM_NATIVE=1 STOPPED=0 STOP_OK=1 LAUNCH_OK=1
-  PROC_STATE=agent AFTER_LAUNCH_STATE=agent LAST_SENT= URGENT_RESULT=sent
-  FM_WATCHDOG_TRANSCRIPT_DIR= RESTART_WRITES_TRANSCRIPT=0
+  PROC_STATE=agent AFTER_LAUNCH_STATE=agent LAST_SENT='' URGENT_RESULT=sent
+  FM_WATCHDOG_TRANSCRIPT_DIR='' RESTART_WRITES_TRANSCRIPT=0
 }
 restart_case() { stall_case; FM_WATCHDOG_STALL_RESTART=1; STALL_RESTART=1; }
 stage() { jq -r .stage "$DIR/stall.json"; }

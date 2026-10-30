@@ -298,6 +298,8 @@ fm_urgent_alert_mtime() {  # <path>
 # Record and print one fm_urgent_alert result; FM_URGENT_ALERT_RESULT lets a
 # caller read it without a subshell that would lose FM_URGENT_ALERT_MESSAGE_ID.
 fm_urgent_alert_result() {
+  # Callers inspect this result after the helper returns.
+  # shellcheck disable=SC2034
   FM_URGENT_ALERT_RESULT=$1
   printf '%s\n' "$1"
 }
