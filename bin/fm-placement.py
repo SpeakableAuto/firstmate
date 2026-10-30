@@ -126,6 +126,10 @@ def external_checks(profile, project, worktree=None):
         except (OSError, ValueError, KeyError, TypeError) as error:
             checks["data-disk"] = failure(f"data volume measurement absent: {error}", "missing-data-measurement")
     checks["treehouse-root"] = treehouse_root(profile, project, worktree)
+    # A pool root on an unavailable drive fails as a consequence of the drive
+    # check; keep it named in the refusal but alert once, for the drive itself.
+    if checks["drive"]["status"] != "pass" and checks["treehouse-root"]["status"] != "pass":
+        checks["treehouse-root"] = result(False, checks["treehouse-root"]["reason"] + " (drive unavailable)")
     return checks
 
 

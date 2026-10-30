@@ -1302,6 +1302,7 @@ Required directories must already exist as real directories beneath that mount; 
 A drive profile also requires `data_volume.path` and a positive `data_volume.min_free_gib`; live available bytes on that filesystem must meet the configured floor.
 Missing measurements, missing or unwritable directories, unmounted drives and insufficient internal Data space each produce a named refusal.
 The capacity ledger retains each condition and sends one ordinary wake when it first fails, with another allowed only after recovery or a different condition.
+A Treehouse root that fails only because its drive is unavailable is still named in the refusal but does not raise its own wake, so one drive outage produces one wake.
 
 Drive profiles require a repository-local, non-symlinked `treehouse.toml` with an absolute literal top-level `root` naming an existing real directory under the drive.
 Quoted string values and ordinary top-level assignments are supported; complex root syntax, multiline assignments and custom `worktree_path` layouts are refused.
