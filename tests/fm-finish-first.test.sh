@@ -73,6 +73,45 @@ check 0 P0 urgent
 rm "$FM_HOME/data/flow-history.jsonl"
 pass 'WIP and two-day flow bounds new starts; higher priorities and resumes remain runnable'
 
+# Finishing an existing job cannot wait for that same job to vacate WIP.
+cp "$FM_HOME/data/backlog.md" "$TMP_ROOT/before-serves.md"
+cat > "$FM_HOME/data/backlog.md" <<'LINKED'
+## In flight
+- [ ] ship1 - Waiting for review (kind: ship) (impact: P2)
+- [ ] ship2 - Waiting for replay (kind: ship) (impact: P2)
+- [ ] ship3 - Waiting for fixes (kind: ship) (impact: P2)
+- [ ] ship4 - Waiting for recheck (kind: ship) (impact: P2)
+## Queued
+- [ ] ship1-review - Independent review (kind: scout) (impact: P2) (serves: ship1)
+- [ ] new-job - New implementation (kind: ship) (impact: P2)
+- [ ] fake-review - Unlinked review (kind: scout) (impact: P2) (serves: missing)
+LINKED
+printf '{"version":1,"max_crew":2}\n' > "$FM_HOME/config/crew-placement.json"
+check 1 'WIP 4/4' new-job
+check 1 'WIP 4/4' fake-review
+check 0 'serves ship1' ship1-review
+# The same recorded relation exempts the review from a two-day stop.
+backlog_json_cmd=' . "$1/bin/fm-backlog-lib.sh"; backlog_json "$2"'
+linked=$(bash -c "$backlog_json_cmd" _ "$ROOT" "$FM_HOME/data/backlog.md")
+out=$(printf '%s\n' "$linked" | python3 "$ROOT/bin/fm-finish-first.py" ship1-review "$FM_HOME/config" yes)
+assert_contains "$out" 'serves ship1' 'linked review starts under both bounds'
+native=$(TASKS_AXI_FILE="$FM_HOME/data/backlog.md" tasks-axi list --fields blocked,held,created,priority)
+out=$(printf '%s\n' "$native" | python3 "$ROOT/bin/fm-finish-first.py" ship1-review "$FM_HOME/config" yes --native)
+assert_contains "$out" 'serves ship1' 'native task title preserves the same explicit relation'
+bash "$ROOT/bin/fm-tasks-axi.sh" hold ship1-review --reason 'awaiting scope' --kind external >/dev/null
+check 1 held ship1-review
+bash "$ROOT/bin/fm-tasks-axi.sh" unhold ship1-review >/dev/null
+# Existing finishing work consumes no additional WIP item.
+python3 - "$FM_HOME/data/backlog.md" <<'PYSERVES'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); s=p.read_text().replace('(impact: P2)\n## Queued', '(impact: P2) (serves: ship1)\n## Queued')
+p.write_text(s)
+PYSERVES
+check 0 allowed new-job
+cp "$TMP_ROOT/before-serves.md" "$FM_HOME/data/backlog.md"
+pass 'recorded finishing work starts at the exact WIP bound and under the two-day stop'
+
 # The placement decision must retain the finish-first refusal and queue it.
 printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
 CONFIG="$FM_HOME/config" DATA="$FM_HOME/data" STATE="$FM_HOME/state"

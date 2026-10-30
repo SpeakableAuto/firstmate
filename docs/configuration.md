@@ -400,6 +400,8 @@ The spawn repeats the check under its task-set lock before allocation.
 
 When `config/crew-placement.json` exists, its positive `max_crew` value bounds open In-flight work at twice that many crew slots.
 It counts held and blocked In-flight work too, and does not count parked task records or worktrees.
+A row with `(serves: <task-id>)` naming another In-flight item is finishing that item, so it bypasses both start bounds and does not consume another WIP item.
+Record this relation explicitly in the backlog row (in a native backend, its title); a review-like task name alone grants no exemption, and holds or blockers on the support row still apply.
 P0 bypasses this WIP limit and the two-day stop; other new starts at the bound are refused with an available item to finish, or an explanation that all open work is held or blocked.
 Homes without `crew-placement.json` remain uncapped; malformed placement configuration refuses ordinary admission.
 This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
@@ -418,6 +420,7 @@ Manual edits and direct calls to `tasks-axi` are outside this journal, so this i
 When recorded worker starts exceed finished deliveries on both reported AEST days, the report emits `stop_starting: yes`.
 Fresh admission then refuses work at the same or a lower priority than finishable In-flight work, while a higher priority still jumps the queue.
 Current holds and blockers do not retroactively change the recorded signal, while non-worker starts remain excluded.
+Receipts snapshot the validated `serves` relation; those support transitions contribute neither new starts nor extra deliveries to the daily totals.
 Malformed history affects only its bounded date interval; recording failures raise a deduplicated wake and never prevent a backlog mutation.
 Preserve damaged journals for diagnosis; after repairing a storage limit, archive the journal outside `flow-history.jsonl` and let the next transition begin new coverage rather than fabricating historical receipts.
 The pstack job 03 morning scoreboard is the intended consumer of these counts.

@@ -156,6 +156,11 @@ out=$(bash "$wrapper" start nosuch 2>&1) || rc=$?
 [ "$rc" -ne 0 ] || fail 'unknown id must fail'
 [ -n "$out" ] || fail 'unknown id must explain the error'
 bash "$wrapper" "done" --note x carried --no-prune >/dev/null || fail 'flag-first mutation works'
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYFLAG'
+import json, sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert rows[-1]['type']=='transition' and rows[-1]['action']=='done' and rows[-1]['task_id']=='carried', rows[-1]
+PYFLAG
 # A torn tail does not poison later receipts.
 bash "$wrapper" reopen oldest >/dev/null
 printf '{"type":"attempt","tok' >> "$FM_HOME/data/flow-history.jsonl"
@@ -227,3 +232,50 @@ starts=[r['task_id'] for r in rows if r['type']=='transition' and r['action']=='
 assert len(set(starts))==6 and len(starts)==6, starts
 PYPARALLEL
 pass 'parallel real wrapper starts retain every transition'
+
+# Independent report probes pin classification, non-worker starts and bounded damage.
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYPROBES'
+import json, sys
+rows=[dict(type='coverage',version=1,timestamp='2020-10-26T00:00:00Z')]
+for day in ('27','28','29'):
+    for kind, action, landing in [('ship','done','none'),('captain','start','none')]:
+        task=f'{kind}-{day}'
+        row=dict(token=task,task_id=task,priority=2,kind=kind,landing=landing,timestamp=f'2020-10-{day}T12:00:00Z')
+        rows.extend([dict(row,type='attempt'),dict(row,type='transition',action=action,result=0)])
+with open(sys.argv[1],'w') as f:
+    for i,row in enumerate(rows):
+        f.write(json.dumps(row)+'\n')
+        if i==1: f.write('torn line\n')
+PYPROBES
+out=$(bash "$report" --date 2020-10-29)
+assert_contains "$out" '2020-10-29 finished=0 closed-not-landed=1 started=1' 'a bare close is never delivered'
+assert_contains "$out" 'closed-not-landed: ship-29' 'bare close stays named'
+assert_contains "$out" 'stop_starting: no' 'captain starts do not activate the stop'
+out=$(bash "$report" --date 2020-10-27)
+assert_contains "$out" '2020-10-27 unknown' 'torn row damages its own day'
+pass 'bare closes, non-worker starts and bounded torn rows retain report semantics'
+
+# Journal a real linked review start, then prove its identity survives later parent closure.
+cat >> "$FM_HOME/data/backlog.md" <<'SERVES'
+## Queued
+- [ ] helper - Independent review (kind: scout) (serves: current)
+SERVES
+bash "$wrapper" start helper >/dev/null
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYSERVES'
+import json, sys
+rows=[json.loads(line) for line in open(sys.argv[1]) if not line.startswith('torn')]
+helper=[r for r in rows if r.get('task_id')=='helper']
+assert len(helper)==2 and all(r.get('serves')=='current' for r in helper), helper
+# Put the real receipt on each of two completed days.
+rows=[dict(type='coverage',version=1,timestamp='2020-10-26T00:00:00Z')]
+for day in ('28','29'):
+    for row in helper:
+        rows.append(dict(row,timestamp=f'2020-10-{day}T12:00:00Z',token=f'helper-{day}'))
+with open(sys.argv[1],'w') as f:
+    for row in rows: f.write(json.dumps(row)+'\n')
+PYSERVES
+bash "$wrapper" done current --no-prune >/dev/null
+out=$(bash "$report" --date 2020-10-29)
+assert_contains "$out" 'finished=0 closed-not-landed=0 started=0' 'support work is not a new job'
+assert_contains "$out" 'stop_starting: no' 'recorded support work cannot activate the stop'
+pass 'linked review receipts preserve finishing-work identity'

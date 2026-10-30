@@ -57,6 +57,8 @@ def read_rows(text):
         if priority != '-' and not re.fullmatch(r'[0-9]+', priority):
             raise ValueError('invalid backlog priority')
         row['priority'] = 2 if priority == '-' else int(priority)
+        serves = re.search(r'\(serves:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\)', row.get('title', ''))
+        row['serves'] = serves[1] if serves else None
         if row['created'] != '-':
             datetime.date.fromisoformat(row['created'])
         row['order'] = (row['created'] if row['created'] != '-' else '', len(rows))
@@ -86,6 +88,13 @@ def admit(backlog, task_id, config_dir, stop_starting):
     if target['impact'] == 'P0':
         print(f'finish-first: P0 start allowed for {task_id}')
         return 0
+    # A recorded link, never a task-name convention, identifies finishing work.
+    open_ids = {r['id'] for r in rows if r['state'] == 'in_flight'}
+    def finishing(row):
+        return row.get('serves') in open_ids and row.get('serves') != row['id']
+    if finishing(target):
+        print(f"finish-first: {task_id} serves {target['serves']}; finishing work allowed")
+        return 0
     placement = config_dir / 'crew-placement.json'
     if placement.exists() or placement.is_symlink():
         if placement.is_symlink() or not placement.is_file():
@@ -95,7 +104,8 @@ def admit(backlog, task_id, config_dir, stop_starting):
         if type(cap) is not int or cap <= 0:
             raise ValueError('crew-placement.json max_crew must be a positive integer')
         inflight = [r for r in rows if r['state'] == 'in_flight'
-                    and r['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')]
+                    and r['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')
+                    and not finishing(r)]
         if len(inflight) >= 2 * cap:
             available = [r for r in inflight if not r.get('hold_reason')
                          and not r.get('unresolved_blocker_ids')]
@@ -104,7 +114,8 @@ def admit(backlog, task_id, config_dir, stop_starting):
             return 1
     finishable = [r for r in rows if r['state'] == 'in_flight'
                   and r['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')
-                  and not r.get('hold_reason') and not r.get('unresolved_blocker_ids')]
+                  and not r.get('hold_reason') and not r.get('unresolved_blocker_ids')
+                  and not finishing(r)]
     if stop_starting == 'yes' and finishable:
         first = min(finishable, key=lambda row: int(row['impact'][1:]))
         if int(target['impact'][1:]) >= int(first['impact'][1:]):
