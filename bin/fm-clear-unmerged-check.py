@@ -13,8 +13,9 @@ A report in data/*/report.md names a PR when its text contains the full PR URL
 and head SHA within its first 64 KiB (complete lines only when truncated).
 Unreadable or incomplete report prefixes are skipped with separate diagnostics;
 large reports with complete prefix evidence remain eligible.
-The latest such report (by mtime) decides: it must have a first line starting with '# CLEAR' as a whole word; a later non-CLEAR
-review at the same head blocks the alert. Report time is the file mtime only;
+The latest such report (by mtime) decides: its first line must start with
+'# CLEAR' as a whole word; a later non-CLEAR review at the same head blocks the
+alert. Report time is the file mtime only;
 a future mtime is clamped to the first poll that saw it, retained while that
 mtime is unchanged. The clock starts at the later of that time and the PR
 creation/latest force-push/head push.
@@ -34,7 +35,8 @@ rows and tasks bound by state/*.meta pr= or a matching review task id.
 
 state/.clear-unmerged.json stores schema=1, alerted PR+head identities, observed
 head clocks (pruned per repository after a complete PR list), clamped future
-report times, and the last diagnostic for repeat suppression. A nonblocking flock serializes checks.
+report times, and the last error and report-skip diagnostics for repeat
+suppression. A nonblocking flock serializes checks.
 A failed project, repository or PR read is reported and skipped; the remaining
 items are still evaluated, and the failed item is never marked alerted.
 At most one new alert per pass keeps watcher output bounded; subsequent polls
