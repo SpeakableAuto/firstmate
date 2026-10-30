@@ -1,0 +1,78 @@
+SCENARIO 1: carried-over work and placement-owned WIP cap
+
+Oct 27 queued task while Oct 28 same-priority task is in flight:
+command: fm-finish-first.sh oldest
+exit: 1
+finish-first: finish urgent first (priority 0, queued)
+
+No crew-placement.json preserves unconfigured-home behavior:
+command: fm-finish-first.sh urgent
+exit: 0
+finish-first: start allowed for urgent
+
+max_crew=1 gives a two-task WIP cap:
+command: fm-finish-first.sh urgent
+exit: 1
+finish-first: WIP 3/2; finish held first
+
+max_crew=2 raises the cap to four tasks:
+command: fm-finish-first.sh urgent
+exit: 0
+finish-first: start allowed for urgent
+
+SCENARIO 2: two-day AEST stop signal and higher-priority jump
+
+Default flow report (previous AEST day):
+flow_history: AEST; complete coverage from 2026-10-28; wrapper/lifecycle transitions only
+2026-10-29 finished=0 closed-not-landed=0 started=1 reopened=0
+  finished: -
+  closed-not-landed: -
+  started: day-two
+  reopened: -
+stop_starting: yes
+
+Same-level admission while signal is on:
+command: fm-finish-first.sh same-level
+exit: 1
+finish-first: two-day stop; finish day-two first (priority 2, in_flight)
+
+Higher-level admission while signal is on:
+command: fm-finish-first.sh higher-level
+exit: 0
+finish-first: start allowed for higher-level
+
+SCENARIO 3: landed finish versus closed-not-landed and authoritative backfill
+
+Default flow report after direct PR close and verified-merge backfill:
+flow_history: AEST; complete coverage from 2026-10-29; wrapper/lifecycle transitions only
+2026-10-29 finished=1 closed-not-landed=1 started=1 reopened=0
+  finished: delivery
+  closed-not-landed: delivery
+  started: delivery
+  reopened: -
+stop_starting: unknown
+
+SCENARIO 4: generated handback contract exposes fixed checkpoint fields
+
+Ship brief checkpoint contract:
+102:Record the pushed commit as checkpoint_sha=<full 40-character SHA> in that note, or explicitly say the checkpoint is local and not yet pushed.
+106:`working [at=<epoch>]: checkpoint; done=<result and validation>; next=<remaining step>; how_to_resume=<command or evidence>; branch=<branch or none>; checkpoint_sha=<full 40-character SHA or local>`
+
+Scout brief checkpoint contract:
+85:`working [at=<epoch>]: checkpoint; done=<result and validation>; next=<remaining step>; how_to_resume=<command or evidence>; branch=<branch or none>; checkpoint_sha=<full 40-character SHA or local>`
+
+SCENARIO 1 CORRECTION: exact Oct 27 queued / Oct 28 in-flight regression
+The unrelated P0 row is held so same-priority ordering is isolated.
+command: fm-finish-first.sh oldest
+exit: 1
+finish-first: finish carried first (priority 2, in_flight)
+
+SCENARIO 5: report interface rejects arbitrary ranges and timezones
+command: fm-flow-report.sh --since 2026-10-28
+exit: 2
+usage: fm-flow-history.py [-h] --data DATA {begin,finish,report} ...
+fm-flow-history.py: error: unrecognized arguments: --since 2026-10-28
+command: fm-flow-report.sh --timezone UTC
+exit: 2
+usage: fm-flow-history.py [-h] --data DATA {begin,finish,report} ...
+fm-flow-history.py: error: unrecognized arguments: --timezone UTC

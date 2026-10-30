@@ -1,0 +1,8 @@
+ok - finish-first prioritizes carried work and bounds WIP from placement
+ok - two-day stop blocks the same level while higher priority jumps
+ok - finish-first refusal and recovery use the placement ledger
+ok - real spawn enforces finish-first before resource allocation
+ok - flow journal and read-only report preserve transitions, coverage and two-day signal
+ok - journal edges preserve help, calendar boundaries and honest unknown results
+ok - fixed checkpoint fields warn through unread status and appear in both brief roles
+ok - checkpoint warnings reach the actual drain once without blocking it

@@ -1,0 +1,37 @@
+SCENARIO: real fm-spawn routes through finish-first before Herdr allocation
+Lab session: fm-lab-finishfirst6-48759-32734
+
+Herdr panes before dispatch attempt:
+[]
+
+fm-spawn exit: 1
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.noVFBp
+warning: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.noVFBp/data/oldest/launch-brief.md records no ship branch; defaulting to legacy branch fm/oldest
+warning: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.noVFBp/data/oldest/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode local-only - confirm its definition of done matches
+notice: oldest ships mode=local-only while the standing posture for demo is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+finish-first: finish carried first (priority 2, in_flight)
+
+Herdr panes after refused dispatch:
+[]
+
+Backlog row after refused dispatch:
+task:
+  id: oldest
+  title: Older queued work
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: ship
+  repo: demo
+  priority: 2
+  created: 2026-10-30
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+
+Task metadata exists: no
