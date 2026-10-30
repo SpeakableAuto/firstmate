@@ -61,7 +61,7 @@ if [ -n "$step" ]; then
   safe "$step" || refuse_unreadable
   stepname=$(query "select step_name from step_results where run_id='$run' and (step_name='$step' or id='$step') limit 1") || refuse_unreadable
 else
-  stepname=$(query "select step_name from step_results where run_id='$run' and status='awaiting_approval' limit 1") || refuse_unreadable
+  stepname=$(query "select step_name from step_results where run_id='$run' and status in ('awaiting_approval','fix_review') limit 1") || refuse_unreadable
 fi
 [ -n "$stepname" ] || refuse_unreadable
 [ "$stepname" = review ] || { say "step '$stepname' is not review: allow"; exit 0; }
