@@ -492,8 +492,7 @@ fm_backlog_mutate() {  # <data-dir> <verb> <id> [flag...]
   source_status=$?
   [ "$source_status" -eq 0 ] || return "$source_status"
   if ! fm_flow_begin "$data" "$verb" "$id" "$FM_BACKLOG_FLOW_LANDING"; then
-    FM_BACKLOG_TRANSITION_ERROR="flow history could not record $verb $id; backlog unchanged"
-    return 1
+    fm_flow_warning "$data" "could not record $verb $id; history incomplete"
   fi
   flow_token=$FM_FLOW_TOKEN
   if [ -n "$FM_BACKLOG_AXI_FILE" ]; then
@@ -911,7 +910,7 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
     return 1
   fi
   case "$landing" in
-    none|merge|local) ;;
+    none|merge|local|report) ;;
     *)
       FM_BACKLOG_TRANSITION_ERROR="invalid landing authority in pending-close record $marker"
       return 1

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Admission policy for fm-finish-first.sh's tasks-axi list output."""
+"""WIP admission; queue ordering belongs to the existing placement queue."""
 import datetime
+import re
 import json
 import pathlib
-import re
 import sys
 
 
@@ -31,7 +31,7 @@ def read_rows(text):
     headers = [(i, match) for i, match in headers if match]
     if not headers:
         if lines and lines[0] == 'count: 0':
-            return []
+            return {'present': True, 'records': []}
         raise ValueError('tasks-axi returned no complete task list')
     if len(headers) != 1:
         raise ValueError('ambiguous tasks-axi task list')
@@ -56,20 +56,34 @@ def read_rows(text):
         priority = row['priority']
         if priority != '-' and not re.fullmatch(r'[0-9]+', priority):
             raise ValueError('invalid backlog priority')
-        row['priority'] = 3 if priority == '-' else int(priority)
+        row['priority'] = 2 if priority == '-' else int(priority)
         if row['created'] != '-':
             datetime.date.fromisoformat(row['created'])
         row['order'] = (row['created'] if row['created'] != '-' else '', len(rows))
         rows.append(row)
     if len(rows) != count or len({row['id'] for row in rows}) != count:
         raise ValueError('truncated or duplicate tasks-axi task list')
-    return rows
+    return {'present': True, 'records': [dict(r, structured=True, impact='P'+str(r['priority']), hold_reason=r['held']=='yes', unresolved_blocker_ids=['blocked'] if r['blocked']=='yes' else []) for r in rows]}
 
 
-def admit(rows, task_id, config_dir, stop_starting):
-    cap = None
-    if stop_starting not in ('yes', 'no', 'unknown'):
-        raise ValueError('invalid stop-starting signal')
+def admit(backlog, task_id, config_dir):
+    if not backlog.get('present'):
+        raise ValueError('backlog missing')
+    rows = [row for row in backlog['records'] if row.get('structured')]
+    target = next((row for row in rows if row['id'] == task_id), None)
+    if target is None:
+        raise ValueError(f'backlog item {task_id} missing')
+    if target.get('hold_reason') or target.get('unresolved_blocker_ids'):
+        print(f'finish-first: {task_id} is held or blocked')
+        return 1
+    if target['state'] == 'in_flight':
+        print(f'finish-first: resume allowed for {task_id}')
+        return 0
+    if target['state'] != 'queued':
+        raise ValueError(f'{task_id} is not queued or in flight')
+    if target['impact'] == 'P0':
+        print(f'finish-first: P0 start allowed for {task_id}')
+        return 0
     placement = config_dir / 'crew-placement.json'
     if placement.exists() or placement.is_symlink():
         if placement.is_symlink() or not placement.is_file():
@@ -78,47 +92,22 @@ def admit(rows, task_id, config_dir, stop_starting):
         cap = profile.get('max_crew') if isinstance(profile, dict) else None
         if type(cap) is not int or cap <= 0:
             raise ValueError('crew-placement.json max_crew must be a positive integer')
-    target = next((row for row in rows if row['id'] == task_id), None)
-    if target is None:
-        raise ValueError(f'backlog item {task_id} missing')
-    if target['held'] == 'yes' or target['blocked'] == 'yes':
-        print(f'finish-first: {task_id} is held or blocked')
-        return 1
-    if target['state'] == 'in_flight':
-        print(f'finish-first: resume allowed for {task_id}')
-        return 0
-    if target['state'] != 'queued':
-        raise ValueError(f'{task_id} is not queued or in flight')
-    work = [r for r in rows if r['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')]
-    inflight = [r for r in work if r['state'] == 'in_flight']
-    if cap is not None and len(inflight) >= 2 * cap:
-        oldest = min(inflight, key=lambda r: (r['priority'], r['order']))
-        print(f"finish-first: WIP {len(inflight)}/{2 * cap}; finish {oldest['id']} first")
-        return 1
-    finishable = [r for r in inflight if r['held'] == 'no' and r['blocked'] == 'no']
-    if stop_starting == 'yes' and finishable:
-        first = min(finishable, key=lambda r: (r['priority'], r['order']))
-        if target['priority'] >= first['priority']:
-            print(f"finish-first: two-day stop; finish {first['id']} first "
-                  f"(priority {first['priority']}, in_flight)")
+        inflight = [r for r in rows if r['state'] == 'in_flight'
+                    and r['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')]
+        if len(inflight) >= 2 * cap:
+            available = [r for r in inflight if not r.get('hold_reason')
+                         and not r.get('unresolved_blocker_ids')]
+            action = ('finish ' + available[0]['id'] + ' first') if available else 'all open work is held or blocked'
+            print(f'finish-first: WIP {len(inflight)}/{2 * cap}; {action}')
             return 1
-    older = [r for r in work if r['id'] != task_id
-             and r['state'] in ('queued', 'in_flight')
-             and r['held'] == 'no' and r['blocked'] == 'no'
-             and (r['priority'] < target['priority']
-                  or (r['priority'] == target['priority']
-                      and (r['state'] == 'in_flight' or r['order'] < target['order'])))]
-    if older:
-        first = min(older, key=lambda r: (r['priority'], r['state'] != 'in_flight', r['order']))
-        print(f"finish-first: finish {first['id']} first (priority {first['priority']}, {first['state']})")
-        return 1
     print(f'finish-first: start allowed for {task_id}')
     return 0
 
 
 if __name__ == '__main__':
     try:
-        sys.exit(admit(read_rows(sys.stdin.read()), sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3]))
-    except (ValueError, OSError) as exc:
+        backlog = read_rows(sys.stdin.read()) if '--native' in sys.argv else json.load(sys.stdin)
+        sys.exit(admit(backlog, sys.argv[1], pathlib.Path(sys.argv[2])))
+    except (ValueError, OSError, KeyError, TypeError) as exc:
         print(f'finish-first: {exc}', file=sys.stderr)
         sys.exit(2)

@@ -19,58 +19,35 @@ check() {
   expect_code "$want" "$rc" "$out"
   assert_contains "$out" "$needle" "admission diagnostic"
 }
-bash "$ROOT/bin/fm-tasks-axi.sh" hold urgent --reason 'outside answer' --kind external >/dev/null
-check 1 carried candidate
-bash "$ROOT/bin/fm-tasks-axi.sh" unhold urgent >/dev/null
-check 0 'allowed' urgent
-bash "$ROOT/bin/fm-tasks-axi.sh" hold urgent --reason 'outside answer' --kind external >/dev/null
-check 0 'resume' current
-# Held and blocked items never order otherwise dispatchable work.
-bash "$ROOT/bin/fm-tasks-axi.sh" hold oldest --reason 'outside answer' --kind external >/dev/null
-check 1 carried candidate
-bash "$ROOT/bin/fm-tasks-axi.sh" block carried --by held >/dev/null
-check 1 current candidate
-bash "$ROOT/bin/fm-tasks-axi.sh" hold current --reason 'outside answer' --kind external >/dev/null
+# Open work, missing briefs and capacity waits must not serialize a level.
 check 0 allowed candidate
-# WIP counts backlog rows, including holds, and never parked metadata.
-bash "$ROOT/bin/fm-tasks-axi.sh" unhold urgent >/dev/null
-printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
-check 1 'WIP' urgent
-bash "$ROOT/bin/fm-tasks-axi.sh" unhold current >/dev/null
-check 0 resume current
-printf '{"version":1,"max_crew":2}\n' > "$FM_HOME/config/crew-placement.json"
 check 0 allowed urgent
-printf '{"version":1,"max_crew":true}\n' > "$FM_HOME/config/crew-placement.json"
-check 2 'max_crew' urgent
-rm "$FM_HOME/config/crew-placement.json"
+check 0 resume current
 mkdir -p "$FM_HOME/state"
 printf 'kind=ship\n' > "$FM_HOME/state/parked.meta"
-check 0 allowed urgent
-check 2 'missing' absent
-pass 'finish-first prioritizes carried work and bounds WIP from placement'
-
-# Two prior AEST days with more starts than finishes activate the stop signal.
-python3 - "$FM_HOME/data/flow-history.jsonl" <<'PY'
-import datetime as dt, json, sys
-aest = dt.timezone(dt.timedelta(hours=10))
-today = dt.datetime.now(dt.timezone.utc).astimezone(aest).date()
-rows = [{'type':'coverage','version':1,
-         'timestamp':dt.datetime.combine(today-dt.timedelta(days=3), dt.time(), aest).astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}]
-for offset in (2, 1):
-    day = today-dt.timedelta(days=offset)
-    for number in (1, 2):
-        token = f'{day}-{number}'
-        stamp = dt.datetime.combine(day, dt.time(12), aest).astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        base = {'token':token,'task_id':token,'priority':2,'landing':'none','timestamp':stamp}
-        rows.append(dict(base, type='attempt'))
-        rows.append(dict(base, type='transition', action='start', result=0))
-with open(sys.argv[1], 'w') as stream:
-    for row in rows:
-        stream.write(json.dumps(row)+'\n')
-PY
-check 1 'two-day stop' candidate
-check 0 allowed urgent
-pass 'two-day stop blocks the same level while higher priority jumps'
+check 0 allowed candidate
+printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
+check 1 WIP candidate
+check 0 'P0' urgent
+check 0 resume current
+# Canonical impact overrides legacy priority, including trailing metadata.
+python3 - "$FM_HOME/data/backlog.md" <<'PYROW'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); s=p.read_text().replace('(priority: 0)', '(priority: 3) (impact: P0)')
+p.write_text(s)
+PYROW
+check 0 P0 urgent
+printf '{"version":1,"max_crew":2}\n' > "$FM_HOME/config/crew-placement.json"
+check 0 allowed candidate
+printf '{"version":1,"max_crew":true}\n' > "$FM_HOME/config/crew-placement.json"
+check 2 max_crew candidate
+rm "$FM_HOME/config/crew-placement.json"
+check 2 missing absent
+bash "$ROOT/bin/fm-tasks-axi.sh" hold candidate --reason 'outside answer' --kind external >/dev/null
+check 1 held candidate
+bash "$ROOT/bin/fm-tasks-axi.sh" unhold candidate >/dev/null
+pass 'only WIP bounds new starts; P0 and resumes remain runnable'
 
 # The placement decision must retain the finish-first refusal and queue it.
 printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
@@ -79,24 +56,32 @@ SCRIPT_DIR="$ROOT/bin"
 . "$ROOT/bin/fm-tasks-axi-lib.sh"
 . "$ROOT/bin/fm-backlog-transition-lib.sh"
 . "$ROOT/bin/fm-placement-lib.sh"
-FM_PLACEMENT_ID=urgent
+FM_PLACEMENT_ID=candidate
 FM_PLACEMENT_ACTIVE=1
 RELAUNCH=0
 KIND=ship
 PROJ=demo
-seed='{"task":"urgent","request":{},"checks":{},"admitted":true}'
+seed='{"task":"candidate","request":{},"checks":{},"admitted":true}'
 decision=$(fm_placement_finish_first "$seed")
 assert_equals fail "$(jq -r '.checks["finish-first"].status' <<< "$decision")" 'placement checks order and WIP'
 rc=0
 fm_placement_publish "$decision" >/dev/null 2>&1 || rc=$?
 expect_code 1 "$rc" 'placement refuses work above WIP'
-assert_equals '["finish-first"]' "$(jq -c '.waits.urgent.failed' "$STATE/capacity.json")" 'refusal enters existing queue'
+assert_equals wip "$(jq -r '.waits.candidate.state' "$STATE/capacity.json")" 'WIP wait is not a machine-capacity bottleneck'
+assert_equals '["finish-first"]' "$(jq -c '.waits.candidate.failed' "$STATE/capacity.json")" 'refusal enters existing queue'
 printf '{"version":1,"max_crew":2}\n' > "$CONFIG/crew-placement.json"
 FM_PLACEMENT_MODE=recheck
 decision=$(fm_placement_finish_first "$seed")
 fm_placement_publish "$decision" >/dev/null
-assert_equals ready "$(jq -r '.waits.urgent.state' "$STATE/capacity.json")" 'capacity recheck releases the waiting item'
-pass 'finish-first refusal and recovery use the placement ledger'
+assert_equals ready "$(jq -r '.waits.candidate.state' "$STATE/capacity.json")" 'capacity recheck releases the waiting item'
+# Queue ordering is independent of admission: older queued work leads, and
+# carried resumptions lead new work within the same impact level.
+for id in oldest current; do
+  printf '%s\n' "$decision" | jq --arg id "$id" '.task=$id | .impact="P2"' | python3 "$ROOT/bin/fm-placement.py" record "$STATE" "$id" recheck >/dev/null
+done
+ordered=$(backlog_json "$DATA/backlog.md" | python3 "$ROOT/bin/fm-placement.py" ordered "$STATE")
+assert_equals 'current,oldest,candidate' "$(jq -r '[.[].task]|join(",")' <<< "$ordered")" 'carried work then oldest queued work leads its level'
+pass 'finish-first refusal, recovery and runnable queue order use the placement ledger'
 # The real spawn entrypoint refuses before allocating a worker or local copy.
 # shellcheck source=tests/fixtures.sh
 . "$ROOT/tests/fixtures.sh"
@@ -105,6 +90,7 @@ fm_test_spawn_home "$spawn_home" claude
 fm_test_spawn_brief "$spawn_home" candidate
 printf 'backend = "markdown"\n' > "$spawn_home/.tasks.toml"
 cp "$ROOT/tests/fixtures/finish-first/backlog.md" "$spawn_home/data/backlog.md"
+printf '{"version":1,"max_crew":1}\n' > "$spawn_home/config/crew-placement.json"
 fm_git_init_commit "$spawn_home/projects/demo"
 fm_git_add_origin "$spawn_home/projects/demo" "$TMP_ROOT/demo.origin.git"
 fakebin=$(fm_test_make_spawn_fakebin "$TMP_ROOT/spawn-tools" gh gh-axi no-mistakes)
@@ -119,7 +105,7 @@ rc=0
 out=$(fm_test_run_spawn "$spawn_home" "$TMP_ROOT/never-allocated" "$fakebin" \
   candidate "$spawn_home/projects/demo" --mode no-mistakes --yolo off) || rc=$?
 expect_code 1 "$rc" 'real spawn rejects newer work'
-assert_contains "$out" 'finish urgent first' 'real spawn names priority leader'
+assert_contains "$out" 'WIP' 'real spawn names priority leader'
 assert_absent "$spawn_home/allocated" 'refusal happens before worker allocation'
 assert_absent "$spawn_home/state/candidate.meta" 'refusal leaves no parked task record'
 assert_contains "$(TASKS_AXI_FILE="$spawn_home/data/backlog.md" tasks-axi show candidate)" 'state: queued' 'refused job remains queued'
