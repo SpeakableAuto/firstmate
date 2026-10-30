@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Point build output and caches at a dedicated work drive, with no internal fallback.
-# Usage: FM_HOME=/absolute/firstmate fm-work-drive.sh check|verify|install [--dry-run]
+# Usage: FM_HOME=/absolute/firstmate fm-work-drive.sh check|install [--dry-run]
+#        FM_HOME=/absolute/firstmate fm-work-drive.sh verify [--project <path>]
 #        FM_HOME=/absolute/firstmate fm-work-drive.sh exec -- <command> [args...]
 #        FM_HOME=/absolute/firstmate fm-work-drive.sh simctl <simctl args...>
 # Config: $FM_HOME/config/work-drive, plain lines (never sourced):
@@ -192,8 +193,57 @@ check_placement() {
   [ "$failed" -eq 0 ] || return 3
 }
 
+check_project_treehouse() {
+  local project=$1 file treehouse_root
+  file="$project/treehouse.toml"
+  if [ ! -f "$file" ] || [ -L "$file" ]; then
+    echo "refused treehouse: $file is missing, not a regular file, or symlinked" >&2
+    return 3
+  fi
+  if ! treehouse_root=$(python3 - "$file" <<'PY'
+import re
+import sys
+
+roots = []
+in_table = False
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for raw in handle:
+        line = raw.rstrip("\r\n")
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("["):
+            in_table = True
+            continue
+        if in_table or not re.match(r"root\s*=", stripped):
+            continue
+        match = re.fullmatch(r'root\s*=\s*"([^"\\]*)"\s*(?:#.*)?', stripped)
+        if not match:
+            sys.exit(1)
+        roots.append(match.group(1))
+if len(roots) != 1:
+    sys.exit(1)
+print(roots[0])
+PY
+  ); then
+    echo "refused treehouse: $file must contain one literal top-level root" >&2
+    return 3
+  fi
+  if ! real_dir "$treehouse_root"; then
+    echo "refused treehouse: $treehouse_root is missing or not a real directory" >&2
+    return 3
+  fi
+  case "$treehouse_root" in
+    "$root"|"$root"/*) ;;
+    *)
+      echo "refused treehouse: $treehouse_root is outside $root" >&2
+      return 3 ;;
+  esac
+  echo "ok treehouse root $treehouse_root"
+}
+
 run_verify() {
-  local failed=0 out sh script name expected actual i allow
+  local project=${1:-} failed=0 out sh script name expected actual i allow
   run_check || return $?
   sh=${SHELL:-/bin/sh}
   script=
@@ -250,6 +300,7 @@ run_verify() {
     done
   fi
   check_placement || failed=1
+  [ -z "$project" ] || check_project_treehouse "$project" || failed=1
   [ "$failed" -eq 0 ] || return 3
 }
 
@@ -375,13 +426,34 @@ enroll_growth_check() {
     echo "would run: launchctl bootstrap $domain $(shell_quote "$plist")"
     return 0
   fi
-  mkdir -p -- "$launch_dir" "$log_dir"
-  tmp=$(mktemp "$launch_dir/.fm-internal-growth.XXXXXXXX") || return 1
-  render_growth_plist > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 0644 "$tmp" || { rm -f -- "$tmp"; return 1; }
-  mv -f -- "$tmp" "$plist"
+  if ! mkdir -p -- "$launch_dir" "$log_dir"; then
+    echo 'refused internal growth enrollment: could not create launchd directories' >&2
+    return 3
+  fi
+  if ! tmp=$(mktemp "$launch_dir/.fm-internal-growth.XXXXXXXX"); then
+    echo 'refused internal growth enrollment: could not create the temporary plist' >&2
+    return 3
+  fi
+  if ! render_growth_plist > "$tmp"; then
+    rm -f -- "$tmp"
+    echo 'refused internal growth enrollment: could not render the plist' >&2
+    return 3
+  fi
+  if ! chmod 0644 "$tmp"; then
+    rm -f -- "$tmp"
+    echo 'refused internal growth enrollment: could not set the plist mode' >&2
+    return 3
+  fi
+  if ! mv -f -- "$tmp" "$plist"; then
+    rm -f -- "$tmp"
+    echo 'refused internal growth enrollment: could not install the plist' >&2
+    return 3
+  fi
   launchctl bootout "$domain/$GROWTH_LABEL" >/dev/null 2>&1 || true
-  launchctl bootstrap "$domain" "$plist"
+  if ! launchctl bootstrap "$domain" "$plist"; then
+    echo 'refused internal growth enrollment: launchctl bootstrap failed' >&2
+    return 3
+  fi
   echo "enrolled $GROWTH_LABEL"
 }
 run_install() {
@@ -431,7 +503,11 @@ run_exec() {
 cmd=$1; shift
 case "$cmd" in
   check) [ "$#" -eq 0 ] || { usage >&2; exit 2; }; run_check ;;
-  verify) [ "$#" -eq 0 ] || { usage >&2; exit 2; }; run_verify ;;
+  verify)
+    project=
+    case "${1:-}" in --project) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; project=$2; shift 2 ;; esac
+    [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+    run_verify "$project" ;;
   install)
     dry=0
     case "${1:-}" in --dry-run) dry=1; shift ;; esac

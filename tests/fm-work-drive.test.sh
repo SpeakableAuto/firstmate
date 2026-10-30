@@ -29,6 +29,9 @@ SH
 cat > "$FAKEBIN/launchctl" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$HOME/launchctl-calls"
+if [ "${1:-}" = bootstrap ] && [ -e "$HOME/launchctl-fail-bootstrap" ]; then
+  exit 17
+fi
 SH
 chmod +x "$FAKEBIN"/*
 
@@ -197,6 +200,43 @@ write_placement
 out=$(wd verify)
 assert_contains "$out" 'ok placement requires SimulatorDevices' 'matching placement passes'
 pass 'verify checks the launch allowlist and placement profile'
+
+project="$case_dir/project"
+treehouse_root="$drive/Treehouse"
+mkdir -p "$project" "$treehouse_root"
+printf 'root = "%s"\n' "$treehouse_root" > "$project/treehouse.toml"
+out=$(wd verify --project "$project")
+assert_contains "$out" "ok treehouse root $treehouse_root" 'literal project Treehouse root passes'
+printf '[pool]\nroot = "%s"\n' "$treehouse_root" > "$project/treehouse.toml"
+set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'nested Treehouse root refuses'
+assert_contains "$out" 'must contain one literal top-level root' 'non-top-level root is named'
+printf 'root = "%s"\n' "$drive/MissingTreehouse" > "$project/treehouse.toml"
+set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'missing Treehouse root refuses'
+assert_contains "$out" 'is missing or not a real directory' 'missing Treehouse root is named'
+printf 'root = "%s"\n' "$case_dir" > "$project/treehouse.toml"
+set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'Treehouse root outside the drive refuses'
+assert_contains "$out" "is outside $drive" 'outside Treehouse root is named'
+rm "$project/treehouse.toml"
+printf 'root = "%s"\n' "$treehouse_root" > "$case_dir/treehouse.toml"
+ln -s "$case_dir/treehouse.toml" "$project/treehouse.toml"
+set +e; out=$(wd verify --project "$project" 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'symlinked Treehouse config refuses'
+assert_contains "$out" 'or symlinked' 'symlinked Treehouse config is named'
+pass 'verify checks each project Treehouse root on the drive'
+
+new_case enrollment_failure
+mkdir -p "$drive"
+write_placement
+touch "$user/launchctl-fail-bootstrap"
+set +e; out=$(wd install 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'failed LaunchAgent bootstrap refuses install'
+assert_contains "$out" 'launchctl bootstrap failed' 'failed bootstrap is named'
+assert_not_contains "$out" 'enrolled local.firstmate.internal-growth' 'failed bootstrap is not reported as enrolled'
+assert_not_contains "$out" 'ok fresh-shell' 'verification does not run after failed enrollment'
+pass 'install stops when daily growth enrollment fails'
 
 new_case block_order
 make_drive
