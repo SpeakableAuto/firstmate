@@ -1,0 +1,116 @@
+{
+  "observed_at": "2026-10-30T12:28:05Z",
+  "status": "clear",
+  "ranked_by": "pace headroom",
+  "selection": "quota-balanced",
+  "pooled": true,
+  "chosen": {
+    "home": "local",
+    "provider": "codex",
+    "profile": {
+      "harness": "codex",
+      "model": "gpt-6-astra",
+      "effort": "high"
+    },
+    "headroom": -0.79,
+    "eligible": true
+  },
+  "check": {
+    "verdict": "balanced",
+    "reason": null,
+    "requested": {
+      "home": "local",
+      "provider": "codex",
+      "profile": {
+        "harness": "codex",
+        "model": "gpt-6-astra"
+      },
+      "headroom": -0.79,
+      "eligible": true,
+      "reason": "ok"
+    },
+    "pick": null
+  },
+  "homes": [
+    {
+      "id": "local",
+      "eligible": true,
+      "unavailable": null,
+      "reason": null
+    },
+    {
+      "id": "m0002",
+      "eligible": true,
+      "unavailable": null,
+      "reason": null
+    }
+  ],
+  "candidates": [
+    {
+      "home": "local",
+      "provider": "codex",
+      "profile": {
+        "harness": "codex",
+        "model": "gpt-6-astra"
+      },
+      "headroom": -0.79,
+      "eligible": true,
+      "unranked": null,
+      "behind": null,
+      "reason": "ok"
+    },
+    {
+      "home": "local",
+      "provider": "claude",
+      "profile": {
+        "harness": "claude",
+        "model": "opus"
+      },
+      "headroom": -14.84,
+      "eligible": true,
+      "unranked": null,
+      "behind": null,
+      "reason": "ok"
+    },
+    {
+      "home": "m0002",
+      "provider": "codex",
+      "profile": {
+        "harness": "codex",
+        "model": "gpt-6-astra"
+      },
+      "headroom": -0.79,
+      "eligible": true,
+      "unranked": null,
+      "behind": null,
+      "reason": "ok"
+    },
+    {
+      "home": "m0002",
+      "provider": "claude",
+      "profile": {
+        "harness": "claude",
+        "model": "opus"
+      },
+      "headroom": -9.77,
+      "eligible": false,
+      "unranked": false,
+      "behind": null,
+      "reason": "Claude crew at its limit on m0002: 3 of 3 (live: kitchen-pr23-rereview2, pr46-rereview, pr51-rereview2)"
+    }
+  ],
+  "spread": {
+    "top": "m0002 codex",
+    "bottom": "claude",
+    "points": 14.05,
+    "threshold": 20,
+    "alarm": false
+  },
+  "global_spread": {
+    "top": "m0002 codex",
+    "bottom": "claude",
+    "points": 14.05,
+    "threshold": 20,
+    "alarm": false
+  }
+}

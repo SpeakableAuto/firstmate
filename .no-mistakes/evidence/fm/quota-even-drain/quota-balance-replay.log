@@ -1,0 +1,5 @@
+# historical: {"mode": "historical", "placed": {"codex": 42, "claude": 12, "claude_m0002": 0}, "final_percent": {"codex": 2.1, "claude": 78.4, "claude_m0002": 97.6}, "final_headroom": {"codex": -68.19, "claude": -8.82, "claude_m0002": 1.47}, "lowest_percent": {"codex": 2.1, "claude": 6.1, "claude_m0002": 24.0}, "final_spread": 69.7, "behind_placements": 0, "held": 0, "historical_codex_starts_refused": 0, "unplaced": 0}
+ok - replaying the recorded provider choices reproduces Codex running dry first
+# balanced: {"mode": "balanced", "placed": {"codex": 23, "claude": 10, "claude_m0002": 21}, "final_percent": {"codex": 46.4, "claude": 80.7, "claude_m0002": 93.0}, "final_headroom": {"codex": -23.92, "claude": -6.54, "claude_m0002": -3.09}, "lowest_percent": {"codex": 46.4, "claude": 6.1, "claude_m0002": 4.6}, "final_spread": 20.8, "behind_placements": 0, "held": 19, "historical_codex_starts_refused": 21, "unplaced": 0}
+ok - replaying the same starts through the balanced pick drains the allowances evenly
+# all fm-quota-balance-replay tests passed

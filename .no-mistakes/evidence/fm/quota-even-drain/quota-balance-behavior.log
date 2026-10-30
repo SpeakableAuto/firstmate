@@ -1,0 +1,4 @@
+ok - the spawn gate enforces the balanced pick, alerts degraded starts, uses fresh evidence, and honors recorded overrides
+ok - measured draw comes from sampled allowance loss per crew-hour and crew lifetimes
+ok - fm-spawn refuses an off-balance crew before provisioning and launches the balanced one
+# all fm-quota-balance tests passed

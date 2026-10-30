@@ -1,0 +1,50 @@
+ok - absent key is off: one stderr line, exit 0, no network call
+ok - TYPESAFE_API_KEY= in .env activates the tool; environment and config overrides work
+ok - clear: one rule Choice request, key on the fd header only, spendPriority argmax over every candidate
+ok - paced dispatch prefers the next reset and publishes a blocked task queue
+ok - never-send list withholds the request on a match or a bad list, and never prints the value
+ok - rules snapshots and shell quoting preserve the profile protocol
+ok - no-rule fallback, Agy, Gemini, and documented configurations resolve
+ok - ambiguous: confidence below the fixed floor hands the decision back
+ok - per-rule confidence floors fall to the most probable runner-up that clears its own floor
+ok - only the brief's task sections and scout tag reach the model, with a whole-brief fallback
+ok - escalate: a rule declared approval: captain never yields a profile
+ok - rule floor: known shortfall falls through while unavailable evidence escalates
+ok - declared provider and profile floor evidence are applied in code
+ok - nonnumeric spendPriority evidence is never ranked
+ok - partial and missing quota evidence remain eligible but unranked
+ok - provider-wide and exact quota rows combine into one limiting candidate
+ok - candidate-order avoids projected exhaustion only with a passing through-reset alternative
+ok - candidate-order honors file/rule preference, default fallback, floors, uncertainty, and exhaustion
+ok - default: no rule matched resolves among the default profiles
+ok - near-tie: configured order breaks quota-balanced ties within the band; clear winners and floors are unchanged
+ok - quota-balanced selection vetoes projected exhaustion only when a through-reset candidate remains
+ok - no rankable candidate: the tool escalates instead of guessing
+ok - native Codex binds to codex-home before default, independently of Pi accounts and row order
+ok - Pi native adapters bind to codex-home with existing fallbacks and schema 5 compatibility
+ok - schema 6: each candidate binds to its account row; schema 5 is unchanged
+ok - quota evidence comes from one quota-axi --json read, and its failure is an error outcome
+ok - API, transport, and response failures are error outcomes with exit 0
+ok - configuration errors exit 2 before any network call
+ok - the pool ranks every machine's candidates by spendPriority with no home-machine margin
+ok - every candidate-bearing answer evaluates the whole machine pool
+ok - local quota failure leaves this home unavailable without blocking peers
+ok - configured order breaks near-ties across the pool
+ok - each machine resolves its floor for clear, approval-gated, and ambiguous outcomes
+ok - an unreachable remote machine is disclosed and falls back to local
+ok - a project is eligible exactly on the machines that have it
+ok - an exhausted local machine places work on a machine with headroom
+ok - 65 parked records on each machine do not block resolver placement
+ok - the Claude crew cap and session floor apply per account on each machine
+ok - exact cross-home ties use account load, then a stable task-key hash
+ok - Codex projected to run out is vetoed while Claude anywhere runs through reset
+ok - candidate-order ranks the pool by configured position, then quota, with the runway pass-over
+ok - a batch of 20 charges each placement and spreads across accounts and machines
+ok - placements are charged across separate calls inside the charge window
+ok - placement charges apply only to the selected profile's quota scopes
+ok - a never-send match withholds only its own brief in a batch
+ok - bounded Claude cache recovery ranks recent evidence, preserves candidate order, and discloses age
+ok - placement selection keeps task fit, ranks by quota, and gives Claude only ties above its session floor
+ok - quota balance ranks by pace with no preferred provider, keeps a 10% reserve, alarms on spread, and checks spawns
+ok - s16-model-tie: Codex-first equal-fit equal-62% replay selects Claude and records placement
+# all fm-dispatch-resolve tests passed

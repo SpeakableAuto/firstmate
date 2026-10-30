@@ -1,0 +1,8 @@
+{
+  "observed_at": "2026-10-30T12:28:31Z",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.zfYZQe\nClaude quota: cached reading 32s old\nerror: quota balance: the balanced pick is codex:gpt-6-astra on codex (headroom -0.79); requested claude:opus has headroom -14.84\n",
+  "task_metadata": "absent",
+  "launch_endpoint": "not-created"
+}
