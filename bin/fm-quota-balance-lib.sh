@@ -3,7 +3,7 @@
 # crewmate or scout spawn (fresh or relaunch) proceeds only when the requested
 # profile is on the allowance the balanced pick names, so the balance rule is
 # enforced at launch instead of resting on whoever chose the profile. Quota
-# balance is the default; quota_balance only tunes its numbers.
+# balance is the default with a fixed 10% reserve and 20-point spread.
 # docs/configuration.md "Quota balance" owns the policy; bin/fm-dispatch-resolve.sh
 # --rule ... --check owns the pick and records the placement's charge.
 #
@@ -64,7 +64,7 @@ fm_quota_balance_unverifiable() { # <id> <harness> <model> <reason>
 }
 
 fm_quota_balance_last_refusal() { # <resolver-output> <rule> <harness> <model>
-  local out=$1 rule=$2 harness=$3 model=$4 file provider account threshold now result
+  local out=$1 rule=$2 harness=$3 model=$4 file provider account now result
   file="$STATE/quota-balance-last.json"
   [ -r "$file" ] && [ ! -L "$file" ] || return 1
   now=$(date +%s)
@@ -83,8 +83,7 @@ fm_quota_balance_last_refusal() { # <resolver-output> <rule> <harness> <model>
     provider=$(fm_quota_single_provider_for_harness "$harness" 2>/dev/null) || provider=''
   fi
   [ -n "$provider" ] || return 1
-  threshold=$(jq -r '.quota_balance.spread_points // 20' "$CONFIG/crew-dispatch.json" 2>/dev/null) || return 1
-  result=$(jq -r --argjson now "$now" --arg provider "$provider" --arg account "$account" --argjson threshold "$threshold" '
+  result=$(jq -r --argjson now "$now" --arg provider "$provider" --arg account "$account" '
     select((.at | type) == "number" and $now - .at >= 0 and $now - .at < 900 and (.accounts | type) == "array") |
     [.accounts[] | select(.home == "local" and .provider == $provider)] as $provider_accounts |
     (if $account != "" then [$provider_accounts[] | select((.account // "") == $account)]
@@ -92,11 +91,29 @@ fm_quota_balance_last_refusal() { # <resolver-output> <rule> <harness> <model>
     select(($requested | length) == 1 and ([.accounts[].headroom | select(type == "number")] | length) > 0) |
     ($requested[0]) as $req | (.accounts | max_by(.headroom)) as $full |
     (((($full.headroom - $req.headroom) * 100) | round) / 100) as $points |
-    select($points > $threshold) |
+    select($points > 20) |
     [$points, ($req.label // $req.provider), ($full.label // $full.provider), .at] | @tsv
   ' "$file" 2>/dev/null) || return 1
   [ -n "$result" ] || return 1
   printf '%s\n' "$result"
+}
+
+fm_quota_balance_mapped_charge() { # <id> <harness> <model> <rules>
+  local id=$1 harness=$2 model=$3 rules=$4 provider
+  provider=$(jq -r --arg h "$harness" --arg m "$model" '
+    [(.default // []), (.rules[]?.use)] | flatten
+    | map(select(.harness == $h and (.model // "") == $m)) | first | .provider // empty
+  ' "$rules" 2>/dev/null) || provider=''
+  if [ -z "$provider" ]; then
+    if [ "$(type -t fm_quota_single_provider_for_harness)" != function ]; then
+      # shellcheck source=bin/fm-quota-axi-lib.sh
+      . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+    fi
+    provider=$(fm_quota_single_provider_for_harness "$harness" 2>/dev/null) || provider=''
+  fi
+  [ -n "$provider" ] || return 1
+  FM_QUOTA_BALANCE_CHARGE=$(jq -cn --arg key "$id" --arg p "$provider" --arg m "$model" --argjson at "$(date +%s)" \
+    '{key:$key,at:$at,home:"local",provider:$p,account:"",model:$m,scopes:["all_models"],claude:($p=="claude"),draw:5,span:900}')
 }
 
 fm_quota_balance_gate() {
@@ -133,10 +150,25 @@ fm_quota_balance_gate() {
     ' "$rules" 2>/dev/null) || rule=''
   fi
   if [ -z "$rule" ]; then
-    FM_QUOTA_BALANCE_REASON="quota balance: $harness:${model:-default} is in no dispatch rule; configure its allowance before using it and record balance_override in data/$id/placement.json stating why the task class needs it"
-    FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg reason "$FM_QUOTA_BALANCE_REASON" '{verdict: "refused", reason: $reason}')
-    fm_quota_balance_episode_clear
-    return 1
+    if [ -z "$override" ]; then
+      FM_QUOTA_BALANCE_REASON="quota balance: $harness:${model:-default} is in no dispatch rule; record balance_override in data/$id/placement.json stating why the task class needs it"
+      FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg reason "$FM_QUOTA_BALANCE_REASON" '{verdict: "refused", reason: $reason}')
+      fm_quota_balance_episode_clear
+      return 1
+    fi
+    local charge
+    if ! fm_quota_balance_mapped_charge "$id" "$harness" "$model" "$rules"; then
+      FM_QUOTA_BALANCE_REASON="quota balance: $harness:${model:-default} is in no dispatch rule and its override allowance cannot be mapped"
+      FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg reason "$FM_QUOTA_BALANCE_REASON" '{verdict: "refused", reason: $reason}')
+      fm_quota_balance_episode_clear
+      return 1
+    fi
+    charge=$FM_QUOTA_BALANCE_CHARGE
+    FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg override "$override" --argjson charge "$charge" \
+      '{verdict: "override", reason: "profile is in no dispatch rule", override: $override, charge: $charge}')
+    [ "${6:-charge}" = preflight ] || fm_quota_balance_charge || return 1
+    echo "quota balance: override recorded for $id: $override" >&2
+    return 0
   fi
   [ -r "$brief" ] || brief=/dev/null
   [ -z "$override" ] || extra=(--override "$override")
@@ -195,21 +227,12 @@ fm_quota_balance_gate() {
         return 1
       fi
       if [ -n "$override" ]; then
-        local provider charge key
-        provider=$(jq -r --arg h "$harness" --arg m "$model" '
-          [(.default // []), (.rules[]?.use)] | flatten | map(select(.harness == $h and (.model // "") == $m)) | first | .provider // empty' "$rules")
-        if [ -z "$provider" ]; then
-          # shellcheck source=bin/fm-quota-axi-lib.sh
-          . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
-          provider=$(fm_quota_single_provider_for_harness "$harness") || provider=''
-        fi
-        if [ -z "$provider" ]; then
+        local charge
+        if ! fm_quota_balance_mapped_charge "$id" "$harness" "$model" "$rules"; then
           FM_QUOTA_BALANCE_REASON='quota balance: override allowance cannot be mapped while quota is unavailable'
           return 1
         fi
-        key=$id
-        charge=$(jq -cn --arg key "$key" --arg p "$provider" --arg m "$model" --argjson at "$(date +%s)" \
-          '{key:$key,at:$at,home:"local",provider:$p,account:"",model:$m,scopes:["all_models"],claude:($p=="claude"),draw:5,span:900}')
+        charge=$FM_QUOTA_BALANCE_CHARGE
         FM_QUOTA_BALANCE_RECORD=$(jq -c --argjson charge "$charge" --arg override "$override" '. + {charge:$charge,override:$override}' <<<"$FM_QUOTA_BALANCE_RECORD")
         [ "${6:-charge}" = preflight ] || fm_quota_balance_charge || return 1
       fi

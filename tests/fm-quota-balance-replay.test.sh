@@ -49,7 +49,6 @@ chmod +x "$FAKEBIN/quota-axi"
 # The machine's rule shape with the 40% floors replaced by quota balance.
 cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
 {
-  "quota_balance": { "reserve_percent": 10, "spread_points": 20 },
   "rules": [
     { "when": "Trivial mechanical edit.",
       "use": [ { "harness": "codex", "model": "gpt-6-luna", "effort": "high" },

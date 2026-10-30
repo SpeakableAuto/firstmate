@@ -17,7 +17,6 @@ export QUOTA_FIXTURE
 balance_rules() {  # <config-dir>
   cat > "$1/crew-dispatch.json" <<'JSON'
 {
-  "quota_balance": { "reserve_percent": 10, "spread_points": 20 },
   "rules": [
     { "when": "Hard engineering.",
       "use": [ { "harness": "codex", "model": "gpt-6-astra", "effort": "high" },
@@ -78,10 +77,10 @@ printf '{"rules":[\n' > "$GATE_HOME/config/crew-dispatch.json"
 result=$(gate codex gpt-6-astra high)
 assert_equals 1 "${result%%|*}" 'malformed dispatch config refuses instead of skipping the gate'
 assert_contains "$result" 'is unreadable or malformed' 'the refusal names the broken config'
-# Quota balance is the default: with no quota_balance key the gate still applies.
+# Quota balance applies without an opt-in configuration key.
 printf '%s\n' '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-6-astra","effort":"high"},{"harness":"claude","model":"opus","effort":"high"}]}]}' > "$GATE_HOME/config/crew-dispatch.json"
 result=$(gate codex gpt-6-astra high)
-assert_equals 1 "${result%%|*}" 'the gate applies without any quota_balance key'
+assert_equals 1 "${result%%|*}" 'the gate applies without an opt-in configuration key'
 jq 'del(.providers[1])' "$QUOTA_FIXTURE" > "$TMP_ROOT/claude-only.json"
 printf '%s\n' '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-6-astra","effort":"high"}]}]}' > "$GATE_HOME/config/crew-dispatch.json"
 rm -f "$GATE_HOME/state/quota-balance-last.json"
@@ -144,8 +143,15 @@ result=$(gate grok grok-4 high)
 assert_equals 1 "${result%%|*}" 'a profile in no rule is refused without an override'
 assert_contains "$result" 'record balance_override in data/t1/placement.json' 'the refusal names the required record'
 jq -n '{balance_override:"raw harness required by this task fixture"}' > "$GATE_HOME/data/t1/placement.json"
-result=$(gate grok grok-4 high)
+result=$(gate devin devin high)
 f8=${result%%|*}
+rm "$GATE_HOME/data/t1/placement.json"
+printf '%s\n' '{"balance_override":"needs a Codex effort outside the dispatch rules"}' > "$GATE_HOME/data/t1/placement.json"
+result=$(gate codex gpt-6-astra xhigh)
+assert_equals 0 "${result%%|*}" 'a mapped profile in no dispatch rule proceeds with an override'
+assert_equals 'override:profile is in no dispatch rule:needs a Codex effort outside the dispatch rules' \
+  "$(printf '%s\n' "${result##*|}" | jq -r '"\(.verdict):\(.reason):\(.override)"')" 'the no-rule override records its verdict and reason'
+assert_equals codex "$(jq -r 'select(.key=="t1")|.provider' "$GATE_HOME/state/dispatch-charges.jsonl" | tail -1)" 'the no-rule override charges its mapped allowance'
 rm "$GATE_HOME/data/t1/placement.json"
 # A profile present only in a specialist rule is not evidence of task fit.
 write_quota -60 -3

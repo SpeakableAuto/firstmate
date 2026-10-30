@@ -1263,11 +1263,7 @@ Only a final `no rankable eligible candidate` result caused by pacing with a kno
 Quota balance is the default dispatch rule whenever `config/crew-dispatch.json` exists: every allowance (each machine's Claude account, each Codex account, and any other configured provider) runs down at the same pace relative to its own reset, and every crew start is held to that rather than left to whoever chose the profile.
 This section owns the policy; the [resolver header](../bin/fm-dispatch-resolve.sh), [spawn gate](../bin/fm-quota-balance-lib.sh), and [measured-draw tool](../bin/fm-quota-burn.py) own their mechanics.
 
-```json
-{ "quota_balance": { "reserve_percent": 10, "spread_points": 20 } }
-```
-
-Optional top-level `quota_balance` only tunes the numbers: `reserve_percent` is a number from 0 through 50 (default `10`), `spread_points` is a number from 1 through 100 (default `20`), and no other keys are accepted, so balance cannot be switched off.
+The policy uses a fixed 10% reserve and a fixed 20-point spread threshold, so dispatch configuration cannot weaken either safeguard.
 
 **Pace headroom**
 
@@ -1287,7 +1283,7 @@ The `projected_exhaustion` pass-over does not apply, because headroom already we
 
 **Reserve**
 
-A candidate whose applicable row, after charges and its own expected draw (measured, else the fixed 5-point charge), would fall below `reserve_percent` is not eligible, on every provider alike.
+A candidate whose applicable row, after charges and its own expected draw (measured, else the fixed 5-point charge), would fall below the fixed 10% reserve is not eligible, on every provider alike.
 The reserve replaces the old practice of a 40% Claude floor, which stopped crews with 40% of a Claude allowance unused; drop the profile and rule `floor` declarations when adopting it, since declared floors still apply.
 [Claude crew admission](#claude-crew-admission) refuses only below a 10% five-hour session by default, keeping that much for the supervisor's own session.
 
@@ -1295,10 +1291,10 @@ The reserve replaces the old practice of a 40% Claude floor, which stopped crews
 
 An allowance is one machine's provider account; a shared Codex account with identical window resets counts once across machines, and choosing that account locally is valid even if a remote reading is fresher.
 Claude allowance identity uses machine and account, so drifting reset timestamps cannot rename an open alarm.
-Among the allowances a task could use that have quota for it, counting one whose only obstacle is a free seat, any allowance more than `spread_points` of headroom behind the fullest takes no new work while that gap stands, and the result names it as behind.
+Among the allowances a task could use that have quota for it, counting one whose only obstacle is a free seat, any allowance more than 20 points of headroom behind the fullest takes no new work while that gap stands, and the result names it as behind.
 When no fuller allowance has a seat, the result escalates with "holding rather than draining a behind allowance", and a spawn waits as an ordinary capacity wait instead of draining the behind allowance.
 Separately, every resolver run measures the spread across every configured provider's allowances in each pool it resolves.
-Each distinct gap (a fuller allowance more than `spread_points` ahead of a behind one) is one condition in `state/quota-spread.json` and is announced once through a `check: quota-spread:` wake for firstmate.
+Each distinct gap (a fuller allowance more than 20 points ahead of a behind one) is one condition in `state/quota-spread.json` and is announced once through a `check: quota-spread:` wake for firstmate.
 A pool closes a condition only when it measured both allowances and saw the gap shrink to at least 5 points below the opening threshold, so in a batch a pool that never saw an allowance cannot clear or replace another pool's condition; a condition no pool confirms for a day is dropped.
 A reopened condition alerts at most once per hour; the recent notification history survives closing the condition.
 The alarm is for firstmate, which reaches the captain only when work cannot self-correct.
@@ -1319,16 +1315,17 @@ Before anything is provisioned, `fm-spawn.sh` asks the resolver for the balanced
 An unreadable or malformed `config/crew-dispatch.json` refuses the start rather than skipping the check.
 The rule is `data/<id>/placement.json`'s `dispatch_rule`, else the default profiles when they hold the requested profile, else the first rule that does.
 An inferred specialist rule cannot evade the global spread; record the task classification or an explicit override when the task genuinely requires that class.
-A profile in no rule refuses even with an override: its allowance must be configured so a passing start can be charged.
+A profile in no rule refuses without a non-empty `balance_override`; with one, it proceeds only when its allowance can be mapped, records `verdict: "override"` with reason `profile is in no dispatch rule`, and charges that allowance.
 Structural resolver errors refuse; only missing quota evidence takes the unverifiable path.
 When no candidate has quota evidence at all, the start proceeds with the verdict `unverifiable` recorded, because unknown quota is disclosed uncertainty rather than an unconditional block.
 On a home without `config/crew-placement.json`, each such start is also appended to `state/quota-balance-unverifiable.jsonl`, and the first start in an open episode raises one `check: quota-balance-unverifiable:` wake.
 A balanced or refused verdict closes the episode, so a later degraded episode alerts again.
-Each successful resolver reading saves `state/quota-balance-last.json`; while that reading is under 15 minutes old, an unverifiable start is refused when its local provider allowance was more than `spread_points` behind the fullest allowance in the reading.
+Each successful resolver reading saves `state/quota-balance-last.json`; while that reading is under 15 minutes old, an unverifiable start is refused when its local provider allowance was more than 20 points behind the fullest allowance in the reading.
 Every machine in the task's [pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines) is judged, so a pick on a second mate's machine refuses the local start and names that second mate.
 A non-empty `balance_override` in `placement.json` states why the task class needs that profile and is kept with the decision, including on the last-reading path.
 Ordinary overrides cannot pass the reserve or an exhausted window.
 An explicit `impact: "P0"` together with that override may use the reserve down to a hard 5% after its own draw, with one supervisor alert per task.
+This deliberate P0 exception follows Kitchen rule 20, which requires a P0 to drop everything.
 Machine fit and room still apply.
 A parent's fresh, task-bound `parent_placement` can be carried with the remote task classification; the receiving home honors that pool decision while checking its own allowance reserve.
 The [gate header](../bin/fm-quota-balance-lib.sh) owns the transfer record and expiry checks.
@@ -1338,7 +1335,8 @@ The resolver excludes machines whose placement profile rejects the task workload
 Each dispatching home runs its own check against its own `config/crew-dispatch.json`; secondmate homes inherit that file from the primary.
 **Apply and rollback**
 
-Install the code on every participating dispatch machine before changing any inherited configuration, then remove the old provider preference and Claude floors in one sitting.
+Install the code on every participating dispatch machine before changing any inherited configuration, which enables the fixed gate wherever `config/crew-dispatch.json` exists.
+The only dispatch-configuration change on each machine is removing the old provider preference and 40% Claude floor declarations in one sitting.
 Leave `min_session_percent` absent so the code owns its default; a configured value of 10 would be rejected by the earlier code on rollback.
 Verify the local and remote spawn checks after installation before releasing queued work.
 For rollback, pause new starts, restore the preceding code on all dispatch machines, restore the preceding dispatch profiles and selection policy with `min_session_percent` still absent, and verify admission before resuming.
