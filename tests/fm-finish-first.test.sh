@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Real tasks-axi fixture follows a redacted operational backlog's section,
 # priority, since, hold and merged metadata shapes. No live home is mutated.
-set -u
+set -eu
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-finish-first)
@@ -14,7 +14,8 @@ cp "$ROOT/tests/fixtures/finish-first/backlog.md" "$FM_HOME/data/backlog.md"
 check() {
   local want=$1 needle=$2 out rc
   shift 2
-  out=$(bash "$ROOT/bin/fm-finish-first.sh" "$@" 2>&1); rc=$?
+  rc=0
+  out=$(bash "$ROOT/bin/fm-finish-first.sh" "$@" 2>&1) || rc=$?
   expect_code "$want" "$rc" "$out"
   assert_contains "$out" "$needle" "admission diagnostic"
 }
@@ -47,3 +48,13 @@ printf 'kind=ship\n' > "$FM_HOME/state/parked.meta"
 check 0 allowed urgent
 check 2 'missing' absent
 pass 'finish-first orders real backlog rows and bounds WIP without task-record counts'
+
+# Existing placement crew limits supply the WIP default.
+printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
+check 1 WIP urgent
+printf '2\n' > "$FM_HOME/config/crew-slot-cap"
+check 0 allowed urgent
+rm "$FM_HOME/config/crew-slot-cap"
+printf '{"version":1,"max_crew":true}\n' > "$FM_HOME/config/crew-placement.json"
+check 2 'max_crew' urgent
+pass 'WIP reuses placement crew limits with an explicit override'

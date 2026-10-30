@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Real backlog mutations feed the journal; report fixtures exercise day windows.
-set -u
+set -eu
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-flow-report)
 command -v tasks-axi >/dev/null || { echo 'ok - skipped (tasks-axi missing)'; exit 0; }
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE FM_ROOT_OVERRIDE
+export TZ=UTC
 export FM_HOME="$TMP_ROOT/home"
 mkdir -p "$FM_HOME/data" "$FM_HOME/config"
 printf 'backend = "markdown"\n' > "$FM_HOME/.tasks.toml"
@@ -27,6 +28,11 @@ events=[r for r in rows if r['type']=='transition']
 assert [r['action'] for r in events] == ['start','done','reopen'], events
 assert all(r['task_id']=='candidate' and r['priority']==2 and r['timestamp'] for r in events)
 PY
+# Help is read-only and must reach the underlying CLI unchanged.
+before=$(cksum "$FM_HOME/data/flow-history.jsonl")
+out=$(bash "$wrapper" start --help)
+assert_contains "$out" 'usage: tasks-axi start' 'mutation help remains available'
+assert_equals "$before" "$(cksum "$FM_HOME/data/flow-history.jsonl")" 'help does not journal'
 # Lifecycle mutations must use the same journal, without relying on wrapper use.
 FM_HOME="$FM_HOME" bash -c '
   . "$1/bin/fm-tasks-axi-lib.sh"
@@ -61,6 +67,11 @@ out=$(bash "$report" --since 2020-10-29 --until 2020-10-29)
 assert_contains "$out" 'stop_starting: yes' 'lookback preserves the signal in a one-day morning report'
 out=$(bash "$report" --since 2020-10-29 --until 2020-10-30)
 assert_contains "$out" 'stop_starting: no' 'an empty day breaks the run'
+# Reporting uses the selected calendar, without changing UTC journal stamps.
+out=$(bash "$report" --since 2020-10-27 --until 2020-10-29 --timezone Australia/Brisbane)
+assert_contains "$out" 'complete coverage from 2020-10-28' 'first partial AEST day is excluded'
+assert_contains "$out" '2020-10-27 unknown' 'UTC evening header falls on the next AEST day'
+cp "$FM_HOME/data/flow-history.jsonl" "$TMP_ROOT/good-history"
 # Bad history is not silently ignored, and the report remains read-only.
 printf 'broken\n' >> "$FM_HOME/data/flow-history.jsonl"
 before=$(cksum "$FM_HOME/data/flow-history.jsonl")
@@ -68,3 +79,25 @@ out=$(bash "$report" --since 2020-10-27 --until 2020-10-29)
 assert_contains "$out" unknown 'corrupt history reports unknown'
 assert_equals "$before" "$(cksum "$FM_HOME/data/flow-history.jsonl")" 'report must not repair history'
 pass 'flow journal and read-only report preserve transitions, coverage and two-day signal'
+
+# Valid JSON with the wrong shape is also unknown, rather than a traceback.
+printf '[]\n' > "$FM_HOME/data/flow-history.jsonl"
+out=$(bash "$report" --since 2020-10-27 --until 2020-10-29 2>&1)
+assert_contains "$out" 'flow_history: unknown' 'non-object journal row rejected'
+assert_not_contains "$out" Traceback 'schema failure is a supported unknown result'
+cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYBAD'
+import json, sys
+p=sys.argv[1]
+rows=[json.loads(line) for line in open(p)]
+rows[2]['timestamp']='2020-10-25T12:00:00Z'
+with open(p,'w') as f:
+    for row in rows: f.write(json.dumps(row)+'\n')
+PYBAD
+out=$(bash "$report" --since 2020-10-27 --until 2020-10-29)
+assert_contains "$out" 'flow_history: unknown' 'receipt before its attempt is invalid'
+cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
+printf '{"type":"attempt","timestamp":"2020-10-30T12:00:00Z","token":"unfinished","task_id":"unfinished","priority":3}\n' >> "$FM_HOME/data/flow-history.jsonl"
+out=$(bash "$report" --since 2020-10-27 --until 2020-10-29)
+assert_contains "$out" 'stop_starting: unknown' 'unmatched attempt never certifies complete history'
+pass 'journal edges preserve help, calendar boundaries and honest unknown results'
