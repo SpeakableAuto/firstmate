@@ -1,0 +1,19 @@
+SCENARIO 1: capped fix without authorization
+review-round cap reached (2 of 2): ask firstmate; it may allow one more round with token file /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-cap-live.jBQVqP/review-round-overrides/01LIVEWRAPPER00000000000001.review-3 (create its consumed/ directory too)
+exit=3 expected=3
+SCENARIO 2A: token for another run does not authorize
+review-round cap reached (2 of 2): ask firstmate; it may allow one more round with token file /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-cap-live.jBQVqP/review-round-overrides/01LIVEWRAPPER00000000000001.review-3 (create its consumed/ directory too)
+exit=3 expected=3
+SCENARIO 2B: matching token authorizes exactly once and is audited
+no-mistakes review-round cap: consumed one-use override for run 01LIVEWRAPPER00000000000001 review round 3; audit /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-cap-live.jBQVqP/review-round-overrides/consumed/01LIVEWRAPPER00000000000001.review-3.20261030T171702Z.67762
+exit=0 expected=0
+live-token-exists=no
+consumed-audit-count=1
+SCENARIO 2C: consumed token cannot be reused
+review-round cap reached (2 of 2): ask firstmate; it may allow one more round with token file /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-cap-live.jBQVqP/review-round-overrides/01LIVEWRAPPER00000000000001.review-3 (create its consumed/ directory too)
+exit=3 expected=3
+SCENARIO 3: implicit lookup honors repository identity and plus branch
+repo-a: review-round-cap: review round 1 of 2: fix allowed
+exit=0 expected=0
+repo-b: review-round cap reached (2 of 2): ask firstmate; it may allow one more round with token file /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-cap-live.jBQVqP/review-round-overrides/01LIVEWRAPPER00000000000002.review-3 (create its consumed/ directory too)
+exit=3 expected=3

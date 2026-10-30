@@ -1,0 +1,17 @@
+ok - status inspection is allowed
+ok - explicit review reports the real capped count
+ok - run-shaped fix_review gate reports two reviews and escalates
+ok - override for another run is refused
+ok - matching override is consumed and logged
+ok - consumed override cannot be reused
+ok - first fix allowed at awaiting_approval
+ok - first fix allowed at fix_review
+ok - explicit step ID and equals arguments are supported
+ok - valid plus branch resolves within the current repository
+ok - implicit lookup is scoped by repository and branch
+ok - past-cap review is refused
+ok - non-review fix_review gate remains allowed
+ok - approval and skip remain unchanged
+ok - missing gate fails closed
+ok - missing count fails closed
+ok - unavailable store fails closed without creating it

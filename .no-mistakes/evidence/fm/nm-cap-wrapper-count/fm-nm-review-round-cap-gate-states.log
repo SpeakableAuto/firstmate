@@ -1,0 +1,9 @@
+AWAITING_APPROVAL with one completed review
+review-round-cap: review round 1 of 2: fix allowed
+exit=0 expected=0
+FIX_REVIEW with one completed review (review-fix invocation is not counted)
+review-round-cap: review round 1 of 2: fix allowed
+exit=0 expected=0
+EXPLICIT run and step selection at the default two-round cap
+review-round cap reached (2 of 2): ask firstmate; it may allow one more round with token file /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-cap-states.fgzhIM/overrides/01LIVEGATESTATES000000000001.review-3 (create its consumed/ directory too)
+exit=3 expected=3
