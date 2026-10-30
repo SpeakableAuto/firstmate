@@ -1812,7 +1812,6 @@ pass 'placement selection keeps task fit, ranks by quota, and gives Claude only 
 BAL_RULES="$TMP_ROOT/balance-rules.json"
 cat > "$BAL_RULES" <<'JSON'
 {
-  "quota_balance": { "reserve_percent": 10, "spread_points": 20 },
   "rules": [
     { "when": "Hard engineering.",
       "use": [ { "harness": "codex", "model": "gpt-6-astra", "effort": "high" },
@@ -1851,11 +1850,11 @@ cp "$BAL_RULES" "$RULES"
 mkdir -p "$HOME_DIR/state"
 rm -f "$HOME_DIR/state"/crew*.meta "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
 
-# Quota balance is the default: without quota_balance the same ranking applies.
-jq 'del(.quota_balance)' "$BAL_RULES" > "$RULES"
+# Quota balance is the default without a configuration key.
+cp "$BAL_RULES" "$RULES"
 write_balance_quota "$QUOTA" 70 -5 60 -30
 balance_run "$BRIEF" --rule rule_1
-assert_contains "$out" "profile: --harness 'claude' --model 'opus' --effort 'high'" 'pace headroom ranks without any quota_balance key'
+assert_contains "$out" "profile: --harness 'claude' --model 'opus' --effort 'high'" 'pace headroom ranks without an opt-in configuration key'
 assert_contains "$out" 'spread: claude is 25 points of headroom ahead of codex (alarm above 20)' 'the default spread alarm is 20 points'
 rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue"
 cp "$BAL_RULES" "$RULES"

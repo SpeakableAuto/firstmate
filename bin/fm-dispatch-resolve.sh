@@ -20,8 +20,8 @@
 # A refusal carries check.reason; only a passing verdict charges the requested
 # profile. Empty model or effort are passed as ''.
 #
-# Quota balance is the default (docs/configuration.md "Quota balance";
-#   quota_balance only tunes reserve_percent and spread_points): candidates rank
+# Quota balance is the default (docs/configuration.md "Quota balance") with a
+#   fixed 10% reserve and 20-point spread: candidates rank
 #   by pace headroom (headroom=, the worst window's points left minus window
 #   left) with no preferred provider whenever any candidate publishes it;
 #   candidates without it rank only when none publish it; a candidate that
@@ -313,10 +313,6 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
     ($items | map([.harness, (.model // null), (.effort // null)] | @json)) as $keys
     | ($keys | length) != ($keys | unique | length);
   if type != "object" then "top-level value must be an object"
-  elif has("quota_balance") and (.quota_balance | type) != "object" then "quota_balance must be an object"
-  elif has("quota_balance") and ((.quota_balance | keys - ["reserve_percent", "spread_points"]) | length) > 0 then "quota_balance accepts only reserve_percent and spread_points"
-  elif has("quota_balance") and (.quota_balance | has("reserve_percent")) and ((.quota_balance.reserve_percent | type) != "number" or .quota_balance.reserve_percent < 0 or .quota_balance.reserve_percent > 50) then "quota_balance.reserve_percent must be a number from 0 through 50"
-  elif has("quota_balance") and (.quota_balance | has("spread_points")) and ((.quota_balance.spread_points | type) != "number" or .quota_balance.spread_points < 1 or .quota_balance.spread_points > 100) then "quota_balance.spread_points must be a number from 1 through 100"
   elif has("rules") and (.rules | type) != "array" then "rules must be an array"
   elif any((.rules // [])[]; type != "object") then "each rule must be an object"
   elif any((.rules // [])[]; (.when | type) != "string" or (.when | length) == 0) then "each rule needs non-empty when"
@@ -640,11 +636,11 @@ if pending; then
 fi
 
 # ---- quota balance: measured draw per placement --------------------------------
-# Quota balance is the default (quota_balance only tunes its two numbers). Each
+# Quota balance uses fixed policy constants. Each
 # call records one burn sample (this machine's quota plus its live crew by
 # model) and reads the measured draw per model back; bin/fm-quota-burn.py owns
 # both.
-BALANCE=$(jq -c '.quota_balance // {} | {reserve_percent: (.reserve_percent // 10), spread_points: (.spread_points // 20)}' "$RULES")
+BALANCE='{"reserve_percent":10,"spread_points":20}'
 printf '%s\n' '{}' > "$WORK/burn.json"
 balance_live_crews() { # JSON array of this home's live crew: {task, provider, model}
   local id meta harness provider rows='[]'
@@ -1152,7 +1148,7 @@ POOL_JQ='
     end] as $evald |
   ([$evald[] | select(.sel)]) as $usable |
   ([$evald[].candidates[]]) as $all_cands |
-  # Spread alarm: an allowance more than spread_points of headroom behind the
+  # Spread alarm: an allowance more than 20 points of headroom behind the
   # fullest one this task could use takes no new work while that gap stands.
   (task_spread($all_cands)) as $spread |
   ($all_cands | map(
@@ -1509,7 +1505,7 @@ render() { # <index>
 }
 
 # Spread alarm: every distinct open gap (a fuller allowance more than
-# spread_points of headroom ahead of a behind one) is one condition in
+# 20 points of headroom ahead of a behind one) is one condition in
 # state/quota-spread.json, announced once through a check wake. A pool closes a
 # condition only when it measured both allowances and saw the gap closed, so a
 # later pool in the same batch that never saw an allowance cannot clear or
