@@ -1273,7 +1273,7 @@ A heavy-machine example:
   "min_free_memory_percent": 15,
   "max_swap_mib": 1024,
   "drive": "/Volumes/Kitchen",
-  "required_drive_dirs": ["Build/DerivedData", "Build/Tmp", "Caches/npm", "Caches/Playwright", "SimulatorDevices", "Logs/Codex"],
+  "required_drive_dirs": ["Build/DerivedData", "Build/Tmp", "Caches/npm", "Caches/Playwright", "SimulatorDevices"],
   "data_volume": {"path": "/System/Volumes/Data", "min_free_gib": 10}
 }
 ```
