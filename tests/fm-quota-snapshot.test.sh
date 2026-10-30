@@ -168,6 +168,8 @@ rm -f "$HOME_DIR/config/quota-feed"
 pass "a configured quota feed fills unmeasured rows and stands in only while fresh"
 
 # --- remote snapshot through fm-on ----------------------------------------------
+# Only positively live crew counts, so the remote crew launched moments ago.
+printf 'spawn_gen=s%s.0\n' "$(date +%s)" >> "$TMP_ROOT/remote-home/state/crew.meta"
 reset_remote ok
 run code out err -- --secondmate peer
 expect_code 0 "$code" "remote snapshot exits 0"
