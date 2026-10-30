@@ -520,6 +520,21 @@ check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'a delivered default stall alert 
 PANE=$'❯ run it\n● Recovered after the alert\n────────────────────\n❯ \n────────────────────'; TICK=4602; watchdog_tick
 check "$(stage)" watching 'real progress after a default stall alert rearms monitoring'
 
+stall_case
+PANE=$HUNG
+IDENTITY=$'claude\tidle'
+watchdog_tick
+for t in 1900 2400 2800; do
+  BEACON=$((BEACON + 1))
+  TICK=$t; watchdog_tick
+done
+check "$(stage)" nudged 'an idle native state cannot hide a busy rendered stall'
+BEACON=$((BEACON + 1)); TICK=4600; watchdog_tick
+check "$STOPPED" 0 'a busy rendered stall is not stopped by the default policy'
+check "$(stage)" down 'a busy rendered stall reaches the down stage despite fresh beacons'
+[ ! -e "$DIR/launches" ] || fail 'a busy rendered stall launched a replacement supervisor'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'a busy rendered stall sends one urgent alert'
+
 hung_case; URGENT_RESULT=failed:delivery-failed
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$(jq -r .alerted "$DIR/stall.json")" false 'failed default urgent delivery leaves the incident open'
@@ -548,7 +563,7 @@ TICK=9000; watchdog_tick; TICK=20000; watchdog_tick
 check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'down supervisor is not re-alerted every tick'
 BEACON=501; TICK=20001; watchdog_tick
 check "$(stage)" down 'a working supervisor cannot claim progress from the watcher beacon'
-IDENTITY=$'claude\tidle'; BEACON=502; TICK=20002; watchdog_tick
+IDENTITY=$'claude\tidle'; PANE=$CLEAR; BEACON=502; TICK=20002; watchdog_tick
 check "$(stage)" watching 'an idle supervisor can rearm from a fresh watcher beacon'
 
 restart_hung_case
@@ -639,7 +654,7 @@ check "$(stage)" watching 'an older stall record remains usable'
 # A proven restart remains local even when another stall follows.
 restart_hung_case
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
-IDENTITY=$'claude\tidle'; BEACON=600; TICK=4700; watchdog_tick
+IDENTITY=$'claude\tidle'; PANE=$CLEAR; BEACON=600; TICK=4700; watchdog_tick
 IDENTITY=$'claude\tworking'
 TICK=6500; watchdog_tick; TICK=8300; watchdog_tick
 check "$STOPPED" 2 'a second stall restarts again'

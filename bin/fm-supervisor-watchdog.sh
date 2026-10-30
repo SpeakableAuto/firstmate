@@ -650,7 +650,7 @@ watchdog_stall() {
   fi
   prev=$(printf '%s' "$SREC" | jq -r .beacon)
   case "${NATIVE_STATE:-}" in
-    idle|done) [ -z "$beacon" ] || [ "$beacon" = "$prev" ] || progressed=1 ;;
+    idle|done) [ "$VERDICT" = busy ] || [ -z "$beacon" ] || [ "$beacon" = "$prev" ] || progressed=1 ;;
   esac
   prev=$(printf '%s' "$SREC" | jq -r .oldest)
   [ -z "$prev" ] || [ "$oldest" = "$prev" ] || progressed=1
