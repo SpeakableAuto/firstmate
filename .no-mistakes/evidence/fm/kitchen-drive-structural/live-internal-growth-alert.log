@@ -1,0 +1,11 @@
+SCENARIO: real daily internal-growth checker alerts once above 1 GiB
+AEST 2026-10-30 11:49:30 AEST
+allocated_test_growth_kib=1127084
+threshold_kib=1048576
+queued_internal_growth_alerts=1
+wake_queue:
+1793324970	1	check	internal-growth	check: internal-growth: internal growth issue since 2026-10-30T01:49Z: /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-growth/scan (+1.1 GiB); /System/Volumes/Data free 36.7 GiB; log /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-growth/state/internal-growth/log.jsonl
+latest_measurements:
+{"used_delta_kib":1127052,"flagged":[{"after_kib":1127088,"before_kib":4,"growth_kib":1127084,"kind":"folder","path":"/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-growth/scan"}],"new":["/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-growth/scan"],"alert":"internal growth issue since 2026-10-30T01:49Z: /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-growth/scan (+1.1 GiB); /System/Volumes/Data free 36.7 GiB; log /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-growth/state/internal-growth/log.jsonl","free_kib":38517772}
+{"used_delta_kib":1127128,"flagged":[{"after_kib":1127088,"before_kib":4,"growth_kib":1127084,"kind":"folder","path":"/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-growth/scan"}],"new":[],"alert":null,"free_kib":38517696}
+RESULT: PASS, growth above 1 GiB opened one episode and the repeated run did not queue a second alert

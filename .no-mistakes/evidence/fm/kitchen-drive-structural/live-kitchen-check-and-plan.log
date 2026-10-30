@@ -1,0 +1,59 @@
+SCENARIO: live mounted Kitchen check
+AEST 2026-10-30 11:48:07 AEST
+/dev/disk7s1 on /Volumes/Kitchen (apfs, local, nodev, nosuid, journaled)
+ok drive /Volumes/Kitchen
+ok env PLAYWRIGHT_BROWSERS_PATH /Volumes/Kitchen/Caches/Playwright
+ok npm-cache /Volumes/Kitchen/Caches/npm
+ok xcode-derived-data /Volumes/Kitchen/Build/DerivedData
+ok simulator-set /Volumes/Kitchen/SimulatorDevices
+ok build-tmp /Volumes/Kitchen/Build/Tmp
+RESULT: PASS, every configured target was writable and all probes were cleaned
+
+SCENARIO: dry-run complete cutover plan
+would write to /Users/maxverstappen/.zshenv:
+# >>> firstmate work drive >>>
+export PLAYWRIGHT_BROWSERS_PATH='/Volumes/Kitchen/Caches/Playwright'
+# <<< firstmate work drive <<<
+would run: npm config set cache '/Volumes/Kitchen/Caches/npm' --location=user
+would run: defaults write com.apple.dt.Xcode IDECustomDerivedDataLocation -string '/Volumes/Kitchen/Build/DerivedData'
+would write /Users/maxverstappen/Library/LaunchAgents/local.firstmate.internal-growth.plist:
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.firstmate.internal-growth</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/bin/fm-internal-growth.sh</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>FM_HOME</key>
+		<string>/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-workdrive</string>
+		<key>HOME</key>
+		<string>/Users/maxverstappen</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>3</integer>
+		<key>Minute</key>
+		<integer>30</integer>
+	</dict>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/maxverstappen/Library/Logs/firstmate-internal-growth.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/maxverstappen/Library/Logs/firstmate-internal-growth.log</string>
+</dict>
+</plist>
+would run: launchctl bootout gui/501/local.firstmate.internal-growth
+would run: launchctl bootstrap gui/501 '/Users/maxverstappen/Library/LaunchAgents/local.firstmate.internal-growth.plist'
+RESULT: PASS, dry-run rendered tool settings and daily LaunchAgent enrollment without installing them

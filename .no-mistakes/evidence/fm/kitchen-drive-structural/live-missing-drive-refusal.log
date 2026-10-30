@@ -1,0 +1,9 @@
+SCENARIO: missing drive refuses check and build command
+AEST 2026-10-30 11:48:15 AEST
+refused drive: /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-missing/absent-drive is missing, not a directory, or reached through a symlink
+refused drive: /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M657KK2E9MPZA6KMPYR6Q3AQ/.nm-live-missing/absent-drive is missing, not a directory, or reached through a symlink
+check_exit=3
+exec_exit=3
+command_ran=no
+internal_fallback_created=no
+RESULT: PASS, missing drive refused both operations with no fallback

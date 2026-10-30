@@ -1,0 +1,72 @@
+SCENARIO: live placement admission on real Kitchen paths
+AEST 2026-10-30 11:50:10 AEST
+{
+  "admitted": true,
+  "failed": [],
+  "drive": {
+    "status": "pass",
+    "reason": "real mount: /Volumes/Kitchen"
+  },
+  "drive-dirs": [
+    {
+      "key": "drive-dir:Build/DerivedData",
+      "value": {
+        "status": "pass",
+        "reason": "write probe cleaned: /Volumes/Kitchen/Build/DerivedData"
+      }
+    },
+    {
+      "key": "drive-dir:Build/Tmp",
+      "value": {
+        "status": "pass",
+        "reason": "write probe cleaned: /Volumes/Kitchen/Build/Tmp"
+      }
+    },
+    {
+      "key": "drive-dir:Caches/npm",
+      "value": {
+        "status": "pass",
+        "reason": "write probe cleaned: /Volumes/Kitchen/Caches/npm"
+      }
+    },
+    {
+      "key": "drive-dir:Caches/Playwright",
+      "value": {
+        "status": "pass",
+        "reason": "write probe cleaned: /Volumes/Kitchen/Caches/Playwright"
+      }
+    },
+    {
+      "key": "drive-dir:SimulatorDevices",
+      "value": {
+        "status": "pass",
+        "reason": "write probe cleaned: /Volumes/Kitchen/SimulatorDevices"
+      }
+    }
+  ],
+  "treehouse-root": {
+    "status": "pass",
+    "reason": "external Treehouse root: /Volumes/Kitchen",
+    "root": "/Volumes/Kitchen"
+  },
+  "data-disk": {
+    "status": "pass",
+    "reason": "/System/Volumes/Data: 37.806 GiB >= 10 GiB"
+  }
+}
+RESULT: PASS, valid heavy placement was admitted on the real Kitchen mount with the 10 GiB internal free-space floor
+
+SCENARIO: malformed directory contract refuses admission
+{
+  "admitted": false,
+  "failed": [
+    "drive-dirs"
+  ],
+  "drive-dirs": {
+    "status": "fail",
+    "reason": "required_drive_dirs absent or invalid",
+    "condition": "missing-directory-list",
+    "alert": true
+  }
+}
+RESULT: PASS, a string required_drive_dirs value was rejected as a missing directory list

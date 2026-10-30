@@ -1,0 +1,22 @@
+SCENARIO: real project pool plus daily-guard fail-closed verification
+AEST 2026-10-30 11:48:36 AEST
+project_treehouse_contract=root = "/Volumes/Kitchen"
+ok drive /Volumes/Kitchen
+ok env PLAYWRIGHT_BROWSERS_PATH /Volumes/Kitchen/Caches/Playwright
+ok npm-cache /Volumes/Kitchen/Caches/npm
+ok xcode-derived-data /Volumes/Kitchen/Build/DerivedData
+ok simulator-set /Volumes/Kitchen/SimulatorDevices
+ok build-tmp /Volumes/Kitchen/Build/Tmp
+ok fresh-shell PLAYWRIGHT_BROWSERS_PATH=/Volumes/Kitchen/Caches/Playwright
+ok npm cache /Volumes/Kitchen/Caches/npm
+ok xcode derived data /Volumes/Kitchen/Build/DerivedData
+ok placement requires Caches/Playwright
+ok placement requires Caches/npm
+ok placement requires Build/DerivedData
+ok placement requires SimulatorDevices
+ok placement requires Build/Tmp
+ok treehouse root /Volumes/Kitchen
+refused internal growth LaunchAgent: gui/501/local.firstmate.internal-growth is not loaded
+verify_exit=3
+launchctl_print_exit=113
+RESULT: PASS, real project pool was accepted and the unloaded daily guard made overall verification refuse
