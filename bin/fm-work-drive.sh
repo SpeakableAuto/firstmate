@@ -38,6 +38,7 @@
 # default device-set override, so only simctl calls made through this command use
 # the drive. xcodebuild and Simulator.app keep the default device set.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() { sed -n '2,/^set /{ /^#/{ s/^# \{0,1\}//; p; }; }' "$0"; }
 case "${1:-}" in
   --help|-h|'') usage; [ -n "${1:-}" ] || exit 2; exit 0 ;;
@@ -165,6 +166,15 @@ check_placement() {
     echo 'refused placement: jq is unavailable' >&2
     return 3
   fi
+  if ! jq -e '
+    type == "object" and
+    (.drive | type == "string") and
+    (.required_drive_dirs | type == "array") and
+    all(.required_drive_dirs[]; type == "string")
+  ' "$placement" >/dev/null 2>&1; then
+    echo 'refused placement: crew-placement.json must contain a string drive and an array of directory strings' >&2
+    return 3
+  fi
   if [ "$(jq -r '.drive // ""' "$placement" 2>/dev/null)" != "$root" ]; then
     echo "refused placement: crew-placement.json drive is not $root" >&2
     failed=1
@@ -252,16 +262,18 @@ render_block() {
   printf '%s\n' "$BLOCK_END"
 }
 write_shell_env() {
-  local file=$1 dir tmp begins ends
+  local file=$1 dir tmp
   if [ -L "$file" ]; then
     echo "refused shell env: $file is a symlink; edit its target by hand" >&2
     return 3
   fi
   dir=$(dirname "$file")
   if [ -e "$file" ]; then
-    begins=$(grep -cxF -- "$BLOCK_BEGIN" "$file" || true)
-    ends=$(grep -cxF -- "$BLOCK_END" "$file" || true)
-    if [ "$begins" != "$ends" ] || [ "${begins:-0}" -gt 1 ]; then
+    if ! awk -v b="$BLOCK_BEGIN" -v e="$BLOCK_END" '
+      $0 == b { if (state != 0) invalid = 1; state = 1; next }
+      $0 == e { if (state != 1) invalid = 1; state = 2; next }
+      END { exit(invalid || state == 1) }
+    ' "$file"; then
       echo "refused shell env: $file has an unbalanced or repeated work-drive block" >&2
       return 3
     fi
@@ -327,15 +339,15 @@ prepare_targets() {
   done
 }
 render_growth_plist() {
-  python3 - "$FM_HOME" "$HOME" "$GROWTH_LABEL" <<'PY'
+  python3 - "$FM_HOME" "$HOME" "$SCRIPT_DIR" "$GROWTH_LABEL" <<'PY'
 import os
 import plistlib
 import sys
 
-fm_home, home, label = sys.argv[1:]
+fm_home, home, script_dir, label = sys.argv[1:]
 payload = {
     "Label": label,
-    "ProgramArguments": ["/bin/bash", os.path.join(fm_home, "bin", "fm-internal-growth.sh")],
+    "ProgramArguments": ["/bin/bash", os.path.join(script_dir, "fm-internal-growth.sh")],
     "EnvironmentVariables": {
         "FM_HOME": fm_home,
         "HOME": home,

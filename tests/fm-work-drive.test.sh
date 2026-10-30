@@ -162,7 +162,7 @@ assert_contains "$out" "ok xcode derived data $drive/Build/DerivedData" 'Xcode d
 assert_contains "$out" 'enrolled local.firstmate.internal-growth' 'daily growth check is enrolled'
 for rel in $TARGETS; do [ -d "$drive/$rel" ] || fail "install did not create $rel"; done
 plist="$user/Library/LaunchAgents/local.firstmate.internal-growth.plist"
-python3 - "$plist" "$fm" <<'PY'
+python3 - "$plist" "$ROOT" <<'PY'
 import plistlib
 import sys
 
@@ -185,6 +185,10 @@ assert_equals 3 "$rc" 'allowlist without the name refuses'
 assert_contains "$out" 'PLAYWRIGHT_BROWSERS_PATH is not listed' 'dropped name is named'
 echo PLAYWRIGHT_BROWSERS_PATH >> "$fm/config/launch-env-allowlist"
 wd verify >/dev/null
+jq -n --arg d "$drive" --arg dirs "$TARGETS" '{drive:$d,required_drive_dirs:$dirs}' > "$fm/config/crew-placement.json"
+set +e; out=$(wd verify 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'placement directory string refuses'
+assert_contains "$out" 'an array of directory strings' 'invalid placement schema is named'
 jq -n --arg d "$drive" '{drive:$d,required_drive_dirs:["Build/Tmp"]}' > "$fm/config/crew-placement.json"
 set +e; out=$(wd verify 2>&1); rc=$?; set -e
 assert_equals 3 "$rc" 'placement missing a target refuses'
@@ -193,6 +197,25 @@ write_placement
 out=$(wd verify)
 assert_contains "$out" 'ok placement requires SimulatorDevices' 'matching placement passes'
 pass 'verify checks the launch allowlist and placement profile'
+
+new_case block_order
+make_drive
+write_placement
+cat > "$user/.bash_profile" <<EOF
+export KEEP_BEFORE=1
+# <<< firstmate work drive <<<
+export KEEP_MIDDLE=1
+# >>> firstmate work drive >>>
+export KEEP_AFTER=1
+EOF
+cp "$user/.bash_profile" "$case_dir/profile-before"
+set +e; out=$(wd install 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'reversed work-drive block refuses'
+assert_contains "$out" 'unbalanced or repeated work-drive block' 'invalid block order is named'
+cmp -s "$user/.bash_profile" "$case_dir/profile-before" || fail 'reversed block changed the shell profile'
+[ ! -e "$user/npm-calls" ] || fail 'reversed block changed npm configuration'
+[ ! -e "$user/launchctl-calls" ] || fail 'reversed block enrolled the LaunchAgent'
+pass 'install preserves a shell profile with reversed block markers'
 
 new_case invalid
 printf 'root=%s\nenv=X=../escape\n' "$drive" > "$fm/config/work-drive"
