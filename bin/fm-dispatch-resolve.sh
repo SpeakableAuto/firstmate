@@ -6,6 +6,24 @@
 # Usage:
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>]
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>] <brief-file> [--project <name>] ...
+#   fm-dispatch-resolve.sh --rule <rule_N|default> <brief-file> [--project <name>] ...
+#   fm-dispatch-resolve.sh --rule <rule_N|default> --check <harness> <model> <effort> [--override <reason>] <brief-file> [--project <name>]
+#
+# --rule names the matched rule instead of asking the model: no key, no network.
+# --check (with --rule and one brief) is the spawn-time quota balance check: it
+# prints one JSON result line whose check.verdict is balanced (the requested
+# profile is on the balanced pick's allowance), override (--override recorded,
+# only past a balance refusal, never past the reserve or an exhausted window),
+# or refused with check.reason; only a passing verdict charges the requested
+# profile. Empty model or effort are passed as ''.
+#
+# With quota_balance in the rules file (docs/configuration.md "Quota balance"):
+#   candidates rank by pace headroom (headroom=, the worst window's points left
+#   minus window left) with no preferred provider, a candidate under the reserve
+#   is not eligible, an allowance past the spread alarm is passed over (spread:
+#   line) or the task is held, each call samples burn through fm-quota-burn.py
+#   and charges the measured draw, and a new spread across every configured
+#   allowance appends one "check: quota-spread:" wake (state/quota-spread.json).
 #
 # Each --project names the project of the brief just before it; one given
 # before the first brief names that first brief's project. Several briefs are
