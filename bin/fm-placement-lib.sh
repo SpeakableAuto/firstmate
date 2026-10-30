@@ -79,7 +79,7 @@ fm_placement_alerts() {
 }
 
 # Add the shared backlog policy to the existing placement decision. Rechecks
-# use this too, so an order/WIP refusal stays queued until it actually clears.
+# use this too, so a WIP or two-day refusal stays queued until it clears.
 fm_placement_finish_first() { # <decision-json>
   local decision=$1 reason='not applicable' status=pass applies=0
   if [ "${RELAUNCH:-0}" != 1 ]; then

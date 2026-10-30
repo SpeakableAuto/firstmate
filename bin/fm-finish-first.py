@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WIP admission; queue ordering belongs to the existing placement queue."""
+"""WIP and two-day flow admission; queue ordering belongs to placement."""
 import datetime
 import re
 import json

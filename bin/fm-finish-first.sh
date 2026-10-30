@@ -2,8 +2,8 @@
 # Read-only finish-first admission for a new ship/scout backlog item.
 # Usage: fm-finish-first.sh <task-id>
 # Uses this home's tasks-axi backlog, never task metadata or worktree counts.
-# Exit 0 allows (including resuming an In-flight row), 1 names a hold or
-# a reached WIP bound, 2 means the inputs cannot be proved. No state is changed.
+# Exit 0 allows (including resuming an In-flight row), 1 names a hold, WIP bound,
+# or two-day stop, and 2 means the inputs cannot be proved. No state is changed.
 # Configured placement supplies the crew count used for the WIP bound.
 # The same command can be called by placement admission before fm-spawn.sh.
 set -euo pipefail
