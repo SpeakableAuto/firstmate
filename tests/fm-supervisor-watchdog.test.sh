@@ -427,6 +427,9 @@ watchdog_stop_supervisor() { STOPPED=$((STOPPED+1)); [ "$STOP_OK" = 1 ]; }
 fm_backend_herdr_cli() {
   case "$2 $3" in
     'pane run') printf '%s\n' "$5" >> "$DIR/launches"; [ "$LAUNCH_OK" = 1 ] || return 1
+      if [ "$RESTART_WRITES_TRANSCRIPT" = 1 ]; then
+        printf '{"restart":true}\n' > "$FM_WATCHDOG_TRANSCRIPT_DIR/restart.jsonl"
+      fi
       PROC_STATE=$AFTER_LAUNCH_STATE ;;
     *) return 1 ;;
   esac
@@ -437,9 +440,10 @@ watchdog_send() {
 }
 stall_case() {
   reset_case
-  rm -f "$DIR/stall.json" "$DIR/urgent" "$DIR/launches" "$FM_WAKE_QUEUE" "$DIR/queue-alert" "$DIR/queue-nudge.json"
+  rm -f "$DIR/stall.json" "$DIR/transcript-mark" "$DIR/urgent" "$DIR/launches" "$FM_WAKE_QUEUE" "$DIR/queue-alert" "$DIR/queue-nudge.json"
   UNDER_WAY=1 BEACON=500 PANE=$CLEAR CONFIRM_NATIVE=1 STOPPED=0 STOP_OK=1 LAUNCH_OK=1
   PROC_STATE=agent AFTER_LAUNCH_STATE=agent LAST_SENT= URGENT_RESULT=sent
+  FM_WATCHDOG_TRANSCRIPT_DIR= RESTART_WRITES_TRANSCRIPT=0
 }
 stage() { jq -r .stage "$DIR/stall.json"; }
 HUNG=$'❯ run it\n✻ Thinking… (12s · esc to interrupt)\n────────────────────\n❯ \n────────────────────'
@@ -545,6 +549,11 @@ URGENT_RESULT=sent; TICK=5501; watchdog_tick
 check "$(jq -r .alerted "$DIR/stall.json")" true 'later delivery closes the incident alert'
 TICK=5502; watchdog_tick
 check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 3 'a delivered incident stops retrying'
+hung_case; AFTER_LAUNCH_STATE=other
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+check "$(stage)" down 'a non-agent process cannot prove the restarted supervisor'
+grep -q 'restart attempt failed (not-proven)' "$DIR/urgent" || fail 'non-agent restart did not alert'
+pass 'restart proof requires a real Claude agent process'
 hung_case; STOP_OK=0
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 [ ! -e "$DIR/launches" ] || fail 'a supervisor that cannot be stopped was relaunched over'
@@ -557,6 +566,45 @@ check "$STOPPED" 0 'a draft in the prompt holds the restart'
 check "$(stage)" down 'a verified draft is recorded as a down incident'
 grep -q 'restart held because unsent input may be in the box' "$DIR/urgent" || fail 'verified draft hold did not send the urgent alert'
 pass 'a verified draft uses the urgent held-restart path'
+
+hung_case
+FM_WATCHDOG_TRANSCRIPT_DIR=$TMP/restart-transcripts
+mkdir -p "$FM_WATCHDOG_TRANSCRIPT_DIR"
+RESTART_WRITES_TRANSCRIPT=1
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+check "$(stage)" restarted 'restart transcript is baselined after proof'
+TICK=6400; watchdog_tick
+check "$(stage)" down 'restart-generated transcript does not rearm a hung supervisor'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'hung restarted supervisor alerts after one interval'
+
+hung_case
+watchdog_tick
+jq '.stage="restarting" | .stage_at=1000 | .restart_tries=1' "$DIR/stall.json" > "$DIR/stall.json.tmp"
+mv "$DIR/stall.json.tmp" "$DIR/stall.json"
+PROC_STATE=shell
+TICK=1001; watchdog_tick
+check "$STOPPED" 1 'an interrupted restart retries once'
+check "$(stage)" restarted 'the interrupted restart retry is proven'
+check "$(jq -r .restart_tries "$DIR/stall.json")" 0 'a proven retry clears its restart receipt'
+
+hung_case
+watchdog_tick
+jq '.stage="restarting" | .stage_at=1000 | .restart_tries=2' "$DIR/stall.json" > "$DIR/stall.json.tmp"
+mv "$DIR/stall.json.tmp" "$DIR/stall.json"
+PROC_STATE=shell
+TICK=1001; watchdog_tick
+check "$STOPPED" 0 'an interrupted restart is never retried twice'
+check "$(stage)" down 'an exhausted restart retry becomes a down incident'
+grep -q 'could not be proven after one retry' "$DIR/urgent" || fail 'exhausted restart retry did not alert'
+pass 'restart retry exhaustion sends the urgent alert'
+
+stall_case
+watchdog_tick
+jq 'del(.restart_tries)' "$DIR/stall.json" > "$DIR/stall.json.tmp"
+mv "$DIR/stall.json.tmp" "$DIR/stall.json"
+TICK=1001; watchdog_tick
+check "$(jq -r .restart_tries "$DIR/stall.json")" 0 'an older stall record gains the restart receipt field'
+check "$(stage)" watching 'an older stall record remains usable'
 
 # A proven restart remains local even when another stall follows.
 hung_case

@@ -202,7 +202,7 @@ shift 4
 printf '%s\n' "$*" > "$directory/restart-prompt"
 "$helper" run "$session" pane report-agent "$pane" --source watchdog-fixture --agent claude --state idle >/dev/null
 printf '\033[2J\033[H● Restarted supervisor\n────────────────────\n❯ \n────────────────────'
-sleep 600
+exec -a claude sleep 600
 RESTARTED
 printf 'handoff\n' > "$CASE_DIR/data/supervisor-handoff-1030.md"
 h workspace create --cwd "$CASE_DIR" --label watchdog-stall > "$CASE_DIR/workspace.json"

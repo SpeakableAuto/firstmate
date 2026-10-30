@@ -27,7 +27,9 @@ A visible usage-limit notice counts as progress, because Claude resumes by itsel
 After `FM_WATCHDOG_STALL_SECS` (1800 seconds by default) without progress it sends one guarded nudge, which is withheld when the supervisor is busy or its version is unverified.
 After a second quiet interval it reads a fresh frame and restarts only when the installed version is verified and the composer is explicitly empty.
 A pending, unknown or unreadable composer, an unsupported harness, or version drift holds the restart and sends one urgent alert that says unsent input may be in the box.
-A permitted restart stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a new Claude session started in that pane.
+A permitted restart records a durable `restarting` receipt before it stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a real Claude agent process started in that pane.
+If a tick ends during that restart, the next tick accepts an already proven Claude agent or retries the restart once under the same verified-empty-composer guard, while a second interruption or unproven retry sends the urgent supervisor-down alert.
+After proof, the watchdog baselines transcript, wake, beacon and pane progress produced by the relaunch so an immediately hung supervisor reaches the down alert after one interval.
 An unproven restart or no progress for another interval after a proven one sends one urgent supervisor-down alert through the [urgent captain alert path](wedge-alarm.md#urgent-captain-alerts).
 The same incident retries delivery through the alert limiter until Hermes sends it or reports the incident as a duplicate.
 

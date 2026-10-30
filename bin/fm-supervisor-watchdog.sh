@@ -32,8 +32,10 @@
 # alert because unsent input may be in the box. A permitted restart stops only
 # the target pane's foreground processes, relaunches RESTART_COMMAND there with
 # a prompt naming the newest data/supervisor-handoff-*.md, and proves the new
-# session started. An unproven restart or no progress for STALL_SECS after a
-# proven one sends one urgent supervisor-down alert through fm_urgent_alert.
+# session started as a real Claude agent process. It records the restart before
+# stopping Claude, retries one interrupted attempt, and baselines launch-side
+# progress after proof. An unproven restart or no progress for STALL_SECS after
+# a proven one sends one urgent supervisor-down alert through fm_urgent_alert.
 # Progress of any kind rearms the timer.
 # State: FM_HOME/state/supervisor-watchdog/{stall.json,version-alert}.
 # A stable viewport with a terminal network error, native Claude idle/done,
@@ -399,14 +401,20 @@ watchdog_progress_hash() {
     | shasum -a 256 | awk '{print $1}'
 }
 
+watchdog_transcript_baseline() {
+  local dir=${FM_WATCHDOG_TRANSCRIPT_DIR:-}
+  [ -n "$dir" ] && [ -d "$dir" ] || return 1
+  touch "$DIR/transcript-mark"
+}
+
 # True when any supervisor transcript file is newer than the last tick's mark.
 watchdog_transcript_moved() {
   local dir=${FM_WATCHDOG_TRANSCRIPT_DIR:-} mark="$DIR/transcript-mark" newer
   [ -n "$dir" ] && [ -d "$dir" ] || return 1
-  if [ ! -e "$mark" ]; then : > "$mark"; return 1; fi
+  if [ ! -e "$mark" ]; then watchdog_transcript_baseline; return 1; fi
   newer=$(find "$dir" -maxdepth 3 -type f -name '*.jsonl' -newer "$mark" -print 2>/dev/null | head -1)
   [ -n "$newer" ] || return 1
-  touch "$mark"
+  watchdog_transcript_baseline
 }
 
 watchdog_stall_save() {
@@ -505,10 +513,18 @@ watchdog_restart_composer() {
   printf '%s' "${composer:-unknown}"
 }
 
+watchdog_restart_proven() {
+  local state identity
+  state=$(fm_backend_herdr_pane_process_state "$SESSION" "$PANE_ID")
+  [ "$state" = agent ] || return 1
+  identity=$(watchdog_identity 2>/dev/null) || return 1
+  case "$identity" in claude$'\t'*) return 0 ;; *) return 1 ;; esac
+}
+
 # Relaunch the supervisor in its own pane and prove a new Claude session
 # started there. Sets FAIL_REASON on failure.
 watchdog_restart() {
-  local cmd attempt identity state composer
+  local cmd attempt composer
   composer=$(watchdog_restart_composer)
   [ "$composer" = empty ] || { FAIL_REASON="held:$composer"; return 1; }
   watchdog_stop_supervisor || { FAIL_REASON='stop-failed'; return 1; }
@@ -516,12 +532,40 @@ watchdog_restart() {
   fm_backend_herdr_cli "$SESSION" pane run "$PANE_ID" "$cmd" >/dev/null || { FAIL_REASON='launch-failed'; return 1; }
   for ((attempt=0; attempt<WATCHDOG_RESTART_POLLS; attempt++)); do
     sleep 1
-    state=$(fm_backend_herdr_pane_process_state "$SESSION" "$PANE_ID")
-    identity=$(watchdog_identity 2>/dev/null) || identity=
-    case "$state:$identity" in agent:claude$'\t'*|other:claude$'\t'*) return 0 ;; esac
+    watchdog_restart_proven && return 0
   done
   FAIL_REASON=not-proven
   return 1
+}
+
+watchdog_restart_baseline() {
+  local beacon oldest
+  beacon=$(fm_sup_stat_mtime "$STATE/.last-watcher-beat") || beacon=
+  oldest=$(watchdog_oldest_row) || oldest=
+  watchdog_transcript_baseline || true
+  watchdog_stall_update --arg b "$beacon" --arg o "$oldest" --argjson now "$NOW" \
+    '.beacon=$b | .oldest=$o | .pane="unreadable" | .progress=$now
+    | .stage="restarted" | .stage_at=$now | .restart_tries=0'
+}
+
+watchdog_restart_attempt() {
+  local reason
+  if watchdog_restart; then
+    watchdog_log restarted supervisor
+    watchdog_restart_baseline
+    return 0
+  fi
+  reason=$FAIL_REASON
+  case "$reason" in
+    held:*)
+      watchdog_log held "stall-restart-${reason#held:}"
+      watchdog_enter_down "restart held because unsent input may be in the box"
+      ;;
+    *)
+      watchdog_log held "restart-$reason"
+      watchdog_enter_down "a restart attempt failed ($reason)"
+      ;;
+  esac
 }
 
 watchdog_supervisor_down() {
@@ -544,9 +588,29 @@ watchdog_enter_down() {  # <why>
   watchdog_supervisor_down
 }
 
+watchdog_reconcile_restart() {
+  local tries
+  STALL_ACTED=1
+  if watchdog_restart_proven; then
+    watchdog_log restarted supervisor
+    watchdog_restart_baseline
+    return 0
+  fi
+  tries=$(printf '%s' "$SREC" | jq -r .restart_tries)
+  if [ "$tries" -ge 2 ]; then
+    watchdog_log held restart-retry-exhausted
+    watchdog_enter_down "an interrupted restart could not be proven after one retry"
+    return 0
+  fi
+  watchdog_log action-claimed restart-retry
+  watchdog_stall_update --argjson now "$NOW" \
+    '.stage_at=$now | .restart_tries += 1'
+  watchdog_restart_attempt
+}
+
 # Stall detection and recovery; see the header for the progress contract.
 watchdog_stall() {
-  local beacon oldest pane progressed=0 stage stage_at quiet reason prev
+  local beacon oldest pane progressed=0 stage stage_at quiet prev
   STALL_ACTED=0
   if ! watchdog_under_way; then rm -f "$DIR/stall.json"; return 0; fi
   beacon=$(fm_sup_stat_mtime "$STATE/.last-watcher-beat") || beacon=
@@ -554,7 +618,7 @@ watchdog_stall() {
   pane=$(watchdog_progress_hash)
   if [ ! -e "$DIR/stall.json" ]; then
     SREC=$(jq -cn --arg b "$beacon" --arg o "$oldest" --arg p "$pane" --argjson now "$NOW" \
-      '{beacon:$b,oldest:$o,pane:$p,progress:$now,stage:"watching",stage_at:$now,down_reason:"",alerted:false}')
+      '{beacon:$b,oldest:$o,pane:$p,progress:$now,stage:"watching",stage_at:$now,restart_tries:0,down_reason:"",alerted:false}')
     watchdog_stall_save
     watchdog_transcript_moved || true
     return 0
@@ -562,7 +626,9 @@ watchdog_stall() {
   SREC=$(cat "$DIR/stall.json")
   if ! printf '%s\n' "$SREC" | jq -e '
     type == "object" and ([.beacon,.oldest,.pane,.stage]|all(type=="string")) and
+    (.stage as $stage | ["watching","nudged","restarting","restarted","down","held"] | index($stage) != null) and
     ([.progress,.stage_at] | all(type=="number" and .>=0 and floor==.)) and
+    ((.restart_tries // 0) | type=="number" and .>=0 and floor==.) and
     ((.down_reason // "") | type=="string") and ((.alerted // false) | type=="boolean")' >/dev/null 2>&1; then
     # Keep the evidence and start a fresh timer rather than refusing every tick.
     mv "$DIR/stall.json" "$DIR/stall.json.corrupt"
@@ -570,8 +636,13 @@ watchdog_stall() {
     return 0
   fi
   watchdog_stall_update '
-    .down_reason //= "" | .alerted //= false
+    .restart_tries //= 0 | .down_reason //= "" | .alerted //= false
     | if .stage == "down" and .down_reason == "" then .down_reason="automatic recovery did not bring it back" else . end'
+  stage=$(printf '%s' "$SREC" | jq -r .stage)
+  if [ "$stage" = restarting ]; then
+    watchdog_reconcile_restart
+    return 0
+  fi
   prev=$(printf '%s' "$SREC" | jq -r .beacon)
   case "${NATIVE_STATE:-}" in
     idle|done) [ -z "$beacon" ] || [ "$beacon" = "$prev" ] || progressed=1 ;;
@@ -585,11 +656,10 @@ watchdog_stall() {
   ! watchdog_transcript_moved || progressed=1
   [ "$VERDICT" != usage-limit ] || progressed=1
   watchdog_stall_update --arg b "$beacon" --arg o "$oldest" --arg p "$pane" '.beacon=$b | .oldest=$o | .pane=$p'
-  stage=$(printf '%s' "$SREC" | jq -r .stage)
   if [ "$progressed" = 1 ]; then
     [ "$stage" = watching ] || watchdog_log rearmed "stall-$stage"
     watchdog_stall_update --argjson now "$NOW" \
-      '.progress=$now | .stage="watching" | .stage_at=$now | .down_reason="" | .alerted=false'
+      '.progress=$now | .stage="watching" | .stage_at=$now | .restart_tries=0 | .down_reason="" | .alerted=false'
     return 0
   fi
   stage_at=$(printf '%s' "$SREC" | jq -r .stage_at)
@@ -605,24 +675,9 @@ watchdog_stall() {
       [ "$((NOW - stage_at))" -ge "$STALL_SECS" ] || return 0
       STALL_ACTED=1
       watchdog_log action-claimed restart
-      watchdog_stall_update --argjson now "$NOW" '.stage="restarted" | .stage_at=$now'
-      if watchdog_restart; then
-        watchdog_log restarted supervisor
-        # The relaunch itself is not progress: the next window must show some.
-        watchdog_stall_update '.pane="unreadable"'
-      else
-        reason=$FAIL_REASON
-        case "$reason" in
-          held:*)
-            watchdog_log held "stall-restart-${reason#held:}"
-            watchdog_enter_down "restart held because unsent input may be in the box"
-            ;;
-          *)
-            watchdog_log held "restart-$reason"
-            watchdog_enter_down "a restart attempt failed ($reason)"
-            ;;
-        esac
-      fi
+      watchdog_stall_update --argjson now "$NOW" \
+        '.stage="restarting" | .stage_at=$now | .restart_tries=1'
+      watchdog_restart_attempt
       ;;
     restarted)
       [ "$((NOW - stage_at))" -ge "$STALL_SECS" ] || return 0
