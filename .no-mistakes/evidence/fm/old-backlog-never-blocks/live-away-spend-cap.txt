@@ -1,0 +1,14 @@
+== [BASE] lab=/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.1k54J1  65 parked herdr records -> session fm-lab-ghost-26578 (no server)
+== [BASE] away contract entered, spend cap 4
+== [BASE] fm-spawn exit=1
+error: spawn refused - the away-posture record caps concurrent workers at 4 and 65 ordinary task(s) are live in this home; task ready-task stays queued for the captain's return or for a worker to finish (spend cap: bin/fm-afk-contract.sh)
+== [BASE] all 65 old records byte-identical after spawn
+== [BASE] old records still present: 65
+== [BASE] herdr sessions after: ["default","fm-remote"]
+== [BRANCH] lab=/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.exLBYA  65 parked herdr records -> session fm-lab-ghost-26577 (no server)
+== [BRANCH] away contract entered, spend cap 4
+== [BRANCH] fm-spawn exit=1
+crew liveness unreadable: herdr
+== [BRANCH] all 65 old records byte-identical after spawn
+== [BRANCH] old records still present: 65
+== [BRANCH] herdr sessions after: ["default","fm-remote"]

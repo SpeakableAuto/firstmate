@@ -1,0 +1,20 @@
+ok - Claude admission reads process evidence without recovering absent endpoints
+ok - Claude admission enforces fixed and selected floors, strict overrides, and fail-closed quota evidence
+ok - spawn enforces Claude admission before metadata or launch and releases the lock on refusal
+ok - spawn pacing counts live Codex workers beyond the resolver charge window
+ok - simultaneous Claude spawns cannot both take the last account slot
+ok - spawn help describes Claude identity admission and its raw-shell boundary
+ok - an unpinned Claude launch uses its admitted identity and Pi remains unchanged
+ok - a Claude pin selects its root and sheds the credentials that would outrank it
+ok - a Claude pin refuses a signed-out root even when the invoking process has a usable login and API key
+ok - an ordinary Claude pin selects the default login and drops an ambient root
+ok - malformed, relative, CR-terminated, empty, extra-line, missing-root, and non-file pins refuse before launch
+ok - a Pi pin selects its root and passes the declared provider
+ok - a Pi pin refuses unqualified, missing, undeclared, signed-out, and raw launches
+ok - extension providers and a Pi without auth check fall back to an exact model-listing match
+ok - a Claude pin leaves codex and Pi launches unchanged
+ok - a raw Claude launch command receives the home's pin
+ok - a pinned home refuses a raw Claude command that overrides the account
+ok - an unpinned home refuses a raw Claude account override with unverifiable quota
+ok - a local secondmate reads the launching home's pin and its own home's file is never inherited over
+# all fm-worker-account tests passed

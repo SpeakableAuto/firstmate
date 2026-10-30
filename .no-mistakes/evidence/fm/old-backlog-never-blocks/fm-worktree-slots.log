@@ -1,0 +1,26 @@
+ok - 65 parked records do not consume worktree slots
+reclaimed: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/absent/pool/1/project
+ok - absent cap, malformed config, read-only room, bounded safe reclaim
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/dirty/pool/1/project: worktree has uncommitted changes
+ok - dirty slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/unlanded/pool/1/project: treehouse kept it: 
+ok - unlanded slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/live/pool/1/project: worktree has a live process or process inspection failed
+ok - live slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/lsof-fails/pool/1/project: worktree has a live process or process inspection failed
+ok - lsof-fails slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/claimed/pool/1/project: a slot-owner claim for task active sits beside it
+ok - claimed slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/recorded/pool/1/project: task active records it as its worktree
+ok - recorded slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/leased/pool/1/project: treehouse reports it leased
+ok - leased slot retained and admission refused
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/old-tool/pool/1/project: treehouse kept it: this treehouse has no safe-by-default destroy, so nothing was removed
+ok - old Treehouse cannot destroy slots
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/contended/pool/1/project: another slot allocation or return holds its project lock
+ok - contended project lock keeps slot
+ok - unreadable pool fails closed
+reclaimed: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/symlinked-none/real-pool/1/project
+kept: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-worktree-slots.8qhgIC/symlinked-dirty/real-pool/1/project: worktree has uncommitted changes
+ok - symlinked pool root: recorded spelling reclaims, protected slot kept
+ok - merge-proved returned slot removal signals automatic capacity recheck

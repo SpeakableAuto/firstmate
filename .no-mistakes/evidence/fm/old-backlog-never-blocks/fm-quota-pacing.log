@@ -1,0 +1,4 @@
+ok - ahead and behind accounts follow the linear reset path
+ok - the configured floor slows before blocking and caps concurrency at three
+ok - incomplete reset evidence never fabricates pacing headroom
+ok - invalid opt-in settings fail closed

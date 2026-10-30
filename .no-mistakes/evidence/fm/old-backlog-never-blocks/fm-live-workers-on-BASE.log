@@ -1,0 +1,2 @@
+ok - normal: 65 parked records, two with windows running less and node, admit spawn and remain unchanged
+not ok - away: 65 parked records refused spawn: error: spawn refused - the away-posture record caps concurrent workers at 4 and 65 ordinary task(s) are live in this home; task ready-task stays queued for the captain's return or for a worker to finish (spend cap: bin/fm-afk-contract.sh)

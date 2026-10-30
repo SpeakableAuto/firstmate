@@ -1,0 +1,54 @@
+[BASE] normal posture (spend cap 4 where set), 65 parked herdr records:
+   ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   old records: 65 present, unchanged
+[BASE] away posture (spend cap 4 where set), 65 parked herdr records:
+   REFUSED by away spend cap: caps concurrent workers at 4 and 65 ordinary task(s) are live
+   old records: 65 present, unchanged
+[BASE] quiet posture (spend cap 4 where set), 65 parked herdr records:
+   ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   old records: 65 present, unchanged
+[BASE] away posture, 64 parked + 1 record whose herdr target cannot be read:
+   REFUSED by away spend cap: caps concurrent workers at 4 and 65 ordinary task(s) are live
+   old records: 65 present, unchanged
+[BASE] normal posture, 100 held decisions + 65 parked records:
+   tasks ready -> ready-task (held-1 listed: no)
+   spawn: ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   held after: held[100]
+   old records: 65 present, unchanged
+[BASE] away posture, 100 held decisions + 65 parked records:
+   tasks ready -> ready-task (held-1 listed: no)
+   branch-actor spawn: REFUSED by away spend cap: caps concurrent workers at 4 and 65 ordinary task(s) are live
+   held after: held[100]
+   old records: 65 present, unchanged
+[BASE] quiet posture, 100 held decisions + 65 parked records:
+   tasks ready -> ready-task (held-1 listed: no)
+   spawn: ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   held after: held[100]
+   old records: 65 present, unchanged
+[BRANCH] normal posture (spend cap 4 where set), 65 parked herdr records:
+   ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   old records: 65 present, unchanged
+[BRANCH] away posture (spend cap 4 where set), 65 parked herdr records:
+   ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   old records: 65 present, unchanged
+[BRANCH] quiet posture (spend cap 4 where set), 65 parked herdr records:
+   ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   old records: 65 present, unchanged
+[BRANCH] away posture, 64 parked + 1 record whose herdr target cannot be read:
+   REFUSED: crew liveness unreadable: herdr
+   old records: 65 present, unchanged
+[BRANCH] normal posture, 100 held decisions + 65 parked records:
+   tasks ready -> ready-task (held-1 listed: no)
+   spawn: ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   held after: held[100]
+   old records: 65 present, unchanged
+[BRANCH] away posture, 100 held decisions + 65 parked records:
+   tasks ready -> ready-task (held-1 listed: no)
+   branch-actor spawn: ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   held after: held[100]
+   old records: 65 present, unchanged
+[BRANCH] quiet posture, 100 held decisions + 65 parked records:
+   tasks ready -> ready-task (held-1 listed: no)
+   spawn: ADMITTED (passed the away spend cap and queued-work gate; stopped at backend selection: tmux, which is not installed - no endpoint created)
+   held after: held[100]
+   old records: 65 present, unchanged

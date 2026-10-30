@@ -1,0 +1,9 @@
+ok - shared count: backend verdicts, grace, exclusions, account filters, and failure propagation
+ok - normal: 65 parked records, two with windows running less and node, admit spawn and remain unchanged
+ok - away: 65 parked records, two with windows running less and node, admit spawn and remain unchanged
+ok - quiet: 65 parked records, two with windows running less and node, admit spawn and remain unchanged
+ok - four live workers refuse at cap four
+ok - backend failure refuses with named liveness reason
+ok - normal: 100 held decisions and one blocked task do not stop independent dispatch
+ok - away: 100 held decisions and one blocked task do not stop independent dispatch
+ok - quiet: 100 held decisions and one blocked task do not stop independent dispatch

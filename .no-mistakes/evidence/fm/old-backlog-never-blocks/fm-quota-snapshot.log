@@ -1,0 +1,8 @@
+ok - local snapshot prints validated output and requests configurable credential-aware cache reuse
+ok - local snapshot failures are unknown quota, bounded and named
+ok - a configured quota feed fills unmeasured rows and stands in only while fresh
+ok - remote snapshot reads through fm-on and reuses a good read only briefly
+ok - unreachable remote quota is disclosed, cached briefly, and retried
+ok - remote timeouts and remote quota failures stay unknown quota
+ok - route and usage errors are refused before any transport
+# all fm-quota-snapshot tests passed
