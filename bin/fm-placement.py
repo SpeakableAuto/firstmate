@@ -254,10 +254,32 @@ def assess(config, data, task, harness, model, effort):
         candidates = use if isinstance(use, list) else [use]
         if not candidates or not all(isinstance(c, dict) for c in candidates):
             raise ValueError("dispatch candidates absent or malformed")
-        if sum(c.get("harness") == harness and c.get("model", "") == model
-               and c.get("effort", "") == effort for c in candidates) != 1:
+        matches = sum(c.get("harness") == harness and c.get("model", "") == model
+                      and c.get("effort", "") == effort for c in candidates)
+        quota_evidence = evidence.get("quota", {})
+        balance = quota_evidence.get("balance", {}) if isinstance(quota_evidence, dict) else {}
+        balance = balance if isinstance(balance, dict) else {}
+        requested = balance.get("requested", {})
+        requested = requested if isinstance(requested, dict) else {}
+        charge = balance.get("charge", {})
+        charge = charge if isinstance(charge, dict) else {}
+        override = work.get("balance_override")
+        admitted_override = (
+            isinstance(override, str) and override != ""
+            and balance.get("verdict") == "override"
+            and balance.get("override") == override
+            and requested.get("harness") == harness
+            and requested.get("model", "") == model
+            and requested.get("effort", "") == effort
+            and charge.get("home") == "local"
+            and charge.get("provider") == requested.get("provider")
+            and charge.get("account", "") == requested.get("account", "")
+            and charge.get("model", "") == model
+        )
+        if matches != 1 and not admitted_override:
             raise ValueError("selected model is outside the task-fit dispatch rule")
-        checks["fit"] = result(True, f"workload={workload}; dispatch_rule={rule}")
+        checks["fit"] = result(True, f"workload={workload}; dispatch_rule={rule}"
+                               + ("; balance_override=admitted" if admitted_override else ""))
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
         checks["fit"] = result(False, str(error))
     profile = machine

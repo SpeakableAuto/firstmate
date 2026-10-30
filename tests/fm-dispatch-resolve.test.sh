@@ -1925,6 +1925,13 @@ balance_run "$BRIEF" --rule rule_1 --check claude opus high
 assert_equals 'pace headroom' "$(jq -r .ranked_by <<<"$out")" 'the result records the ranking that chose the profile'
 
 # Close allowances: no provider preference, the higher headroom still wins.
+write_balance_quota "$QUOTA" 70 3 60 5
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' \
+  "$QUOTA" > "$TMP_ROOT/pace-runway.json"
+mv "$TMP_ROOT/pace-runway.json" "$QUOTA"
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" 'through-reset runway outranks higher pace headroom'
+assert_contains "$out" 'passed over: codex:gpt-6-astra: projected to run out before reset' 'pace ranking reports the runway safeguard'
 write_balance_quota "$QUOTA" 70 -10 60 -4
 balance_run "$BRIEF" --rule rule_1
 assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" 'Codex wins when it is fuller by pace'

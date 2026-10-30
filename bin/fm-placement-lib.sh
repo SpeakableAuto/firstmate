@@ -197,7 +197,18 @@ fm_placement_check() {
     '{status:$status,reason:$reason,account:$account}') || return 1
   if [ "$quota" = unknown ]; then
     quota=fail
-    if fm_placement_quota "$harness" "$model" "$effort"; then quota=pass; fi
+    if printf '%s\n' "${FM_QUOTA_BALANCE_RECORD:-null}" | jq -e --arg h "$harness" --arg m "$model" --arg e "$effort" '
+      .verdict == "override" and (.override | type) == "string" and .override != ""
+      and .requested.harness == $h and (.requested.model // "") == $m and (.requested.effort // "") == $e
+      and (.charge | type) == "object" and .charge.home == "local"
+      and .charge.provider == .requested.provider and (.charge.account // "") == (.requested.account // "")
+      and (.charge.model // "") == $m' >/dev/null 2>&1; then
+      quota=pass
+      FM_PLACEMENT_QUOTA_DETAIL=$(jq -cn --argjson balance "$FM_QUOTA_BALANCE_RECORD" \
+        '{status:"pass",reason:"quota balance override admission",balance:$balance}') || return 1
+    elif fm_placement_quota "$harness" "$model" "$effort"; then
+      quota=pass
+    fi
   fi
   # The quota balance verdict, when that gate applies, is kept with the decision.
   if [ "${FM_QUOTA_BALANCE_RECORD:-null}" != null ]; then

@@ -147,11 +147,11 @@ result=$(gate devin devin high)
 f8=${result%%|*}
 rm "$GATE_HOME/data/t1/placement.json"
 printf '%s\n' '{"balance_override":"needs a Codex effort outside the dispatch rules"}' > "$GATE_HOME/data/t1/placement.json"
+charges_before=$(wc -l < "$GATE_HOME/state/dispatch-charges.jsonl" | tr -d ' ')
 result=$(gate codex gpt-6-astra xhigh)
-assert_equals 0 "${result%%|*}" 'a mapped profile in no dispatch rule proceeds with an override'
-assert_equals 'override:profile is in no dispatch rule:needs a Codex effort outside the dispatch rules' \
-  "$(printf '%s\n' "${result##*|}" | jq -r '"\(.verdict):\(.reason):\(.override)"')" 'the no-rule override records its verdict and reason'
-assert_equals codex "$(jq -r 'select(.key=="t1")|.provider' "$GATE_HOME/state/dispatch-charges.jsonl" | tail -1)" 'the no-rule override charges its mapped allowance'
+assert_equals 1 "${result%%|*}" 'an unconfigured effort cannot borrow a mapped allowance through an override'
+assert_contains "$result" 'override allowance cannot be mapped' 'the no-rule override names the missing exact profile mapping'
+assert_equals "$charges_before" "$(wc -l < "$GATE_HOME/state/dispatch-charges.jsonl" | tr -d ' ')" 'the unmapped override records no charge'
 rm "$GATE_HOME/data/t1/placement.json"
 # A profile present only in a specialist rule is not evidence of task fit.
 write_quota -60 -3
@@ -344,5 +344,62 @@ expect_code 0 "$status" "the balanced crew start launches: $out"
 assert_grep 'harness=codex' "$home/state/$id.meta" 'the balanced crew is recorded'
 assert_equals codex "$(jq -r 'select(.key == "balance-spawn-z1") | .provider' "$home/state/dispatch-charges.jsonl")" 'the launch charged its allowance'
 pass 'fm-spawn refuses an off-balance crew before provisioning and launches the balanced one'
+
+override_id=balance-override-z2
+override_case="$TMP_ROOT/spawn-override"
+override_home="$override_case/home"
+override_proj="$override_case/project"
+override_wt="$override_case/wt"
+override_fakebin=$(fm_test_make_spawn_fakebin "$override_case/fake")
+fake_quota_axi "$override_fakebin"
+fm_test_spawn_home "$override_home" codex
+fm_git_worktree "$override_proj" "$override_wt" "wt-$override_id"
+fm_test_spawn_brief "$override_home" "$override_id"
+cat > "$override_home/config/crew-dispatch.json" <<'JSON'
+{"rules":[
+  {"when":"Design work.","use":{"harness":"claude","model":"opus","effort":"high"}},
+  {"when":"Browser computer use.","use":{"harness":"codex","model":"gpt-6-astra","effort":"high"}}
+]}
+JSON
+cat > "$override_home/config/crew-placement.json" <<'JSON'
+{"version":1,"workloads":["design"],"max_crew":4,"min_free_memory_percent":1,"max_swap_mib":1048575,"drive":null}
+JSON
+override_hash=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$override_home/data/$override_id/brief.md")
+jq -n --arg hash "$override_hash" \
+  '{version:1,workload:"design",requires_drive:false,dispatch_rule:0,brief_sha256:$hash}' \
+  > "$override_home/data/$override_id/placement.json"
+write_quota -30 -5
+out=$(fm_test_run_spawn "$override_home" "$override_wt" "$override_fakebin" "$override_id" "$override_proj" \
+  --scout --harness codex --model gpt-6-astra --effort high)
+status=$?
+expect_code 1 "$status" "placement-enabled spawn refuses an out-of-rule profile without an override: $out"
+assert_absent "$override_home/state/$override_id.meta" 'the missing override launches no worker'
+assert_absent "$override_home/state/dispatch-charges.jsonl" 'the missing override records no quota charge'
+jq '. + {balance_override:"design task requires browser computer use"}' \
+  "$override_home/data/$override_id/placement.json" > "$override_case/placement.json"
+mv "$override_case/placement.json" "$override_home/data/$override_id/placement.json"
+write_quota -30 -5
+jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability[0].effectivePercentRemaining) = 5' \
+  "$QUOTA_FIXTURE" > "$override_case/low-quota.json"
+mv "$override_case/low-quota.json" "$QUOTA_FIXTURE"
+out=$(fm_test_run_spawn "$override_home" "$override_wt" "$override_fakebin" "$override_id" "$override_proj" \
+  --scout --harness codex --model gpt-6-astra --effort high)
+status=$?
+expect_code 1 "$status" "placement-enabled override still refuses quota below reserve: $out"
+assert_contains "$out" 'below the 10% reserve' 'the override refusal names the quota reserve'
+assert_absent "$override_home/state/dispatch-charges.jsonl" 'the reserve refusal records no quota charge'
+write_quota -30 -5
+out=$(fm_test_run_spawn "$override_home" "$override_wt" "$override_fakebin" "$override_id" "$override_proj" \
+  --scout --harness codex --model gpt-6-astra --effort high)
+status=$?
+expect_code 0 "$status" "placement-enabled quota-admitted override launches: $out"
+assert_grep 'harness=codex' "$override_home/state/$override_id.meta" 'the admitted override records the worker'
+assert_equals 'pass:pass:pass:override' \
+  "$(jq -r '.decisions[-1] | "\(.checks.fit.status):\(.checks.room.status):\(.checks.quota.status):\(.checks.quota.balance.verdict)"' "$override_home/state/capacity.json")" \
+  'the override preserves machine fit, room and quota admission checks'
+assert_equals codex \
+  "$(jq -r 'select(.key == "balance-override-z2") | .provider' "$override_home/state/dispatch-charges.jsonl")" \
+  'the placement-enabled override charges its mapped allowance'
+pass 'placement-enabled spawn admits only a quota-checked recorded task-class override'
 
 printf '# all fm-quota-balance tests passed\n'

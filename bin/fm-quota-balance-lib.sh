@@ -158,23 +158,12 @@ fm_quota_balance_gate() {
   if [ -z "$rule" ]; then
     if [ -z "$override" ]; then
       FM_QUOTA_BALANCE_REASON="quota balance: $harness:${model:-default} is in no dispatch rule; record balance_override in data/$id/placement.json stating why the task class needs it"
-      FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg reason "$FM_QUOTA_BALANCE_REASON" '{verdict: "refused", reason: $reason}')
-      fm_quota_balance_episode_clear
-      return 1
-    fi
-    local charge
-    if ! fm_quota_balance_mapped_charge "$id" "$harness" "$model" "$rules"; then
+    else
       FM_QUOTA_BALANCE_REASON="quota balance: $harness:${model:-default} is in no dispatch rule and its override allowance cannot be mapped"
-      FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg reason "$FM_QUOTA_BALANCE_REASON" '{verdict: "refused", reason: $reason}')
-      fm_quota_balance_episode_clear
-      return 1
     fi
-    charge=$FM_QUOTA_BALANCE_CHARGE
-    FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg override "$override" --argjson charge "$charge" \
-      '{verdict: "override", reason: "profile is in no dispatch rule", override: $override, charge: $charge}')
-    [ "${6:-charge}" = preflight ] || fm_quota_balance_charge || return 1
-    echo "quota balance: override recorded for $id: $override" >&2
-    return 0
+    FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg reason "$FM_QUOTA_BALANCE_REASON" '{verdict: "refused", reason: $reason}')
+    fm_quota_balance_episode_clear
+    return 1
   fi
   [ -r "$brief" ] || brief=/dev/null
   [ -z "$override" ] || extra=(--override "$override")
@@ -211,7 +200,7 @@ fm_quota_balance_gate() {
   fi
   FM_QUOTA_BALANCE_RECORD=$(printf '%s\n' "$out" | jq -c --arg rule "$rule" '
     def who($c): if $c == null then null else
-      {home: $c.home, harness: $c.profile.harness, model: ($c.profile.model // ""), provider: $c.provider,
+      {home: $c.home, harness: $c.profile.harness, model: ($c.profile.model // ""), effort: ($c.profile.effort // ""), provider: $c.provider,
        account: $c.account, headroom: ($c.headroom // null)} end;
     {charge: (.check.charge // null), verdict: .check.verdict, rule: $rule, reason: (.check.reason // .reason // null), override: (.check.override // null),
      requested: who(.check.requested), pick: who(.check.pick // .chosen),

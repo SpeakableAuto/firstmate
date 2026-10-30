@@ -1076,13 +1076,16 @@ POOL_JQ='
        ($elig | map(.order[0]) | min) as $fit |
        [$elig[] | select(.order[0] == $fit)]
      else $elig end) as $elig |
-    ([$elig[] | select(.pacingNextWindow != null)] | sort_by(.pacingNextWindow)) as $paced |
+    (any($elig[]; .runway == "through_reset")) as $safe |
+    (if $safe then [$elig[] | select(.runway != "projected_exhaustion")] else $elig end) as $safe_eligible |
+    ([$safe_eligible[] | select(.pacingNextWindow != null)] | sort_by(.pacingNextWindow)) as $paced |
     (if ($paced | length) > 0 then
        [$paced[] | select(.pacingNextWindow == $paced[0].pacingNextWindow)]
-     else $elig end) as $eligible |
+     else $safe_eligible end) as $eligible |
     if $mode == "candidate-order" then
       ($eligible | sort_by(rank_key)) as $o |
-      exact_tie_pick([$o[] | select(.order == $o[0].order and .score == $o[0].score)]) + {passed_over: [], passed_kind: "later"}
+      exact_tie_pick([$o[] | select(.order == $o[0].order and .score == $o[0].score)])
+      + {passed_over: (if $safe then [$elig[] | select(.runway == "projected_exhaustion")] else [] end), passed_kind: "later"}
     else
       ($eligible | max_by(.score).score) as $top |
       ([$eligible[] | select($top - .score <= near_band_points + 1e-9)]) as $near |
@@ -1094,7 +1097,7 @@ POOL_JQ='
          (if ($light | length) == 1 then {best: $light[0].first, rule: "fewer live workers"}
           else (task_hash % ($light | length)) as $i | {best: $light[$i].first, rule: "stable task-key hash"} end) as $w |
          {best: $w.best, balance_tie: {candidates: [$groups[].first], winner: $w.best, rule: $w.rule, band: near_band_points}}
-       end) + {passed_over: [], passed_kind: "pool"}
+       end) + {passed_over: (if $safe then [$elig[] | select(.runway == "projected_exhaustion")] else [] end), passed_kind: "pool"}
     end;
   def pool_pick($elig; $mode; $by_pace):
     if $by_pace then balance_pick($elig; $mode) else
