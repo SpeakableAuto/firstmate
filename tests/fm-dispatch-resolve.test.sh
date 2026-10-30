@@ -30,6 +30,16 @@ for command_name in bash chmod cp dirname jq mktemp rm; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
 done
 
+cat > "$FAKEBIN/memory_pressure" <<'SH'
+#!/usr/bin/env bash
+printf 'System-wide memory free percentage: 80%%\n'
+SH
+cat > "$FAKEBIN/sysctl" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = vm.swapusage ]; then printf 'vm.swapusage: total = 0M used = 0M free = 0M\n'; else /usr/sbin/sysctl "$@"; fi
+SH
+chmod +x "$FAKEBIN/memory_pressure" "$FAKEBIN/sysctl"
+
 cat > "$BRIEF" <<'MD'
 # Task
 Fix the off-by-one in the pager: root cause is the `<=` on line 40 of pager.sh, expected behavior is one page per call.
@@ -1771,7 +1781,7 @@ pass "bounded Claude cache recovery ranks recent evidence, preserves candidate o
 # Placement mode keeps the matched task-fit rule, lets quota decide within it,
 # and gives Claude only a quota tie; the Claude floor stays an admission check.
 cp "$BASE_RULES" "$RULES"
-printf '{"version":1}\n' > "$HOME_DIR/config/crew-placement.json"
+printf '{"version":1,"workloads":["review"],"max_crew":4,"min_free_memory_percent":0,"max_swap_mib":1048575}\n' > "$HOME_DIR/config/crew-placement.json"
 write_quota "$QUOTA" 0.9 -0.4
 set_runway "$QUOTA" claude through_reset
 write_response "$RESPONSE" rule_4 0.9
@@ -1996,18 +2006,19 @@ assert_equals local "$(jq -r .chosen.home <<<"$out")" 'one allowance prefers the
 # Machine fit and room exclude a remote candidate before ranking.
 write_balance_quota "$QUOTA" 70 -30 90 -40
 write_balance_quota "$REMOTE_QUOTA" 70 -5 90 -40
-jq '.firstmatePlacement={configured:true,available:true,profile:{workloads:["backend"],max_crew:2}}' "$REMOTE_QUOTA" > "$TMP_ROOT/room.json"
-mv "$TMP_ROOT/room.json" "$REMOTE_QUOTA"
+mkdir -p "$REMOTE_HOME/config"
+printf '%s\n' '{"version":1,"workloads":["backend"],"max_crew":2,"min_free_memory_percent":0,"max_swap_mib":1048575}' > "$REMOTE_HOME/config/crew-placement.json"
 printf '%s\n' '{"workload":"iphone-build","requires_drive":false}' > "$TMP_ROOT/placement.json"
 rm -rf "$HOME_DIR/state/quota-remote"
 balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
 assert_equals local "$(jq -r .chosen.home <<<"$out")" 'an iPhone task is never sent to a backend-only machine'
 rm "$TMP_ROOT/placement.json"
-jq '.firstmatePlacement.available=false | .firstmatePlacement.reason="machine crew cap: 2/2"' "$REMOTE_QUOTA" > "$TMP_ROOT/room.json"
-mv "$TMP_ROOT/room.json" "$REMOTE_QUOTA"
+live_claude "$REMOTE_HOME/state" 2
 rm -rf "$HOME_DIR/state/quota-remote"
 balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
 assert_equals local "$(jq -r .chosen.home <<<"$out")" 'a full remote machine is not named as the pick'
+live_claude "$REMOTE_HOME/state" 0
+rm "$REMOTE_HOME/config/crew-placement.json"
 cp "$BASE_RULES" "$RULES"
 
 placement_s16
