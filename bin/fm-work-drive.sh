@@ -26,6 +26,7 @@
 # config/crew-placement.json must exist, its drive must equal root, and its
 # required_drive_dirs must cover every target, so placement refuses heavy work on
 # the same paths. verify and install fail closed until that profile is active.
+# verify also requires the daily internal-growth LaunchAgent to be loaded.
 # install first proves the drive root, creates missing target directories on that
 # mounted drive, rewrites only the marked block in the shell env file, sets the
 # user npm cache and Xcode DerivedData default, enrolls the daily internal-growth
@@ -242,6 +243,16 @@ PY
   echo "ok treehouse root $treehouse_root"
 }
 
+check_growth_enrollment() {
+  local service="gui/$(id -u)/$GROWTH_LABEL"
+  if command -v launchctl >/dev/null && launchctl print "$service" >/dev/null 2>&1; then
+    echo "ok internal growth LaunchAgent $service"
+    return 0
+  fi
+  echo "refused internal growth LaunchAgent: $service is not loaded" >&2
+  return 3
+}
+
 run_verify() {
   local project=${1:-} failed=0 out sh script name expected actual i allow
   run_check || return $?
@@ -301,6 +312,7 @@ run_verify() {
   fi
   check_placement || failed=1
   [ -z "$project" ] || check_project_treehouse "$project" || failed=1
+  check_growth_enrollment || failed=1
   [ "$failed" -eq 0 ] || return 3
 }
 

@@ -29,9 +29,13 @@ SH
 cat > "$FAKEBIN/launchctl" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$HOME/launchctl-calls"
-if [ "${1:-}" = bootstrap ] && [ -e "$HOME/launchctl-fail-bootstrap" ]; then
-  exit 17
-fi
+case "${1:-}" in
+  bootout) rm -f "$HOME/launchctl-loaded" ;;
+  bootstrap)
+    [ ! -e "$HOME/launchctl-fail-bootstrap" ] || exit 17
+    touch "$HOME/launchctl-loaded" ;;
+  print) [ -e "$HOME/launchctl-loaded" ] || exit 113 ;;
+esac
 SH
 chmod +x "$FAKEBIN"/*
 
@@ -163,6 +167,7 @@ assert_contains "$out" "ok fresh-shell PLAYWRIGHT_BROWSERS_PATH=$drive/Caches/Pl
 assert_contains "$out" "ok npm cache $drive/Caches/npm" 'npm resolves the drive cache'
 assert_contains "$out" "ok xcode derived data $drive/Build/DerivedData" 'Xcode default points at the drive'
 assert_contains "$out" 'enrolled local.firstmate.internal-growth' 'daily growth check is enrolled'
+assert_contains "$out" "ok internal growth LaunchAgent gui/$(id -u)/local.firstmate.internal-growth" 'final verification sees the loaded LaunchAgent'
 for rel in $TARGETS; do [ -d "$drive/$rel" ] || fail "install did not create $rel"; done
 plist="$user/Library/LaunchAgents/local.firstmate.internal-growth.plist"
 python3 - "$plist" "$ROOT" <<'PY'
@@ -236,6 +241,10 @@ assert_equals 3 "$rc" 'failed LaunchAgent bootstrap refuses install'
 assert_contains "$out" 'launchctl bootstrap failed' 'failed bootstrap is named'
 assert_not_contains "$out" 'enrolled local.firstmate.internal-growth' 'failed bootstrap is not reported as enrolled'
 assert_not_contains "$out" 'ok fresh-shell' 'verification does not run after failed enrollment'
+set +e; out=$(wd verify 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'standalone verify refuses after failed bootstrap'
+assert_contains "$out" "refused internal growth LaunchAgent: gui/$(id -u)/local.firstmate.internal-growth is not loaded" 'standalone verify names the unloaded LaunchAgent'
+assert_contains "$(cat "$user/launchctl-calls")" "print gui/$(id -u)/local.firstmate.internal-growth" 'standalone verify queries the per-user LaunchAgent'
 pass 'install stops when daily growth enrollment fails'
 
 new_case block_order
