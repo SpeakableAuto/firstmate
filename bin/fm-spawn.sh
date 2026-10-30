@@ -532,13 +532,8 @@ resolve_directory_input() {
   printf '%s\n' "$resolved"
 }
 
-# These outer-shell configuration values are intentionally read after the
-# sourced helpers; their similarly named subshell locals do not replace them.
-# shellcheck disable=SC2031
 FM_HOME=$(resolve_directory_input FM_HOME "$FM_HOME") || exit 1
-# shellcheck disable=SC2031
 if [ -n "${FM_STATE_OVERRIDE:-}" ]; then
-  # shellcheck disable=SC2031
   FM_STATE_OVERRIDE=$(resolve_directory_input FM_STATE_OVERRIDE "$FM_STATE_OVERRIDE") || exit 1
 fi
 if [ -n "${FM_DATA_OVERRIDE:-}" ]; then
@@ -3789,6 +3784,10 @@ if [ "$BACKLOG_TRANSITION" = 1 ] && [ "$RELAUNCH" -eq 0 ]; then
   if [ "$FM_PLACEMENT_ACTIVE" = 1 ]; then
     finish_first_decision=$(fm_placement_finish_first "$FM_PLACEMENT_DECISION") || exit 1
     fm_placement_publish "$finish_first_decision" amend || exit 1
+    # Publish the warning once, at final locked admission, rather than on each
+    # provisional placement calculation.
+    printf '%s\n' "$finish_first_decision" | jq -r '.checks["finish-first"].reason' \
+      | sed -n '/^finish-first: warning:/p' >&2
   else
     FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_DATA_OVERRIDE="$DATA" \
       bash "$SCRIPT_DIR/fm-finish-first.sh" "$ID" || exit 1
