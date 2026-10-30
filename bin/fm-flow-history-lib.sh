@@ -35,9 +35,12 @@ fm_flow_finish() {  # <data> <token> <verb> <id> <status> <output>
   [ "$action" != close ] || action="done"
   printf '%s\n' "$6" | python3 "$FM_FLOW_SCRIPT_DIR/fm-flow-history.py" --data "$1" finish "$2" "$action" "$4" "$5" \
     || fm_flow_warning "$1" 'receipt missing; history incomplete'
-  local health
+  local health warning_latch
   if ! health=$(python3 "$FM_FLOW_SCRIPT_DIR/fm-flow-history.py" --data "$1" health 2>&1); then
     fm_flow_warning "$1" "$health"
+  else
+    warning_latch="${FM_STATE_OVERRIDE:-${1%/*}/state}/.flow-history-warning"
+    rm -f -- "$warning_latch" 2>/dev/null || true
   fi
 }
 

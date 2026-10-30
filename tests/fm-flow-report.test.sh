@@ -155,7 +155,16 @@ for line in open(sys.argv[1]):
     except ValueError: pass
 assert rows[-1]['type']=='transition' and rows[-1]['task_id']=='oldest', rows[-1]
 PYTAIL
-pass 'wrapper errors and torn history do not stop later transitions'
+first_alerts=$(awk -F '\t' '$3 == "check" && $4 == "flow-history" { count++ } END { print count + 0 }' "$FM_HOME/state/.wake-queue")
+cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
+bash "$wrapper" done oldest --note repaired --no-prune >/dev/null
+assert_absent "$FM_HOME/state/.flow-history-warning" 'healthy history closes the warning episode'
+bash "$wrapper" reopen oldest >/dev/null
+printf '{"type":"attempt","tok' >> "$FM_HOME/data/flow-history.jsonl"
+bash "$wrapper" start oldest >/dev/null || fail 'second torn tail must not block lifecycle'
+second_alerts=$(awk -F '\t' '$3 == "check" && $4 == "flow-history" { count++ } END { print count + 0 }' "$FM_HOME/state/.wake-queue")
+assert_equals "$((first_alerts + 1))" "$second_alerts" 'a later identical incident publishes a new warning'
+pass 'wrapper errors recover and later incidents alert again'
 
 # Historical signals do not change when current backlog holds change.
 cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
