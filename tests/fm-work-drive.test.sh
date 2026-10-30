@@ -274,3 +274,61 @@ rm "$fm/config/work-drive"
 set +e; out=$(wd check 2>&1); rc=$?; set -e
 assert_equals 2 "$rc" 'missing configuration is invalid'
 pass 'invalid or missing configuration refuses before any probe'
+
+# Lab-home proof: a real ship spawn in a scratch home whose placement profile
+# names an absent work drive is refused by the drive check before any worker
+# or worktree exists, and the outage queues exactly one wake across retries.
+# shellcheck source=tests/fixtures.sh
+. "$ROOT/tests/fixtures.sh"
+LAB="$TMP_ROOT/lab"
+LAB_HOME="$LAB/home"
+LAB_PROJECT="$LAB/project"
+fm_test_spawn_home "$LAB_HOME" codex
+fm_test_spawn_brief "$LAB_HOME" heavy-task
+fm_git_init_commit "$LAB_PROJECT"
+LAB_BIN=$(fm_test_make_spawn_fakebin "$LAB/tools" codex)
+REAL_PYTHON=$(command -v python3)
+export REAL_PYTHON
+cat > "$LAB_BIN/python3" <<'SH'
+#!/usr/bin/env bash
+if [ "${2:-}" = memory ]; then
+  printf '%s\n' '{"free_percent":80,"swap_mib":0}'
+else
+  exec "$REAL_PYTHON" "$@"
+fi
+SH
+cat > "$LAB_BIN/df" <<'SH'
+#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfixture 999999999 1 999999998 1%% /\n'
+SH
+cat > "$LAB_BIN/quota-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"codex","state":{"stale":false},"windows":[],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":80,"runway":{"status":"through_reset"}}]}}]}'
+SH
+chmod +x "$LAB_BIN/python3" "$LAB_BIN/df" "$LAB_BIN/quota-axi"
+missing_drive="$LAB/missing-drive"
+jq -n --arg drive "$missing_drive" --arg volume "$LAB" '{version:1,workloads:["heavy"],max_crew:4,
+  min_free_memory_percent:15,max_swap_mib:1024,drive:$drive,required_drive_dirs:["Build/Tmp"],
+  data_volume:{path:$volume,min_free_gib:0.001}}' > "$LAB_HOME/config/crew-placement.json"
+printf '%s\n' '{"rules":[{"when":"heavy","use":[{"harness":"codex","model":"test","effort":"high"}]}]}' \
+  > "$LAB_HOME/config/crew-dispatch.json"
+printf 'root = "%s"\n' "$missing_drive" > "$LAB_PROJECT/treehouse.toml"
+hash=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$LAB_HOME/data/heavy-task/brief.md")
+jq -n --arg hash "$hash" '{version:1,workload:"heavy",requires_drive:true,dispatch_rule:0,brief_sha256:$hash}' \
+  > "$LAB_HOME/data/heavy-task/placement.json"
+printf '## Queued\n- [ ] heavy-task - Heavy build fixture (impact: P1)\n' > "$LAB_HOME/data/backlog.md"
+lab_spawn() {
+  fm_test_run_spawn "$LAB_HOME" "$LAB_PROJECT" "$LAB_BIN" heavy-task "$LAB_PROJECT" \
+    --harness codex --model test --effort high --mode no-mistakes --yolo off 2>&1
+}
+set +e; out=$(lab_spawn); rc=$?; set -e
+assert_equals 1 "$rc" 'heavy ship spawn refuses when the drive is missing'
+assert_contains "$out" "drive: drive unmounted or symlinked: $missing_drive" 'refusal names the drive check'
+ledger="$LAB_HOME/state/capacity.json"
+assert_equals capacity "$(jq -r '.waits["heavy-task"].state' "$ledger")" 'the refusal is a named capacity wait'
+assert_contains "$(jq -r '.waits["heavy-task"].failed|join(" ")' "$ledger")" drive 'the wait names the drive check'
+[ ! -e "$LAB_HOME/state/heavy-task.meta" ] || fail 'a refused spawn published worker metadata'
+[ ! -e "$missing_drive" ] || fail 'a refused spawn created the drive path'
+set +e; lab_spawn >/dev/null; set -e
+assert_equals 1 "$(grep -c 'placement-condition heavy-task' "$LAB_HOME/state/.wake-queue")" 'the drive outage queues exactly one wake'
+pass 'lab home refuses a heavy ship spawn on a missing drive with one wake'
