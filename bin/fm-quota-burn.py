@@ -3,6 +3,7 @@
 
 Usage: fm-quota-burn.py sample STATE SNAPSHOT CREWS NOW
        fm-quota-burn.py rates STATE NOW
+       fm-quota-burn.py charge STATE < CHARGE_JSON
 
 sample appends one record to STATE/quota-samples.jsonl: for every provider row
 in the quota-axi --json SNAPSHOT, its all_models effective percentage, limiting
@@ -13,9 +14,11 @@ lock on STATE/.quota-samples.lock.
 
 rates prints one JSON object measured from those samples:
   {"models": {"<provider>:<model>": M}, "providers": {"<provider>": M}}
-  M = {points_per_hour, crew_hours, run_seconds, draw, span}
+  M = {windows: {window_id: {points_per_hour, crew_hours, run_seconds, draw, span}}}
+Legacy effective-only samples retain the former unkeyed M shape.
+charge atomically replaces one task charge under the ledger lock after launch.
 Between two consecutive samples of one account (at most 3 hours apart, same
-limiting window and reset, no refill) the percentage the account lost is split
+window and reset (five-minute timestamp tolerance), no refill) the percentage the account lost is split
 across the crew live during the interval: a crew seen at both samples weighs
 1 and one seen at only one end (started or finished inside it) weighs 0.5,
 giving points per crew-hour by model. run_seconds is the median lifetime of finished crew (first to last
@@ -28,13 +31,16 @@ attributed to its crew, which overstates rather than hides draw.
 docs/configuration.md "Quota balance" owns how the resolver applies them.
 """
 
+import datetime
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import statistics
 import sys
 import tempfile
+import time
 
 KEEP_SECONDS = 8 * 86400
 MIN_GAP = 60
@@ -63,7 +69,10 @@ def rows_of(snapshot):
                         or (scope.get("runway") or {}).get("limitingWindowId"))
             rows.append({"provider": provider.get("provider"), "account": provider.get("accountKey") or "",
                          "pct": pct, "limiting": limiting,
-                         "resets": (windows.get(limiting) or {}).get("resetsAt")})
+                         "resets": (windows.get(limiting) or {}).get("resetsAt"),
+                         "windows": [{"window": w.get("id"), "pct": w["percentRemaining"], "resets": w.get("resetsAt")}
+                                     for w in windows.values() if type(w.get("percentRemaining")) in (int, float)
+                                     and (scope.get("boundedBy") or scope.get("limitingWindowIds"))]})
             break
     return rows
 
@@ -117,17 +126,31 @@ def measured(points, hours, lifetimes, fallback_run):
             "draw": round(min(40.0, max(0.5, rate * run / 3600)), 3), "span": int(min(14400, max(900, run)))}
 
 
+def same_reset(a, b):
+    if a == b:
+        return True
+    try:
+        def parse(value):
+            value = re.sub(r"\.(\d+)", lambda m: "." + m[1][:6].ljust(6, "0"), value)
+            return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        first, second = parse(a), parse(b)
+        return abs((second - first).total_seconds()) <= 300
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def rates(state, now):
     samples = load(state / "quota-samples.jsonl", now)
     points, hours = {}, {}
     series = {}
     for record in samples:
         for row in record.get("rows") or []:
-            series.setdefault((row.get("provider"), row.get("account")), []).append((record, row))
-    for (provider, _account), items in series.items():
+            for window in row.get("windows") or [dict(row, window="legacy")]:
+                series.setdefault((row.get("provider"), row.get("account"), window["window"]), []).append((record, window))
+    for (provider, _account, window), items in series.items():
         for (first, a), (second, b) in zip(items, items[1:]):
             gap = second["at"] - first["at"]
-            if not 0 < gap <= MAX_PAIR or a.get("limiting") != b.get("limiting") or a.get("resets") != b.get("resets"):
+            if not 0 < gap <= MAX_PAIR or a.get("limiting") != b.get("limiting") or not same_reset(a.get("resets"), b.get("resets")):
                 continue
             lost = a["pct"] - b["pct"]
             # A crew seen at both ends ran the whole interval; one seen at only
@@ -142,8 +165,8 @@ def rates(state, now):
                 continue
             for share_weight, model in weight.values():
                 for key in (f'{provider}:{model}', provider):
-                    points[key] = points.get(key, 0.0) + lost * share_weight / total
-                    hours[key] = hours.get(key, 0.0) + share_weight * gap / 3600
+                    points[(key, window)] = points.get((key, window), 0.0) + lost * share_weight / total
+                    hours[(key, window)] = hours.get((key, window), 0.0) + share_weight * gap / 3600
     seen = {}
     for record in samples:
         for crew in record.get("crews") or []:
@@ -156,18 +179,47 @@ def rates(state, now):
             for name in (key, key.split(":")[0]):
                 lifetimes.setdefault(name, []).append(last_at - first_at)
     output = {"models": {}, "providers": {}}
-    for key in points:
+    for key, window in points:
         provider = key.split(":")[0]
         fallback = statistics.median(lifetimes[provider]) if lifetimes.get(provider) else 3600
-        value = measured(points[key], hours[key], lifetimes.get(key, []), fallback)
+        value = measured(points[(key, window)], hours[(key, window)], lifetimes.get(key, []), fallback)
         if value is not None:
-            output["providers" if ":" not in key else "models"][key] = value
+            group = output["providers" if ":" not in key else "models"].setdefault(key, {})
+            if window == "legacy":
+                group.update(value)
+            else:
+                group.setdefault("windows", {})[window] = value
     return output
+
+
+def charge(state):
+    entry = json.load(sys.stdin)
+    if not isinstance(entry, dict) or not entry.get("key") or not entry.get("provider"):
+        raise ValueError("charge needs a task key and allowance")
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / "dispatch-charges.jsonl"
+    with open(state / ".dispatch-charges.lock", "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        now = int(time.time())
+        entries = [e for e in load(path, now) if e.get("key") != entry["key"]]
+        entry["at"] = now
+        entries.append(entry)
+        fd, name = tempfile.mkstemp(prefix=".dispatch-charges-", dir=state)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                for item in entries:
+                    out.write(json.dumps(item, separators=(",", ":")) + "\n")
+            os.replace(name, path)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
 
 
 def main():
     operation, *args = sys.argv[1:]
-    if operation == "sample" and len(args) == 4:
+    if operation == "charge" and len(args) == 1:
+        charge(Path(args[0]))
+    elif operation == "sample" and len(args) == 4:
         sample(Path(args[0]), args[1], args[2], int(args[3]))
     elif operation == "rates" and len(args) == 2:
         print(json.dumps(rates(Path(args[0]), int(args[1])), separators=(",", ":"), sort_keys=True))

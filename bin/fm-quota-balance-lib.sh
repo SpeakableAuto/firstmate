@@ -16,12 +16,20 @@
 #   null when the gate does not apply.
 # The rule comes from data/<id>/placement.json dispatch_rule, else the default
 # profiles when they hold the requested profile, else the first rule that does.
-# A profile in no rule requires a recorded balance_override. Unknown quota for
+# A profile in no rule refuses until its allowance is configured. Unknown quota for
 # every candidate is disclosed uncertainty, recorded and alerted once per open
 # episode; a recent successful reading can still refuse a known-behind account.
-# A non-empty placement.json balance_override is the only way past a refusal:
+# A non-empty placement.json balance_override can justify a different allowance:
 # it states why the task class needs this profile, and the decision keeps it.
 # Needs SCRIPT_DIR, FM_HOME, CONFIG, DATA, and STATE from the sourcing caller.
+
+# Remote transfer: the resolver emits parent_placement for a remote pick.
+# Carry that object unchanged into the receiving data/<id>/placement.json.
+# It binds version=1, at (15-minute lifetime), task, brief_sha256, target
+# (.fm-secondmate-home), provider, account and profile. It authorizes the pool
+# choice, not a reserve/capacity exception. An invalid supplied record refuses.
+# A sixth argument "preflight" returns charge evidence without writing a
+# charge; fm_quota_balance_charge commits it only after a successful launch.
 
 fm_quota_balance_episode_clear() {
   rm -f "$STATE/quota-balance-unverifiable.open"
@@ -77,7 +85,7 @@ fm_quota_balance_last_refusal() { # <resolver-output> <rule> <harness> <model>
   [ -n "$provider" ] || return 1
   threshold=$(jq -r '.quota_balance.spread_points // 20' "$CONFIG/crew-dispatch.json" 2>/dev/null) || return 1
   result=$(jq -r --argjson now "$now" --arg provider "$provider" --arg account "$account" --argjson threshold "$threshold" '
-    select((.at | type) == "number" and $now - .at >= 0 and $now - .at < 86400 and (.accounts | type) == "array") |
+    select((.at | type) == "number" and $now - .at >= 0 and $now - .at < 900 and (.accounts | type) == "array") |
     [.accounts[] | select(.home == "local" and .provider == $provider)] as $provider_accounts |
     (if $account != "" then [$provider_accounts[] | select((.account // "") == $account)]
      elif ($provider_accounts | length) == 1 then $provider_accounts else [] end) as $requested |
@@ -107,6 +115,11 @@ fm_quota_balance_gate() {
     return 1
   fi
   if [ -f "$work" ]; then
+    if ! jq -e 'type == "object" and (has("dispatch_rule") | not) or
+      (type == "object" and (.dispatch_rule|type)=="number" and .dispatch_rule>=0 and .dispatch_rule==(.dispatch_rule|floor))' "$work" >/dev/null 2>&1; then
+      FM_QUOTA_BALANCE_REASON='quota balance: invalid placement classification; dispatch_rule must be a nonnegative integer'
+      return 1
+    fi
     rule=$(jq -r 'if (.dispatch_rule | type) == "number" and .dispatch_rule >= 0 then "rule_\(.dispatch_rule + 1)" else empty end' "$work" 2>/dev/null) || rule=''
     override=$(jq -r '.balance_override // empty | strings' "$work" 2>/dev/null) || override=''
   fi
@@ -128,6 +141,23 @@ fm_quota_balance_gate() {
   [ -r "$brief" ] || brief=/dev/null
   [ -z "$override" ] || extra=(--override "$override")
   [ "$inferred" = 0 ] || extra+=(--global-check)
+  if jq -e 'has("parent_placement")' "$work" >/dev/null 2>&1; then
+    local parent target brief_hash
+    target=$(cat "$FM_HOME/.fm-secondmate-home" 2>/dev/null || true)
+    brief_hash=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$brief") || return 1
+    parent=$(jq -ce --arg target "$target" --arg hash "$brief_hash" --arg id "$id" \
+      --arg h "$harness" --arg m "$model" --arg e "$effort" --argjson now "$(date +%s)" '
+      .parent_placement | select(.version == 1 and .task == $id and .target == $target and $target != ""
+        and .brief_sha256 == $hash and (.at|type)=="number" and $now-.at >= 0 and $now-.at < 900
+        and .profile.harness == $h and (.profile.model // "") == $m and (.profile.effort // "") == $e
+        and (.provider|type)=="string" and (.account|type)=="string")' "$work") || {
+      FM_QUOTA_BALANCE_REASON='quota balance: parent placement is invalid, expired, or does not match this task, machine and profile'
+      return 1
+    }
+    extra+=(--parent-placement "$parent")
+  fi
+  if [ -n "$override" ] && jq -e '.impact == "P0"' "$work" >/dev/null 2>&1; then extra+=(--p0); fi
+  [ "${6:-charge}" != preflight ] || extra+=(--no-charge)
   out=$(env -u TYPESAFE_API_KEY FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_DATA_OVERRIDE="$DATA" FM_STATE_OVERRIDE="$STATE" \
     "$SCRIPT_DIR/fm-dispatch-resolve.sh" --rule "$rule" --check "$harness" "$model" "$effort" ${extra[@]+"${extra[@]}"} \
     "$brief" --project "$(basename "$project")" 2>/dev/null | tail -1)
@@ -143,7 +173,7 @@ fm_quota_balance_gate() {
     def who($c): if $c == null then null else
       {home: $c.home, harness: $c.profile.harness, model: ($c.profile.model // ""), provider: $c.provider,
        account: $c.account, headroom: ($c.headroom // null)} end;
-    {verdict: .check.verdict, rule: $rule, reason: (.check.reason // .reason // null), override: (.check.override // null),
+    {charge: (.check.charge // null), verdict: .check.verdict, rule: $rule, reason: (.check.reason // .reason // null), override: (.check.override // null),
      requested: who(.check.requested), pick: who(.check.pick // .chosen),
      spread: (.spread // .global_spread // null | if . == null then null else {top: .top.label, bottom: .bottom.label, points, alarm} end)}
   ' 2>/dev/null) || FM_QUOTA_BALANCE_RECORD=null
@@ -156,7 +186,7 @@ fm_quota_balance_gate() {
         || FM_QUOTA_BALANCE_RECORD='{"verdict":"unverifiable"}'
       local_reason=$(printf '%s\n' "$FM_QUOTA_BALANCE_RECORD" | jq -r '.reason // "no candidate has quota evidence"' 2>/dev/null) \
         || local_reason='no candidate has quota evidence'
-      if last=$(fm_quota_balance_last_refusal "$out" "$rule" "$harness" "$model"); then
+      if [ -z "$override" ] && last=$(fm_quota_balance_last_refusal "$out" "$rule" "$harness" "$model"); then
         IFS=$'\t' read -r points requested fuller seen <<< "$last"
         FM_QUOTA_BALANCE_REASON="quota balance: last known reading at $seen shows $requested is $points points behind $fuller; refusing an unverifiable start"
         FM_QUOTA_BALANCE_RECORD=$(jq -cn --arg rule "$rule" --arg reason "$FM_QUOTA_BALANCE_REASON" \
@@ -164,10 +194,32 @@ fm_quota_balance_gate() {
         fm_quota_balance_episode_clear
         return 1
       fi
+      if [ -n "$override" ]; then
+        local provider charge key
+        provider=$(jq -r --arg h "$harness" --arg m "$model" '
+          [(.default // []), (.rules[]?.use)] | flatten | map(select(.harness == $h and (.model // "") == $m)) | first | .provider // empty' "$rules")
+        if [ -z "$provider" ]; then
+          # shellcheck source=bin/fm-quota-axi-lib.sh
+          . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+          provider=$(fm_quota_single_provider_for_harness "$harness") || provider=''
+        fi
+        if [ -z "$provider" ]; then
+          FM_QUOTA_BALANCE_REASON='quota balance: override allowance cannot be mapped while quota is unavailable'
+          return 1
+        fi
+        key=$id
+        charge=$(jq -cn --arg key "$key" --arg p "$provider" --arg m "$model" --argjson at "$(date +%s)" \
+          '{key:$key,at:$at,home:"local",provider:$p,account:"",model:$m,scopes:["all_models"],claude:($p=="claude"),draw:5,span:900}')
+        FM_QUOTA_BALANCE_RECORD=$(jq -c --argjson charge "$charge" --arg override "$override" '. + {charge:$charge,override:$override}' <<<"$FM_QUOTA_BALANCE_RECORD")
+        [ "${6:-charge}" = preflight ] || fm_quota_balance_charge || return 1
+      fi
       fm_quota_balance_unverifiable "$id" "$harness" "$model" "$local_reason"
       echo "quota balance: $local_reason; starting $id without a balanced pick (recorded)" >&2
       return 0 ;;
     override)
+      if jq -e '.impact == "P0"' "$work" >/dev/null 2>&1 && (set -C; : > "$STATE/quota-p0-$id.open") 2>/dev/null; then
+        fm_quota_balance_wake_append check "quota-p0-$id" "check: quota-p0: $id may use the reserve down to the hard 5% floor" || true
+      fi
       echo "quota balance: override recorded for $id: $override" >&2
       return 0 ;;
     refused)
@@ -179,4 +231,19 @@ fm_quota_balance_gate() {
   esac
   fm_quota_balance_episode_clear
   return 1
+}
+
+# Commit only after launch succeeds; failed admission/provisioning owes no draw.
+fm_quota_balance_charge() {
+  local record=${FM_QUOTA_BALANCE_RECORD:-null} charge
+  charge=$(jq -c '.charge // null' <<<"$record") || return 1
+  [ "$charge" != null ] || return 0
+  printf '%s\n' "$charge" | python3 "$SCRIPT_DIR/fm-quota-burn.py" charge "$STATE"
+}
+
+# Shared read-only pool evidence, also attached to remote quota snapshots.
+fm_quota_balance_machine_state() { # <config> <state> [exclude-id]
+  local count=-1
+  if fm_live_workers_count "$2" "${3:-}" >/dev/null 2>&1; then count=$FM_LIVE_WORKERS_COUNT; fi
+  python3 "$SCRIPT_DIR/fm-placement.py" pool "$1" "$count"
 }

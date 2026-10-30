@@ -2,6 +2,9 @@
 # Replay proof for quota balance: the recorded crew starts of the week Codex
 # ran dry (tests/fixtures/quota-replay-2026-10-28.json, measured draw per start,
 # no task names) replayed twice through tests/fm-quota-balance-replay.py.
+# Session scenario: 8 five-hour points per crew and 2 per supervisor-hour,
+# resetting every five hours; these are stress assumptions, not historical
+# measurements. Weekly draw and start times come from the recorded fixture.
 # Kept on the providers they really used, Codex falls under the 10% reserve
 # while Claude keeps most of its fresh week. Through the real resolver's
 # balanced pick at every start, across this machine and the second machine
@@ -79,10 +82,13 @@ pass 'replaying the recorded provider choices reproduces Codex running dry first
 balanced=$(replay balanced) || fail 'balanced replay failed'
 printf '# balanced: %s\n' "$balanced"
 assert_equals true "$(jq '.lowest_percent.codex >= 10' <<<"$balanced")" 'Codex keeps its reserve under the balanced pick'
-# The alarm holds new work past 20 points; time alone can open the gap by up
-# to one crew's measured draw before the next start is judged.
-assert_equals true "$(jq --argjson draw "$(jq '.draw.codex.points_per_start' "$FIXTURE")" '.final_spread <= 20 + $draw' <<<"$balanced")" \
-  'the allowances end within the 20-point spread plus one crew'\''s draw'
+assert_equals true "$(jq '.reserve_at_start | all(.[]; . >= 10)' <<<"$balanced")" 'every allowance leaves its reserve after all in-flight and new crew draw'
+assert_equals true "$(jq '.lowest_session | all(.[]; . >= 10)' <<<"$balanced")" 'both changing five-hour windows retain their reserve'
+assert_equals true "$(jq '.measured_placements > 0' <<<"$balanced")" 'the replay exercises measured per-window charges'
+# Supervisors consume the reserved portion between starts; every account must
+# stay usable, even when no crew is running and no dispatch can change its burn.
+assert_equals true "$(jq '.lowest_percent | all(.[]; . > 0)' <<<"$balanced")" 'supervisor consumption never exhausts any allowance'
+assert_equals true "$(jq '.final_spread <= 20' <<<"$balanced")" 'the final spread fits the actual 20-point tolerance'
 assert_equals 0 "$(jq '.behind_placements' <<<"$balanced")" 'no start lands on an allowance more than 20 points behind'
 assert_equals 0 "$(jq '.unplaced' <<<"$balanced")" 'every recorded start is placed within the window'
 assert_equals true "$(jq '.historical_codex_starts_refused > 0' <<<"$balanced")" 'the spawn check refuses recorded Codex starts that were off balance'

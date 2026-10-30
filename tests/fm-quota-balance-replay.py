@@ -44,6 +44,12 @@ class Sim:
         self.window = {name: a["window_hours"] * 3600 for name, a in fixture["allowances"].items()}
         self.draw = fixture["draw"]
         self.crews = []
+        self.sequence = 0
+        self.session = {name: 80.0 for name in self.pct if name.startswith("claude")}
+        self.session_reset = {name: self.start + 5 * 3600 for name in self.session}
+        self.samples = []
+        self.minimum = dict(self.pct)
+        self.minimum_session = dict(self.session)
 
     def next_reset(self, name):
         return min(r for r in self.resets[name] if r > self.now)
@@ -53,7 +59,13 @@ class Sim:
 
     def headroom(self, name, charged=False):
         left = 100 * (self.next_reset(name) - self.now) / self.window[name]
-        return round(self.pct[name] - (self.owed(name) if charged else 0) - left, 2)
+        weekly = self.pct[name] - (self.owed(name) if charged else 0) - left
+        if name in self.session:
+            owed = sum(8 * (c["end"] - self.now) / (c["end"] - c["start"])
+                       for c in self.crews if c["provider"] == name) if charged else 0
+            short = self.session[name] - owed - 100 * (self.session_reset[name] - self.now) / (5 * 3600)
+            return round(min(weekly, short), 2)
+        return round(weekly, 2)
 
     def advance(self, until):
         while self.now < until:
@@ -69,28 +81,46 @@ class Sim:
                 self.pct[name] = max(0.0, self.pct[name] - lost)
                 if due:
                     self.pct[name] = 100.0
+            for name in self.session:
+                loss = sum(8 * max(0, min(step,c["end"]) - max(self.now,c["start"])) / (c["end"]-c["start"])
+                           for c in self.crews if c["provider"] == name)
+                self.session[name] = max(0, self.session[name] - loss - 2 * (step-self.now)/3600)
+                if step >= self.session_reset[name]:
+                    self.session[name] = 100
+                    self.session_reset[name] += 5*3600
+                self.minimum_session[name] = min(self.minimum_session[name], self.session[name])
             self.now = step
+            for name in self.pct:
+                self.minimum[name] = min(self.minimum[name], self.pct[name])
+            self.samples.append((self.now, self.snapshot(), self.snapshot("claude_m0002"), list(self.crews)))
             self.crews = [c for c in self.crews if c["end"] > self.now]
 
-    def place(self, provider, home="local"):
+    def place(self, provider, home="local", model="default"):
+        self.sequence += 1
         run = self.draw[provider]["run_seconds"]
-        self.crews.append({"provider": provider, "home": home, "start": self.now, "end": self.now + run,
+        self.crews.append({"task":str(self.sequence),"model":model,"provider": provider, "home": home, "start": self.now, "end": self.now + run,
                            "rate": self.draw[provider]["points_per_start"] / run})
 
     def snapshot(self, claude="claude"):
-        def row(name, extra_windows, provider=None):
-            scope = {"status": "known", "effectivePercentRemaining": round(self.pct[name], 2),
-                     "pace": {"worstReservePercentPoints": self.headroom(name)},
-                     "runway": {"status": "projected_exhaustion"}, "selection": {"spendPriority": 0}}
-            scopes = [dict(scope, scope="all_models")]
-            if name.startswith("claude"):
-                scopes.append(dict(scope, scope="model:fable"))
-            return {"provider": provider or name, "state": {"status": "fresh", "stale": False}, "windows": extra_windows,
-                    "quotaSemantics": {"status": "known", "effectiveAvailability": scopes}}
-        return {"schemaVersion": 5, "providers": [
-            row(claude, [{"id": "five_hour", "kind": "session", "percentRemaining": 80}], "claude"),
-            row("codex", [{"id": "weekly", "kind": "weekly", "percentRemaining": round(self.pct["codex"], 2),
-                           "resetsAt": self.iso(self.next_reset("codex"))}])]}
+        def row(name, provider):
+            weekly_id = "weekly" if provider == "codex" else "seven_day"
+            weekly_head = self.pct[name] - 100 * (self.next_reset(name)-self.now)/self.window[name]
+            windows = [{"id":weekly_id,"kind":"weekly","percentRemaining":round(self.pct[name],4),
+                        "resetsAt":self.iso(self.next_reset(name)),"pace":{"reservePercentPoints":weekly_head}}]
+            if provider == "claude":
+                windows.append({"id":"five_hour","kind":"session","percentRemaining":round(self.session[name],4),
+                                "resetsAt":self.iso(self.session_reset[name]+(self.now%3)/10),
+                                "pace":{"reservePercentPoints":self.session[name]-100*(self.session_reset[name]-self.now)/(5*3600)}})
+            limiting = min(windows, key=lambda w:w["percentRemaining"])["id"]
+            scope = {"scope":"all_models","status":"known","effectivePercentRemaining":min(w["percentRemaining"] for w in windows),
+                     "boundedBy":[w["id"] for w in windows],"limitingWindowIds":[limiting],
+                     "pace":{"worstReservePercentPoints":self.headroom(name)},
+                     "runway":{"status":"projected_exhaustion"},"selection":{"spendPriority":0}}
+            scopes=[scope]
+            if provider == "claude": scopes.append(dict(scope,scope="model:fable"))
+            return {"provider":provider,"state":{"status":"fresh","stale":False},"windows":windows,
+                    "quotaSemantics":{"status":"known","effectiveAvailability":scopes}}
+        return {"schemaVersion":5,"providers":[row(claude,"claude"),row("codex","codex")]}
 
     def iso(self, at):
         return datetime.datetime.fromtimestamp(at, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -110,8 +140,18 @@ def ask(root, home, remote, sim, start, brief):
     entries = []
     for where, home_id, claude in ((home, "local", "claude"), (remote, "m0002", "claude_m0002")):
         state = where / "state"
-        for stale in list(state.glob("crew*.meta")) + [state / "quota-samples.jsonl"]:
+        for stale in list(state.glob("crew*.meta")):
             stale.unlink(missing_ok=True)
+        samples = []
+        for at, local_snap, remote_snap, crews in sim.samples:
+            snapshot = local_snap if home_id == "local" else remote_snap
+            rows = [{"provider":r["provider"],"account":"","windows":[
+                {"window":w["id"],"pct":w["percentRemaining"],"resets":w["resetsAt"]} for w in r["windows"]]}
+                    for r in snapshot["providers"]]
+            observed = [{"task":c["task"],"provider":"codex" if c["provider"]=="codex" else "claude","model":c["model"]}
+                        for c in crews if c["home"]==home_id]
+            samples.append({"at":wall-(sim.now-at),"rows":rows,"crews":observed})
+        (state/"quota-samples.jsonl").write_text("".join(json.dumps(r)+"\n" for r in samples))
         claude_n = 0
         for i, crew in enumerate(c for c in sim.crews if c["home"] == home_id):
             provider = "codex" if crew["provider"] == "codex" else "claude"
@@ -125,7 +165,9 @@ def ask(root, home, remote, sim, start, brief):
                             "account": "", "model": "", "claude": provider == "claude",
                             "scopes": ["all_models"] + (["model:fable"] if provider == "claude" else []),
                             "signature": sim.signature(crew["provider"]),
-                            "draw": crew["rate"] * (crew["end"] - crew["start"]), "span": crew["end"] - crew["start"]})
+                            "windows": {("weekly" if provider=="codex" else "seven_day"):{"draw":crew["rate"]*(crew["end"]-crew["start"]),"span":crew["end"]-crew["start"]},
+                                        **({"five_hour":{"draw":8,"span":crew["end"]-crew["start"]}} if provider=="claude" else {})},
+                            "span": crew["end"] - crew["start"]})
     with open(home / "state" / "dispatch-charges.jsonl", "w") as ledger:
         for entry in entries:
             if entry["signature"] is None:
@@ -141,10 +183,12 @@ def ask(root, home, remote, sim, start, brief):
     env = dict(os.environ, FM_HOME=str(home))
     env.pop("TYPESAFE_API_KEY", None)
     env.pop("CLAUDE_CONFIG_DIR", None)
-    out = subprocess.run([str(root / "bin/fm-dispatch-resolve.sh"), "--rule", RULE_OF[start["class"]],
+    process = subprocess.run([str(root / "bin/fm-dispatch-resolve.sh"), "--rule", RULE_OF[start["class"]],
                           "--check", harness, model, effort, str(brief), "--project", "app"],
-                         env=env, capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
-    result = json.loads(out)
+                         env=env, capture_output=True, text=True)
+    if process.returncode:
+        raise RuntimeError(f"resolver exit {process.returncode}: {process.stderr}")
+    result = json.loads(process.stdout.strip().splitlines()[-1])
     return result, result["check"]["verdict"]
 
 
@@ -158,6 +202,8 @@ def main():
     end = epoch(fixture["end"])
     placed = {name: 0 for name in sim.pct}
     decisions, refused_historical, held, behind_placements = [], 0, 0, 0
+    measured_placements = 0
+    reserve_at_start = {name:100.0 for name in sim.pct}
     lowest = dict(sim.pct)
     while queue and queue[0]["due"] <= end:
         start = queue.pop(0)
@@ -165,7 +211,7 @@ def main():
         for name in lowest:
             lowest[name] = min(lowest[name], sim.pct[name])
         if mode == "historical":
-            sim.place(start["historical"].split(":")[0])
+            sim.place(start["historical"].split(":")[0], model=start["historical"].split(":")[1])
             placed[start["historical"].split(":")[0]] += 1
             continue
         result, verdict = ask(root, home, remote, sim, start, brief)
@@ -181,14 +227,22 @@ def main():
         heads = {name: sim.headroom(name, charged=True) for name in sim.pct}
         # Usable as the resolver judges it: room for one more crew's fixed draw
         # above the 10% reserve once in-flight draw is counted.
-        usable = [heads[name] for name in heads if sim.pct[name] - sim.owed(name) - 5 >= 10]
-        if max(usable) - heads[provider] > 20:
+        usable = [heads[name] for name in heads
+                  if (start["class"] != "design" or name.startswith("claude"))
+                  and sim.pct[name] - sim.owed(name) - sim.draw[name]["points_per_start"] >= 10
+                  and (name not in sim.session or sim.session[name] - sum(
+                      8*(c["end"]-sim.now)/(c["end"]-c["start"]) for c in sim.crews if c["provider"]==name) - 8 >= 10)]
+        if usable and max(usable) - heads[provider] > 20:
             behind_placements += 1
+            print(json.dumps({"behind":provider,"class":start["class"],"heads":heads,"usable":usable}),file=sys.stderr)
         decisions.append({"t": sim.now - sim.start, "chosen": provider, "headroom": heads})
         if os.environ.get("REPLAY_TRACE"):
             print(json.dumps({"t": round((sim.now - sim.start) / 3600, 2), "chosen": provider,
                               "pct": {k: round(v, 1) for k, v in sim.pct.items()}}), file=sys.stderr)
-        sim.place(provider, result["chosen"]["home"])
+        own = sim.draw[provider]["points_per_start"]
+        reserve_at_start[provider] = min(reserve_at_start[provider],sim.pct[provider]-sim.owed(provider)-own)
+        if (result["chosen"].get("burn") or {}).get("windows"): measured_placements += 1
+        sim.place(provider, result["chosen"]["home"], result["chosen"]["profile"].get("model","default"))
         placed[provider] += 1
     sim.advance(end)
     for name in lowest:
@@ -199,6 +253,7 @@ def main():
                       "lowest_percent": {k: round(v, 1) for k, v in lowest.items()},
                       "final_spread": round(max(heads.values()) - min(heads.values()), 1),
                       "behind_placements": behind_placements, "held": held,
+                      "measured_placements":measured_placements,"reserve_at_start":reserve_at_start,"lowest_session":sim.minimum_session,
                       "historical_codex_starts_refused": refused_historical, "unplaced": len(queue)}))
 
 

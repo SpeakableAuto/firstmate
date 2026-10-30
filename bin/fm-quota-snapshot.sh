@@ -54,6 +54,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 # shellcheck source=bin/fm-quota-pacing-lib.sh
 . "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
+# shellcheck source=bin/fm-quota-balance-lib.sh
+. "$SCRIPT_DIR/fm-quota-balance-lib.sh"
 
 usage() { sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; }
 die_usage() { printf 'error: %s\n' "$1" >&2; exit 2; }
@@ -107,8 +109,10 @@ if [ -z "$SECONDMATE" ]; then
     pacing=$(fm_quota_pacing_state "$CONFIG/crew-dispatch.json" "$STATE" "$MERGED_FILE") \
       || unavailable "invalid quota pacing settings"
   fi
-  jq -c --argjson admission "$admission" --argjson pacing "$pacing" \
-    '. + {firstmateClaudeAdmission: $admission, firstmatePacing: $pacing}' "$MERGED_FILE" \
+  machine=$(fm_quota_balance_machine_state "$CONFIG" "$STATE") || machine='{"available":false,"reason":"machine evidence failed"}'
+  burn=$(python3 "$SCRIPT_DIR/fm-quota-burn.py" rates "$STATE" "$(date +%s)") || burn='{}'
+  jq -c --argjson machine "$machine" --argjson burn "$burn" --argjson admission "$admission" --argjson pacing "$pacing" \
+    '. + {firstmateClaudeAdmission: $admission, firstmatePacing: $pacing, firstmatePlacement:$machine, firstmateBurn:$burn}' "$MERGED_FILE" \
     || unavailable "could not attach Claude crew guard evidence"
   exit 0
 fi

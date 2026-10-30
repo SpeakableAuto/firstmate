@@ -421,9 +421,40 @@ def ledger(state, operation, task=None, mode=None):
         return due
 
 
+def pool(config, count):
+    """Read-only machine fit/room evidence for the quota resolver pool."""
+    path = config / "crew-placement.json"
+    if not path.exists():
+        return {"configured": False, "available": True}
+    try:
+        profile = read(path)
+        cap = profile["max_crew"]
+        if type(cap) is not int or not 1 <= cap <= 4:
+            raise ValueError("invalid machine crew cap")
+        if count < 0 or count >= cap:
+            raise ValueError(f"machine crew cap: {count}/{cap}")
+        free, swap = memory()
+        if free < profile["min_free_memory_percent"] or swap > profile["max_swap_mib"]:
+            raise ValueError("machine memory or swap limit")
+        if profile.get("drive"):
+            drive = Path(profile["drive"])
+            if not real_directory(drive) or not drive.is_mount() or not os.access(drive, os.W_OK):
+                raise ValueError("required machine drive unavailable")
+        volume = profile.get("data_volume")
+        if volume:
+            stat = os.statvfs(volume["path"])
+            if stat.f_bavail * stat.f_frsize / 1024**3 < volume["min_free_gib"]:
+                raise ValueError("machine disk below floor")
+        return {"configured": True, "available": True, "profile": profile, "crew_count": count}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return {"configured": True, "available": False, "reason": str(error)}
+
+
 def main():
     operation, *args = sys.argv[1:]
-    if operation == "memory":
+    if operation == "pool":
+        output = pool(Path(args[0]), int(args[1]))
+    elif operation == "memory":
         free, swap = memory()
         output = {"free_percent": free, "swap_mib": swap}
     elif operation == "worktree":
