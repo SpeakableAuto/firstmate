@@ -244,7 +244,8 @@ PY
 }
 
 check_growth_enrollment() {
-  local service="gui/$(id -u)/$GROWTH_LABEL"
+  local service
+  service="gui/$(id -u)/$GROWTH_LABEL"
   if command -v launchctl >/dev/null && launchctl print "$service" >/dev/null 2>&1; then
     echo "ok internal growth LaunchAgent $service"
     return 0
