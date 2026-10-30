@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Report overdue independently cleared PRs, never merge them.
 
-Armed via fm-clear-unmerged-check.sh; uses one bounded gh-axi GraphQL list per
-registered GitHub repository (100 PRs, 100 paths per PR; incomplete reads refuse).
+Armed via fm-clear-unmerged-check.sh; discovers PR URLs from local CLEAR reports,
+then uses one bounded gh-axi GraphQL metadata read per candidate (100 paths;
+incomplete reads refuse). Repositories without CLEAR reports need no forge read.
 Registry names follow fm-project-mode.sh; origin resolves each registered clone.
 Local-only and Gerrit projects are excluded through that script's public interface.
 The optional config/clear-unmerged-skip-repos lists owner/repo or host/owner/repo,
@@ -26,7 +27,8 @@ A changed SHA without a matching CLEAR cannot alert. Exactly two hours is not
 more than two hours. This is an alert, not a grant of merge authority.
 
 Carve-out declarations are honored and never override fm-pr-lint.py's classifier
-on body, paths and added code. Eligible overdue PRs require a complete bounded
+on body, paths and added code. Closed, merged, draft, or moved-head PRs stop
+after metadata. Eligible overdue PRs require a complete bounded
 gh-axi diff plus a head recheck; missing evidence refuses. Already-alerted PR+head
 identities, and every PR after this pass selects its alert, skip that diff read so
 they cannot spend the scan budget. Malformed declarations refuse. All non-Done
@@ -34,7 +36,8 @@ captain holds are read through fm-tasks-axi.sh, including URL-linked backlog
 rows and tasks bound by state/*.meta pr= or a matching review task id.
 
 state/.clear-unmerged.json stores schema=1, alerted PR+head identities, observed
-head clocks (pruned per repository after a complete PR list), clamped future
+head clocks (removed when a candidate is closed or absent), a next-candidate
+cursor for budget continuation, clamped future
 report times, and the last error and report-skip diagnostics for repeat
 suppression. A nonblocking flock serializes checks.
 A failed project, repository or PR read is reported and skipped; the remaining
@@ -42,8 +45,11 @@ items are still evaluated, and the failed item is never marked alerted.
 At most one new alert per pass keeps watcher output bounded; subsequent polls
 advance through the remaining candidates. Disarming retains this history.
 The entire scan is bounded to min(20, FM_CHECK_TIMEOUT-2) seconds, with a 10s
-per-command cap. Budget/forge/registry/hold failures report missing evidence;
-they never mark a PR alerted. A test-only FM_CLEAR_UNMERGED_NOW freezes age
+per-command cap. FM_CLEAR_UNMERGED_MAX_CALLS bounds forge calls per tick
+(default 12); an overdue eligible candidate needs three calls including metadata,
+diff and head recheck. Unreached candidates are named as deferred and resumed
+first next tick. Item failures are named as skipped, not whole-check unavailable.
+Budget/forge/registry/hold failures never mark a PR alerted. A test-only FM_CLEAR_UNMERGED_NOW freezes age
 calculation, never the real-time budget. No credentials or shell code are read.
 """
 import base64
@@ -56,6 +62,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -76,6 +83,10 @@ class Unavailable(Exception):
     pass
 
 
+class Deferred(Unavailable):
+    pass
+
+
 ITEM_ERRORS = (Unavailable, OSError, ValueError, KeyError, TypeError, IndexError, AttributeError)
 
 
@@ -88,6 +99,9 @@ class Poll:
         if timeout < 3:
             raise Unavailable('FM_CHECK_TIMEOUT must be at least 3 seconds')
         self.deadline = time.monotonic() + min(20, timeout-2)
+        self.calls_left = int(os.environ.get('FM_CLEAR_UNMERGED_MAX_CALLS', '12'))
+        if self.calls_left < 1:
+            raise Unavailable('FM_CLEAR_UNMERGED_MAX_CALLS must be positive')
         self.now = time.time()
         if os.environ.get('FM_TEST_SEAM') == '1':
             self.now = int(os.environ.get('FM_CLEAR_UNMERGED_NOW', self.now))
@@ -95,11 +109,15 @@ class Poll:
     def remaining(self):
         left = self.deadline-time.monotonic()
         if left <= 0:
-            raise Unavailable('scan budget exhausted; retry or reduce registered repository count')
+            raise Deferred('scan time budget exhausted')
         return min(10, left)
 
     def run(self, args):
         bound = self.remaining()
+        if args[0] == 'gh-axi':
+            if self.calls_left == 0:
+                raise Deferred('forge call budget exhausted')
+            self.calls_left -= 1
         with subprocess.Popen([str(a) for a in args], stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, text=True, start_new_session=True) as proc:
             try:
@@ -119,7 +137,7 @@ class Poll:
             raise Unavailable(f'{path} exceeds the 2 MiB read bound')
         return path.read_text()
 
-    def repos(self, errors):
+    def repos(self, errors, wanted):
         skip_file = self.config/'clear-unmerged-skip-repos'
         skipped = set()
         if skip_file.exists():
@@ -140,14 +158,20 @@ class Poll:
                     raise Unavailable('invalid project registry name')
                 if re.search(r'\bMichael\b', row, re.I):
                     continue
-                mode = self.run([BIN/'fm-project-mode.sh', name]).strip()
-                forge = self.run([BIN/'fm-project-mode.sh', '--forge', name]).strip()
-                if mode.split()[0] == 'local-only' or forge == 'gerrit':
-                    continue
                 remote = self.run(['git', '-C', self.projects/name, 'remote', 'get-url', 'origin']).strip()
                 match = re.fullmatch(r'(?:https?://|ssh://git@|git@)([A-Za-z0-9.-]+)[:/]('+SLUG+'/'+SLUG+r')(?:\.git)?/?', remote)
                 if not match:
                     raise Unavailable(f'unsupported origin for {name}; a GitHub origin is required')
+                host, repo = match.groups()
+                repo = repo.removesuffix('.git')
+                if (host.lower(), repo) not in wanted:
+                    continue
+                mode = self.run([BIN/'fm-project-mode.sh', name]).strip()
+                forge = self.run([BIN/'fm-project-mode.sh', '--forge', name]).strip()
+                if mode.split()[0] == 'local-only' or forge == 'gerrit':
+                    continue
+            except Deferred:
+                raise
             except (Unavailable, IndexError) as error:
                 errors.append(f'{name}: {error}')
                 continue
@@ -232,26 +256,25 @@ class Poll:
                         urls.update(URL.findall(line[3:]))
         return ids, urls
 
-    def prs(self, host, repo):
-        owner, name = repo.split('/')
+    def pr(self, url):
+        host, owner, name, _, number = url.removeprefix('https://').split('/')
+        repo = owner+'/'+name
         query = '''query { repository(owner:%s,name:%s) {
-          pullRequests(states:OPEN,first:100,orderBy:{field:CREATED_AT,direction:ASC}) {
-            pageInfo { hasNextPage } nodes {
-              url headRefOid body createdAt updatedAt additions
+          pullRequest(number:%s) {
+              url state isDraft headRefOid body createdAt updatedAt additions
               files(first:100) { pageInfo { hasNextPage } nodes { path } }
               commits(last:1) { nodes { commit { oid pushedDate } } }
               timelineItems(last:1,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]) {
                 nodes { ... on HeadRefForcePushedEvent { createdAt } }
               }
-            }
           }
-        }}''' % (json.dumps(owner), json.dumps(name))
+        }}''' % (json.dumps(owner), json.dumps(name), number)
         out = self.run(['gh-axi', 'api', 'POST', 'graphql', '--hostname', host,
                         '--field', 'query='+query, '--jq', '@base64 | {chunks: [scan(".{1,1000}") | {part: .}]}'])
         try:
             # gh-axi caps raw output at 4000 and individual strings at 2000.
             # Caller-shaped 1000-byte scalar chunks preserve the entire result
-            # in one list call without relying on an unsupported --full flag.
+            # in one metadata call without relying on an unsupported --full flag.
             header = re.search(r'^chunks\[([0-9]+)\]\{part\}:\n', out)
             if not header:
                 raise ValueError('missing chunk envelope')
@@ -262,12 +285,7 @@ class Poll:
             result = json.loads(base64.b64decode(encoded, validate=True))
             if result.get('errors'):
                 raise ValueError('GraphQL errors')
-            prs = result['data']['repository']['pullRequests']
-            if prs['pageInfo']['hasNextPage'] is not False:
-                raise Unavailable(f'incomplete PR list for {host}/{repo}; exceeds 100 open PRs')
-            if not isinstance(prs['nodes'], list):
-                raise ValueError('nodes missing')
-            return prs['nodes']
+            return result['data']['repository']['pullRequest']
         except (ValueError, KeyError, TypeError) as error:
             raise Unavailable(f'gh-axi missing complete PR data for {host}/{repo}') from error
 
@@ -321,6 +339,8 @@ class Poll:
         identity = url+'@'+sha
         if age <= 7200 or identity in alerted:
             return None
+        if self.calls_left < 2:
+            raise Deferred('forge call budget needs two reads for diff and head recheck')
         changes = self.added_lines(pr)
         if LINT.carve_out_signals(body, paths, changes):
             return None
@@ -337,7 +357,7 @@ class Poll:
                                '--hostname', host, '--jq', '.head.sha']), 'body', 2)
         if head != pr['headRefOid']:
             raise Unavailable(f'head changed while reading diff for {url}; retry')
-        # Count additions against the list response so a shortened patch cannot
+        # Count additions against the metadata response so a shortened patch cannot
         # silently pass classification. Binary changes cannot be classified.
         added = [line[1:] for line in diff.splitlines()
                  if line.startswith('+') and not line.startswith('+++ ')]
@@ -403,41 +423,69 @@ def check():
         if not isinstance(record, dict) or record.get('schema') != 1 or not isinstance(record.get('alerted'), list):
             raise Unavailable('invalid clear-unmerged history; preserve it and repair the record')
         errors, diagnostics = [], []
+        candidate = None
+        urls = []
+        global_failure = False
         try:
-            repos = poll.repos(errors)
-            reports = poll.reports(record, diagnostics) if repos else []
-            held_ids, held_urls = poll.holds() if repos else (set(), set())
-            candidate = None
+            reports = poll.reports(record, diagnostics)
+            urls = sorted({url for _, urls, _, _, clear in reports if clear for url in urls})
+            if urls and shutil.which('gh-axi') is None:
+                global_failure = True
+                raise Unavailable('gh-axi missing; install gh-axi')
+            wanted = {tuple(url.removeprefix('https://').split('/', 1)) for url in urls}
+            wanted = {(host.lower(), tail.rsplit('/pull/', 1)[0]) for host, tail in wanted}
+            repos = set(poll.repos(errors, wanted)) if urls else set()
+            urls = [url for url in urls if
+                    (url.split('/')[2].lower(), '/'.join(url.split('/')[3:5])) in repos]
+            held_ids, held_urls = poll.holds() if urls else (set(), set())
+            cursor = record.get('cursor')
+            if cursor in urls:
+                index = urls.index(cursor)
+                urls = urls[index:] + urls[:index]
             heads = record.setdefault('heads', {})
-            for host, repo in repos:
+            deferred = []
+            for index, url in enumerate(urls):
                 try:
-                    prs = poll.prs(host, repo)
-                except ITEM_ERRORS as error:
-                    errors.append(str(error))
-                    continue
-                prefix = f'https://{host}/{repo}/pull/'.lower()
-                listed = {pr.get('url') for pr in prs}
-                for url in [u for u in heads if u.lower().startswith(prefix) and u not in listed]:
-                    del heads[url]
-                for pr in prs:
-                    try:
-                        poll.remaining()
-                        head_time = poll.head_time(pr, record)
-                        if candidate is None:
-                            candidate = poll.candidate(pr, reports, held_ids, held_urls, head_time, record['alerted'])
-                    except ITEM_ERRORS as error:
-                        errors.append(str(error))
+                    poll.remaining()
+                    if poll.calls_left == 0:
+                        raise Deferred('forge call budget exhausted')
+                    pr = poll.pr(url)
+                    if pr is None or pr['state'] in ('CLOSED', 'MERGED'):
+                        heads.pop(url, None)
                         continue
-            if candidate:
-                # Output precedes the receipt: failed persistence can repeat an
-                # alert but cannot silently suppress an alert never produced.
-                print(candidate[1], flush=True)
-                record['alerted'].append(candidate[0])
+                    if pr['url'] != url:
+                        raise Unavailable('forge returned a different PR identity')
+                    if pr['state'] != 'OPEN':
+                        raise Unavailable('forge returned unknown PR state')
+                    if pr['isDraft']:
+                        continue
+                    if not any(url in report_urls and pr['headRefOid'] in shas and clear
+                               for _, report_urls, shas, _, clear in reports):
+                        continue
+                    head_time = poll.head_time(pr, record)
+                    if candidate is None:
+                        candidate = poll.candidate(pr, reports, held_ids, held_urls, head_time, record['alerted'])
+                        if candidate:
+                            # Emit immediately after the diff/head guard, before other PR reads.
+                            # A failed save can repeat an alert but cannot hide an unprinted one.
+                            print(candidate[1], flush=True)
+                            record['alerted'].append(candidate[0])
+                except Deferred as error:
+                    deferred = urls[index:]
+                    errors.append(f'{error}; deferred: '+', '.join(deferred))
+                    break
+                except ITEM_ERRORS as error:
+                    errors.append(f'{url}: skipped: {error}')
+            record['cursor'] = deferred[0] if deferred else None
+        except Deferred as error:
+            record['cursor'] = urls[0] if urls else record.get('cursor')
+            errors.append(f'{error}; deferred: '+', '.join(urls))
         except ITEM_ERRORS as error:
             errors.append(str(error))
         note = ''
         if errors:
-            note = 'CLEAR unmerged check unavailable: '+'; '.join(' '.join(e.split()) for e in dict.fromkeys(errors))
+            note = ('CLEAR unmerged check unavailable: ' if global_failure
+                    else 'CLEAR unmerged scan diagnostics: ')+'; '.join(' '.join(e.split()) for e in dict.fromkeys(errors))
             if note != record.get('error'):
                 print(note, flush=True)
         record['error'] = note
