@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Append-only backlog transition history and local-calendar daily flow report.
 
-The journal is data/flow-history.jsonl, bounded at 16 MiB. Writers refuse
-before mutation if the journal cannot accept an attempt; a successful mutation
-whose receipt cannot be written leaves an unmatched attempt, making reports
-unknown. Receipts preserve only action, task id, priority and UTC timestamp,
+The journal is data/flow-history.jsonl, bounded at 16 MiB. Recording failures
+warn without blocking lifecycle mutations. Unmatched attempts and malformed rows
+make affected days unknown, while later valid days remain reportable. Receipts preserve action, task id, kind, priority and UTC timestamp,
 never task bodies. A crash, malformed row, oversized journal, or incomplete
 attempt is reported as unknown; this reader never repairs or truncates history.
 The first recording day is partial, so only subsequent complete calendar days can
@@ -60,6 +59,9 @@ def journal(path, write=False):
 def append(stream, row):
     payload = json.dumps(row, separators=(',', ':')) + '\n'
     stream.seek(0, os.SEEK_END)
+    size = stream.tell()
+    if size and os.pread(stream.fileno(), 1, size - 1) != b'\n':
+        stream.write('\n')
     if stream.tell() + len(payload.encode()) >= LIMIT:
         raise ValueError('journal reached 16 MiB; preserve it and arrange archival')
     stream.write(payload)
@@ -67,17 +69,17 @@ def append(stream, row):
     os.fsync(stream.fileno())
 
 
-def begin(path, task_id, priority, landing):
+def begin(path, task_id, priority, landing, kind):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', task_id):
         raise ValueError('invalid task id')
-    if landing not in ('none', 'merge', 'local'):
+    if landing not in ('none', 'merge', 'local', 'report'):
         raise ValueError('invalid landing evidence')
     with journal(path, True) as stream:
         if os.fstat(stream.fileno()).st_size == 0:
             append(stream, {'type': 'coverage', 'version': 1, 'timestamp': now()})
         token = uuid.uuid4().hex
         append(stream, dict(type='attempt', token=token, task_id=task_id,
-                            priority=priority, landing=landing, timestamp=now()))
+                            priority=priority, kind=kind, landing=landing, timestamp=now()))
     print(token)
 
 
@@ -97,100 +99,116 @@ def finish(path, token, action, task_id, result, output):
                 raise ValueError('unsupported tasks-axi mutation receipt')
             changed = not first.startswith(f'ok: {action} {task_id} already')
     with journal(path, True) as stream:
-        rows = [json.loads(line) for line in stream]
-        if any(not isinstance(row, dict) for row in rows):
-            raise ValueError('journal rows must be objects')
+        rows = []
+        for line in stream:
+            try:
+                row = json.loads(line)
+                if isinstance(row, dict): rows.append(row)
+            except ValueError:
+                pass
         attempt = next((r for r in rows if r.get('type') == 'attempt' and r.get('token') == token), None)
         if attempt is None or attempt['task_id'] != task_id:
             raise ValueError('missing journal attempt')
         if any(r.get('token') == token and r.get('type') != 'attempt' for r in rows):
             raise ValueError('journal attempt already completed')
-        landed = action == 'done' and attempt.get('landing', 'none') != 'none' and result == 0
+        prior = [r for r in rows if r.get('type') == 'transition' and r.get('task_id') == task_id]
+        reset = max((i for i, r in enumerate(prior) if r.get('action') in ('start', 'reopen')), default=-1)
+        already_landed = any(r.get('action') == 'done' and r.get('landing', 'none') != 'none' for r in prior[reset + 1:])
+        landed = action == 'done' and attempt.get('landing', 'none') != 'none' and result == 0 and not already_landed
         append(stream, dict(type='transition' if changed or landed else 'complete', token=token,
-                            action=action, task_id=task_id, priority=attempt['priority'],
+                            action=action, task_id=task_id, priority=attempt['priority'], kind=attempt.get('kind', 'task'),
                             landing=attempt.get('landing', 'none'), timestamp=now(), result=result))
 
 
-def read_history(path):
+def read_history(path, grace=0):
     with journal(path) as stream:
-        rows = [json.loads(line) for line in stream]
-    if any(not isinstance(row, dict) for row in rows):
-        raise ValueError('journal rows must be objects')
-    if not rows or rows[0].get('type') != 'coverage' or rows[0].get('version') != 1:
+        lines = list(stream)
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+            stamp = dt.datetime.strptime(row['timestamp'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc)
+            row.update(stamp=stamp, day=stamp.astimezone(AEST).date())
+        except (ValueError, KeyError, TypeError):
+            row = None
+        rows.append(row)
+    if not rows or not rows[0] or rows[0].get('type') != 'coverage' or rows[0].get('version') != 1:
         raise ValueError('coverage header missing')
-    attempts = {}
-    completed = set()
-    events = []
-    for row in rows:
-        stamp = dt.datetime.strptime(row['timestamp'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc)
-        row['stamp'] = stamp
-        row['day'] = stamp.astimezone(AEST).date()
-        if stamp < rows[0].get('stamp', stamp):
-            raise ValueError('journal row precedes coverage')
-        if row['type'] == 'coverage':
-            if row is not rows[0]:
-                raise ValueError('duplicate coverage header')
+    attempts, completed, events, unknown = {}, set(), [], set()
+    for index, row in enumerate(rows[1:], 1):
+        if row is None:
+            # A torn line has no trusted date. Bound its uncertainty by adjacent
+            # valid timestamps; an open tail is unknown through today.
+            before = next(r['day'] for r in reversed(rows[:index]) if r)
+            after = next((r['day'] for r in rows[index + 1:] if r), dt.datetime.now(AEST).date())
+            unknown.update(before + dt.timedelta(days=n) for n in range(max(0, (after-before).days) + 1))
             continue
-        token = row['token']
-        if not isinstance(token, str) or not token:
-            raise ValueError('invalid journal token')
-        if row['type'] == 'attempt':
-            if token in attempts:
-                raise ValueError('duplicate attempt')
-            if row.get('landing', 'none') not in ('none', 'merge', 'local'):
-                raise ValueError('invalid landing evidence')
-            attempts[token] = row
-        elif row['type'] in ('transition', 'complete'):
-            if token not in attempts or token in completed:
-                raise ValueError('invalid journal receipt')
-            attempt = attempts[token]
-            if stamp < attempt['stamp']:
-                raise ValueError('journal receipt precedes attempt')
-            if row['task_id'] != attempt['task_id'] or row['priority'] != attempt['priority']:
-                raise ValueError('journal receipt identity mismatch')
-            if row['action'] not in ('start', 'done', 'reopen'):
-                raise ValueError('invalid journal action')
-            landing = row.get('landing', attempt.get('landing', 'none'))
-            if landing != attempt.get('landing', 'none'):
-                raise ValueError('journal receipt landing mismatch')
-            if row['action'] != 'done' and landing != 'none':
-                raise ValueError('landing evidence belongs only to completion')
-            row['landing'] = landing
-            completed.add(token)
-            if row['type'] == 'transition':
-                if row['result'] != 0:
-                    raise ValueError('failed transition receipt')
-                events.append(row)
-        else:
-            raise ValueError('unsupported journal row')
-    if set(attempts) != completed:
-        raise ValueError('incomplete transition attempt; history may have a gap')
-    return rows[0]['day'] + dt.timedelta(days=1), events
+        try:
+            if row['stamp'] < rows[0]['stamp']:
+                raise ValueError('row precedes coverage')
+            token = row['token']
+            if not isinstance(token, str) or not token:
+                raise ValueError('invalid token')
+            if row['type'] == 'attempt':
+                if token in attempts:
+                    unknown.add(attempts[token]['day'])
+                    raise ValueError('duplicate attempt')
+                attempts[token] = row
+            elif row['type'] in ('transition', 'complete'):
+                attempt = attempts[token]
+                if token in completed or row['stamp'] < attempt['stamp']:
+                    unknown.add(attempt['day'])
+                    raise ValueError('invalid receipt order')
+                if row['task_id'] != attempt['task_id'] or row['priority'] != attempt['priority']:
+                    raise ValueError('receipt identity mismatch')
+                if row['action'] not in ('start', 'done', 'reopen'):
+                    raise ValueError('invalid action')
+                landing = row.get('landing', attempt.get('landing', 'none'))
+                if landing not in ('none', 'merge', 'local', 'report') or landing != attempt.get('landing', 'none'):
+                    raise ValueError('invalid landing')
+                if row['action'] != 'done' and landing != 'none':
+                    raise ValueError('landing only belongs to completion')
+                if row['type'] == 'transition' and row['result'] != 0:
+                    raise ValueError('failed transition')
+                row['landing'] = landing
+                completed.add(token)
+                if row['type'] == 'transition': events.append(row)
+            else:
+                raise ValueError('unsupported row')
+        except (ValueError, KeyError, TypeError):
+            unknown.add(row['day'])
+    unknown.update(row['day'] for token, row in attempts.items() if token not in completed
+                   and (dt.datetime.now(dt.timezone.utc) - row['stamp']).total_seconds() >= grace)
+    return rows[0]['day'] + dt.timedelta(days=1), events, unknown
 
 
-def report(path, day):
+def report(path, day, held):
     try:
-        coverage, events = read_history(path)
+        coverage, events, unknown = read_history(path)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f'flow_history: unknown ({exc})')
         print('stop_starting: unknown')
         return
     print(f'flow_history: AEST; complete coverage from {coverage}; wrapper/lifecycle transitions only')
+    if unknown:
+        print('history_warning: unknown days ' + f'{min(unknown)}..{max(unknown)} ({len(unknown)} days)')
     daily = {}
     for row in events:
         items = daily.setdefault(row['day'], {
-            'start': set(), 'finished': set(), 'closed-not-landed': set(), 'reopen': set()
+            'start': set(), 'finished': set(), 'closed-not-landed': set(), 'reopen': set(), 'eligible': set()
         })
         if row['action'] == 'done':
-            key = 'finished' if row['landing'] in ('merge', 'local') else 'closed-not-landed'
+            key = 'finished' if row['landing'] in ('merge', 'local', 'report') else 'closed-not-landed'
             items[key].add(row['task_id'])
         else:
             items[row['action']].add(row['task_id'])
-    empty = {'start': set(), 'finished': set(), 'closed-not-landed': set(), 'reopen': set()}
+            if row['action'] == 'start' and row.get('kind', 'task') not in ('program', 'captain', 'secondmate', 'public-followup') and row['task_id'] not in held:
+                items['eligible'].add(row['task_id'])
+    empty = {'start': set(), 'finished': set(), 'closed-not-landed': set(), 'reopen': set(), 'eligible': set()}
     def counts(value):
         return daily.get(value, empty)
     today = dt.datetime.now(dt.timezone.utc).astimezone(AEST).date()
-    if day < coverage or day >= today:
+    if day < coverage or day >= today or day in unknown:
         print(f'{day} unknown (outside complete journal coverage)')
     else:
         items = counts(day)
@@ -200,11 +218,12 @@ def report(path, day):
                            ('start', 'started'), ('reopen', 'reopened')):
             print(f"  {label}: {', '.join(sorted(items[key])) or '-'}")
     previous = day - dt.timedelta(days=1)
-    if previous < coverage or day >= today:
+    if previous < coverage or day >= today or {previous, day} & unknown:
         signal = 'unknown'
     else:
-        signal = 'yes' if all(len(counts(d)['start']) > len(counts(d)['finished'])
+        signal = 'yes' if all(len(counts(d)['eligible']) > len(counts(d)['finished'])
                               for d in (previous, day)) else 'no'
+    print('signal_basis: worker starts excluding currently held or blocked jobs; proven deliveries')
     print(f'stop_starting: {signal}')
 
 
@@ -215,25 +234,33 @@ def main():
     start = commands.add_parser('begin')
     start.add_argument('task_id')
     start.add_argument('priority', type=int)
-    start.add_argument('landing', choices=['none', 'merge', 'local'])
+    start.add_argument('landing', choices=['none', 'merge', 'local', 'report'])
+    start.add_argument('--kind', default='task')
     end = commands.add_parser('finish')
     end.add_argument('token')
     end.add_argument('action', choices=['start', 'done', 'reopen'])
     end.add_argument('task_id')
     end.add_argument('result', type=int)
+    commands.add_parser('health')
     show = commands.add_parser('report')
+    show.add_argument('--held-json', default='[]')
     show.add_argument('--date', type=dt.date.fromisoformat,
                       help='completed AEST date; default yesterday')
     args = parser.parse_args()
     path = args.data / 'flow-history.jsonl'
     try:
         if args.command == 'begin':
-            begin(path, args.task_id, args.priority, args.landing)
+            begin(path, args.task_id, args.priority, args.landing, args.kind)
         elif args.command == 'finish':
             finish(path, args.token, args.action, args.task_id, args.result, sys.stdin.read())
+        elif args.command == 'health':
+            _, _, unknown = read_history(path, grace=60)
+            if unknown:
+                print('unknown flow days: ' + f'{min(unknown)}..{max(unknown)} ({len(unknown)} days)')
+                return 1
         else:
             day = args.date or dt.datetime.now(dt.timezone.utc).astimezone(AEST).date() - dt.timedelta(days=1)
-            report(path, day)
+            report(path, day, set(json.loads(args.held_json)))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f'flow-history: {exc}', file=sys.stderr)
         return 2

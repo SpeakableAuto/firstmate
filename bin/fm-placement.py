@@ -361,11 +361,12 @@ def ledger(state, operation, task=None, mode=None):
                 value["waits"].pop(task, None)
             else:
                 value["waits"][task] = {
-                    "task": task, "since": now if old.get("state") == "hold" else old.get("since", now), "checked": now,
+                    "task": task, "since": now if old.get("state") == "hold" or (old.get("state") == "wip" and decision["failed"] != ["finish-first"]) else old.get("since", now), "checked": now,
                     "impact": decision["impact"], "failed": decision["failed"],
                     "request": decision["request"],
                     "state": "ready" if decision["admitted"] else
-                             "unplaceable" if "fit" in decision["failed"] else "capacity",
+                             "unplaceable" if "fit" in decision["failed"] else
+                             "wip" if decision["failed"] == ["finish-first"] else "capacity",
                 }
             atomic(path, value)
             return decision
@@ -388,9 +389,12 @@ def ledger(state, operation, task=None, mode=None):
                 atomic(path, value)
             return True
         if operation in ("waits", "ordered"):
-            impacts = {}
+            impacts, order = {}, {}
             if operation == "ordered":
-                impacts = {row["id"]: row.get("impact") or "P2" for row in json.load(sys.stdin)["records"]}
+                records = json.load(sys.stdin)["records"]
+                impacts = {row["id"]: row.get("impact") or "P2" for row in records}
+                order = {row["id"]: (row["state"] != "in_flight", row.get("since") or "9999-99-99", row["order"])
+                         for row in records}
             history = []
             for event in value.get("bottlenecks", {}).values():
                 current = value["waits"].get(event["task"], {})
@@ -402,7 +406,7 @@ def ledger(state, operation, task=None, mode=None):
                                 over_four_hours=row["state"] in ("capacity", "ready") and now - row["since"] > 14400)
                     for row in value["waits"].values()] + history
             return sorted(rows,
-                          key=lambda row: (row["impact"], row["since"], row["task"]))
+                          key=lambda row: (row["impact"], order.get(row["task"], (True, "9999-99-99", 0)), row["since"], row["task"]))
         if not value["waits"]:
             return False
         # Metadata removals cover teardown/auto-retire. Lock and explicit slot

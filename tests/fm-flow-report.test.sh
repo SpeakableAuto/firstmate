@@ -124,9 +124,83 @@ with open(p,'w') as f:
     for row in rows: f.write(json.dumps(row)+'\n')
 PYBAD
 out=$(bash "$report" --date 2020-10-29)
-assert_contains "$out" 'flow_history: unknown' 'receipt before its attempt is invalid'
+assert_contains "$out" 'history_warning: unknown days' 'receipt before its attempt is invalid'
+assert_contains "$out" 'stop_starting: yes' 'older corrupt receipt does not blind later valid days'
 cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
 printf '{"type":"attempt","timestamp":"2020-10-30T12:00:00Z","token":"unfinished","task_id":"unfinished","priority":3}\n' >> "$FM_HOME/data/flow-history.jsonl"
 out=$(bash "$report" --date 2020-10-29)
-assert_contains "$out" 'stop_starting: unknown' 'unmatched attempt never certifies complete history'
+assert_contains "$out" 'stop_starting: yes' 'future unmatched attempt does not blind prior complete days'
 pass 'journal edges preserve help, calendar boundaries and honest unknown results'
+
+# Invalid wrapper calls retain native diagnostics; option-first calls work.
+rc=0
+out=$(bash "$wrapper" start 2>&1) || rc=$?
+[ "$rc" -ne 0 ] || fail 'missing id must fail'
+[ -n "$out" ] || fail 'missing id must explain the error'
+rc=0
+out=$(bash "$wrapper" start nosuch 2>&1) || rc=$?
+[ "$rc" -ne 0 ] || fail 'unknown id must fail'
+[ -n "$out" ] || fail 'unknown id must explain the error'
+bash "$wrapper" "done" --note x carried --no-prune >/dev/null || fail 'flag-first mutation works'
+# A torn tail does not poison later receipts.
+bash "$wrapper" reopen oldest >/dev/null
+printf '{"type":"attempt","tok' >> "$FM_HOME/data/flow-history.jsonl"
+bash "$wrapper" start oldest >/dev/null || fail 'torn tail must not block lifecycle'
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYTAIL'
+import json, sys
+rows=[]
+for line in open(sys.argv[1]):
+    try: rows.append(json.loads(line))
+    except ValueError: pass
+assert rows[-1]['type']=='transition' and rows[-1]['task_id']=='oldest', rows[-1]
+PYTAIL
+pass 'wrapper errors and torn history do not stop later transitions'
+
+# Hold-aware signal excludes work waiting for outside input, without erasing starts.
+cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
+cat >> "$FM_HOME/data/backlog.md" <<'HELD'
+## In flight
+- [ ] first-28 - Held job (kind: ship) (hold: Outside answer) (hold-kind: external)
+- [ ] second-28 - Held job (kind: ship) (hold: Outside answer) (hold-kind: captain)
+- [ ] first-29 - Held job (kind: ship) (hold: Outside answer) (hold-kind: external)
+- [ ] second-29 - Held job (kind: ship) (hold: Outside answer) (hold-kind: captain)
+HELD
+out=$(bash "$report" --date 2020-10-29)
+assert_contains "$out" 'started=2' 'held starts remain visible in the daily report'
+assert_contains "$out" 'stop_starting: no' 'held starts do not trigger a finish-now signal'
+pass 'signal excludes currently held starts without hiding activity'
+
+assert_contains "$(cat "$FM_HOME/state/.wake-queue")" 'flow-history' 'damaged history wakes the supervisor'
+# A completed scout counts as delivered on the same basis as a landed ship.
+cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYSCOUT'
+import json, sys
+p=sys.argv[1]
+with open(p,'a') as f:
+    for day in ('28','29'):
+        for name in ('first','second'):
+            task=f'{name}-{day}'
+            row=dict(token=f'delivered-{task}', task_id=task, priority=2, kind='scout', landing='report', timestamp=f'2020-10-{day}T13:00:00Z')
+            f.write(json.dumps(dict(row,type='attempt'))+'\n')
+            f.write(json.dumps(dict(row,type='transition',action='done',result=0))+'\n')
+PYSCOUT
+out=$(bash "$report" --date 2020-10-29)
+assert_contains "$out" 'finished=2' 'scout reports are finished work'
+assert_contains "$out" 'stop_starting: no' 'delivered scouts balance their starts'
+pass 'scout delivery and damaged-history wake are visible'
+
+# Real parallel wrappers must retain complete receipts under contention.
+pids=()
+for i in 1 2 3 4 5 6; do
+  bash "$wrapper" add "parallel-$i" 'Concurrent fixture' --kind ship >/dev/null
+  bash "$wrapper" start "parallel-$i" > "$TMP_ROOT/parallel-$i.out" 2>&1 &
+  pids+=("$!")
+done
+for pid in "${pids[@]}"; do wait "$pid" || fail 'parallel start failed'; done
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYPARALLEL'
+import json, sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+starts=[r['task_id'] for r in rows if r['type']=='transition' and r['action']=='start' and r['task_id'].startswith('parallel-')]
+assert len(set(starts))==6 and len(starts)==6, starts
+PYPARALLEL
+pass 'parallel real wrapper starts retain every transition'

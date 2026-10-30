@@ -388,30 +388,36 @@ When a spawn is interrupted after launch delivery began, its exit path re-reads 
 
 ### Finish-first admission
 
-Fresh ship and scout spawns check backlog order through [`bin/fm-finish-first.sh`](../bin/fm-finish-first.sh) before allocating their endpoint or worktree.
-Unheld, unblocked open work at a higher priority leads.
-Within the same priority, every In-flight item leads every Queued item regardless of their creation dates, then older Queued work leads newer Queued work.
-Lower numeric priorities lead; a missing priority means 3, a missing date sorts before dated work, and equal dates retain backlog row order.
+Fresh ship and scout spawns check the backlog WIP limit through [`bin/fm-finish-first.sh`](../bin/fm-finish-first.sh) before allocating their endpoint or worktree.
+Within each impact level the existing placement queue orders carried-over resumptions first, then dated queued work oldest first, then undated work in backlog order.
+Each request is assessed independently; an older held, blocked or unplaceable job does not veto other runnable work.
 An In-flight item may resume without becoming a new start.
 Captain obligations, public follow-ups, persistent secondmates and parent program commissions are not worker jobs in this check.
 The same backlog applicability rules as lifecycle transitions apply, including the manual-backend and absent-backlog exemptions.
-Configured placement records this verdict in its existing capacity ledger and rechecks it through the ordinary queue; the spawn repeats the check under its task-set lock before allocation.
+Configured placement records WIP refusals as `wip` waits in its existing ledger and rechecks them through the ordinary queue; they are not machine-capacity bottlenecks.
+The spawn repeats the check under its task-set lock before allocation.
 
 When `config/crew-placement.json` exists, its positive `max_crew` value bounds open In-flight work at twice that many crew slots.
 It counts held and blocked In-flight work too, and does not count parked task records or worktrees.
-A new start at the bound is refused with a named item to finish; higher priority changes queue order but does not expand the WIP bound.
-Homes without `crew-placement.json` keep their existing uncapped behavior; malformed placement configuration refuses admission.
+P0 bypasses this WIP limit; other new starts at the bound are refused with an available item to finish, or an explanation that all open work is held or blocked.
+Homes without `crew-placement.json` remain uncapped; malformed placement configuration refuses ordinary admission.
 This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
-[`tests/fm-finish-first.test.sh`](../tests/fm-finish-first.test.sh) exercises the policy using tasks-axi and a redacted operational backlog shape.
+[`tests/fm-finish-first.test.sh`](../tests/fm-finish-first.test.sh) exercises admission and placement using the operational backlog shape.
 
 ### Daily work flow
 
 [`bin/fm-flow-report.sh`](../bin/fm-flow-report.sh) reports finished, closed-not-landed, started and reopened items separately for the previous AEST day, or for one explicit completed day selected with `--date`.
-Only teardown after a verified pull request merge or verified `local main` landing emits a finished event; another Done transition, including a direct `done --pr`, is closed-not-landed.
+Teardown emits a finished event only after verified pull request merge, a recorded local landing still containing the exact task head, or a scout report whose completion gate passed.
+The local merge command records `local_landed_head` in task metadata only when it advances the default branch; old local landings without a receipt remain closed-not-landed.
+Another Done transition, including a direct `done --pr`, is closed-not-landed.
 Stored timestamps remain UTC.
 [`bin/fm-flow-history.py`](../bin/fm-flow-history.py) owns journal schema, recording boundaries and unknown-history behavior; [`tests/fm-flow-report.test.sh`](../tests/fm-flow-report.test.sh) exercises real wrapper and lifecycle transitions.
 Manual edits and direct calls to `tasks-axi` are outside this journal, so this is transition evidence rather than a reconstruction of all historical work.
-When started exceeds finished on both reported AEST days, fresh admission reads the stop-starting signal and refuses work at the same or a lower priority than finishable In-flight work; a higher priority still jumps the queue.
+When eligible starts exceed finished deliveries on both reported AEST days, the report emits `stop_starting: yes` for the supervisor to prioritize finishing.
+This signal excludes non-worker starts and currently held or blocked jobs, while the daily started list still shows all activity.
+It is advisory to scheduling; the WIP bound is the only finish-first start blocker.
+Malformed history affects only its bounded date interval; recording failures raise a deduplicated wake and never prevent a backlog mutation.
+Preserve damaged journals for diagnosis; after repairing a storage limit, archive the journal outside `flow-history.jsonl` and let the next transition begin new coverage rather than fabricating historical receipts.
 The pstack job 03 morning scoreboard is the intended consumer of these counts.
 
 ### Which backlog receives a transition
@@ -1375,14 +1381,15 @@ The slot owner signals successful reclaim and merge-proved slot removal through 
 
 The ordinary watcher rechecks capacity waits on crew metadata/lock changes, explicit slot-reclaim signals, and at least every 900 seconds while the watcher is running.
 It orders requests by the canonical backlog `(impact: P0)` through `(impact: P3)`, oldest first within each level.
-Missing impact defaults to P2; legacy `(priority: N)` and task-classification fields never override impact.
+The shared backlog parser uses explicit impact first, legacy numeric `(priority: 0..3)` only when impact is absent, then P2.
+Placement, WIP admission and flow receipts use that same resolved impact.
 The read-only backlog parser strips impact metadata from display titles, and each queue read uses the current backlog impact.
 Rechecks preserve the original wait age, apply current machine/account checks, and append one ordinary `capacity-ready` row to the durable wake queue for Firstmate to reroute through dispatch; they never launch a worker or grant new authority.
 A failing recheck wakes the supervisor once per distinct error, then at most every 900 seconds.
 Backlog captain/external holds suspend admission checks until the row is queued and unheld again.
 A wait whose backlog row is done or no longer exists leaves the queue.
 Capacity and hold waits keep ordinary supervision alive even with no live workers; unplaceable waits do not.
-Firstmate's morning report reads `bin/fm-placement.sh waits` (run from the home, for example `FM_HOME=<home> <home>/bin/fm-placement.sh waits`): a JSON array of the same ledger, ordered P0-P3 then oldest first, where each current-wait row carries `task`, `state` (`capacity`, `ready`, `hold`, or `unplaceable`), `failed` (the named failing checks), `impact`, `since`, `checked`, `request`, and `over_four_hours` (true only for a `capacity` or `ready` wait older than four hours).
+Firstmate's morning report reads `bin/fm-placement.sh waits` (run from the home, for example `FM_HOME=<home> <home>/bin/fm-placement.sh waits`): a JSON array of the same ledger, ordered P0-P3 then oldest first, where each current-wait row carries `task`, `state` (`capacity`, `ready`, `wip`, `hold`, or `unplaceable`), `failed` (the named failing checks), `impact`, `since`, `checked`, `request`, and `over_four_hours` (true only for a `capacity` or `ready` wait older than four hours).
 The same read includes `history` rows for capacity waits that exceeded four hours before admission, removal, or a hold, for 48 hours after their last capacity observation so the next morning can report resolved bottlenecks too.
 These rows carry `over_four_hours: true`, `wait_seconds`, and `observed_at`; they never reenter dispatch, and their durable evidence remains in the ledger's `bottlenecks` map after the reporting window expires.
 The per-attempt decision with each check's reason is the matching entry in `state/capacity.json` `.decisions`.

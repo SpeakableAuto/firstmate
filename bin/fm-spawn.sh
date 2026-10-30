@@ -1701,7 +1701,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
   }
   if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
     FM_PLACEMENT_REFUSAL='task-set lock held by another operation'
-    echo "error: this home's task set is locked by another operation (a forced teardown is enumerating or removing its tasks); refusing to create task $ID rather than racing it" >&2
+    echo "error: this home's task set is locked by another operation (another spawn or teardown is publishing or removing tasks); refusing to create task $ID rather than racing it" >&2
     exit 1
   fi
   SPAWN_TASK_SET_LOCK_HELD=1

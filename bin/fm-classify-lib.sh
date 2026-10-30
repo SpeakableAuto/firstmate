@@ -1946,18 +1946,17 @@ status_new_lines_since_cursor() {  # <status-file> [<captured-end-offset>]
 # working|paused: checkpoint; done=<result>; next=<step>;
 # how_to_resume=<command or evidence>; branch=<branch or none>;
 # checkpoint_sha=<40-hex SHA or local>.
-# Pauses are always handoffs. Ordinary working phase notifications are not
-# checkpoints unless marked "checkpoint" or carrying one of these fields.
+# Ordinary waits and phase notifications are not checkpoints unless explicitly
+# marked with a leading "checkpoint" token or carrying a resume field.
 # This is advisory only: emit a warning, never change the lifecycle verb.
 status_checkpoint_warning() {  # <status-line>; stdout warning or empty
   local line=$1 verb note field value missing='' sha
   verb=$(status_line_verb "$line")
   note=$(status_line_note "$line")
   case "$verb" in
-    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}") ;;
-    working)
+    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|working)
       case "$note" in
-        *checkpoint*|*done=*|*next=*|*how_to_resume=*|*branch=*) ;;
+        checkpoint|checkpoint\;*|checkpoint\ *|*done=*|*next=*|*how_to_resume=*|*branch=*) ;;
         *) return 0 ;;
       esac ;;
     *) return 0 ;;

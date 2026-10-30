@@ -10,7 +10,9 @@ sha=1234567890123456789012345678901234567890
 good="working [at=1793316706]: checkpoint; done=tests; next=review; how_to_resume=run tests; branch=fm/example; checkpoint_sha=$sha"
 warning=$(status_checkpoint_warning "$good")
 assert_equals '' "$warning" 'complete checkpoint must be quiet'
-warning=$(status_checkpoint_warning 'paused [at=1793316706]: waiting for CI until 2026-10-30T03:00Z')
+assert_equals '' "$(status_checkpoint_warning 'paused [at=1793316706]: waiting for CI until 2026-10-30T03:00Z')" 'ordinary wait is not a checkpoint'
+assert_equals '' "$(status_checkpoint_warning 'working: rechecking the checkpoint freshness')" 'checkpoint is a leading token'
+warning=$(status_checkpoint_warning 'paused [at=1793316706]: checkpoint; waiting for CI until 2026-10-30T03:00Z')
 assert_contains "$warning" 'done' 'missing pause fields named'
 assert_contains "$warning" 'checkpoint_sha' 'missing sha named'
 warning=$(status_checkpoint_warning 'working: checkpoint; done=tests; next= ; how_to_resume=review; branch=fm/example; checkpoint_sha=local')
