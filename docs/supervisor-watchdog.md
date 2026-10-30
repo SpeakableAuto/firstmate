@@ -16,7 +16,7 @@ The watchdog never clears mixed input or retries an ambiguous submission, and it
 Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle or done queues a `check: supervisor-watchdog` row and uses the [configured active-alert channels](wedge-alarm.md).
 That alarm fires once for each unchanged oldest-row episode, rearming when the oldest row changes or the queue drains.
 Because an idle supervisor wakes only on new input, the watchdog then rings it with one short drain line when the prompt stays empty and unchanged for the idle interval, which covers a turn that ended without its Stop hook and so left no watcher running.
-The ring uses the network nudge's guards: native idle or done, no busy footer or usage-limit notice, a recognized Claude idle suggestion counted as empty only inside a proven composer, fresh checks before typing, and exactly its own line before Enter.
+The ring uses the network nudge's guards: native idle or done, no busy footer or usage-limit notice, a proven empty composer (an unstyled Claude suggestion such as `Try "..."` reads as pending, so the ring waits), fresh checks before typing, and exactly its own line before Enter.
 A confirmed ring repeats after another stable idle interval and the backoff while the same row stays undelivered; an ambiguous ring holds and alerts until the oldest row changes or the queue drains.
 
 ## Stall recovery

@@ -2493,7 +2493,7 @@ verification: 2.1.295 (Claude Code) on Herdr 0.9.3; pin FM_WATCHDOG_CLAUDE_VERSI
 ```
 
 Claude Code 2.1.295 rotates hints such as the update notice and the effort badge in the row below the prompt's closing rule, so the watchdog excludes that row from its screen comparison; before that exclusion the same run held the nudge as a screen change.
-The same version can render its rotating `Try "..."` composer suggestion without ANSI styling even in Herdr's ANSI viewport, so the classifier accepts that text as empty only inside a glyph-proven separator pair with native Claude idle or done identity.
+The same version can render its rotating `Try "..."` composer suggestion without ANSI styling even in Herdr's ANSI viewport, and the classifier deliberately reads that unstyled text as pending input, because it cannot be told apart from a typed draft, so nudges wait until the suggestion is gone.
 
 
 ## Remote parent-route inbox alarm
