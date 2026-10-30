@@ -931,11 +931,12 @@ POOL_JQ='
     $snap | .providers |= map(. as $row | signature($row) as $sig |
       if ((.quotaSemantics.effectiveAvailability | type) != "array") then . else
         .windows |= (if type == "array" then map(. as $w |
+          if (.percentRemaining | type) != "number" then . else
           # Model windows only take charges from that model scope.
           (if ((.id // "") | startswith("model:")) then .id else "all_models" end) as $scope |
-          charge_points($home; $row.provider; ($row.accountKey // ""); $scope; $sig; .id) as $points |
-          (if (.percentRemaining | type) == "number" then .percentRemaining -= $points else . end) |
-          if (.pace.reservePercentPoints | type) == "number" then .pace.reservePercentPoints -= $points else . end)
+          charge_points($home; $row.provider; ($row.accountKey // ""); $scope; $sig; (.id // "legacy")) as $points |
+          .percentRemaining -= $points |
+          if (.pace.reservePercentPoints | type) == "number" then .pace.reservePercentPoints -= $points else . end end)
           else . end) |
         .windows as $windows |
         .quotaSemantics.effectiveAvailability |= map(. as $scope |
