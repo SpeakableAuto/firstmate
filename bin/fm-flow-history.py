@@ -69,7 +69,7 @@ def append(stream, row):
     os.fsync(stream.fileno())
 
 
-def begin(path, task_id, priority, landing, kind):
+def begin(path, task_id, priority, landing, kind, serves):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', task_id):
         raise ValueError('invalid task id')
     if landing not in ('none', 'merge', 'local', 'report'):
@@ -79,7 +79,7 @@ def begin(path, task_id, priority, landing, kind):
             append(stream, {'type': 'coverage', 'version': 1, 'timestamp': now()})
         token = uuid.uuid4().hex
         append(stream, dict(type='attempt', token=token, task_id=task_id,
-                            priority=priority, kind=kind, landing=landing, timestamp=now()))
+                            priority=priority, kind=kind, serves=serves, landing=landing, timestamp=now()))
     print(token)
 
 
@@ -117,7 +117,7 @@ def finish(path, token, action, task_id, result, output):
         landed = action == 'done' and attempt.get('landing', 'none') != 'none' and result == 0 and not already_landed
         append(stream, dict(type='transition' if changed or landed else 'complete', token=token,
                             action=action, task_id=task_id, priority=attempt['priority'], kind=attempt.get('kind', 'task'),
-                            landing=attempt.get('landing', 'none'), timestamp=now(), result=result))
+                            serves=attempt.get('serves', ''), landing=attempt.get('landing', 'none'), timestamp=now(), result=result))
 
 
 def read_history(path, grace=0):
@@ -171,6 +171,8 @@ def read_history(path, grace=0):
                 if row['type'] == 'transition' and row['result'] != 0:
                     raise ValueError('failed transition')
                 row['landing'] = landing
+                if row.get('serves', '') != attempt.get('serves', ''):
+                    raise ValueError('receipt finishing-work mismatch')
                 completed.add(token)
                 if row['type'] == 'transition': events.append(row)
             else:
@@ -194,6 +196,8 @@ def report(path, day):
         print('history_warning: unknown days ' + f'{min(unknown)}..{max(unknown)} ({len(unknown)} days)')
     daily = {}
     for row in events:
+        if row.get('serves'):
+            continue
         items = daily.setdefault(row['day'], {
             'start': set(), 'finished': set(), 'closed-not-landed': set(), 'worker-start': set()
         })
@@ -239,6 +243,7 @@ def main():
     start.add_argument('priority', type=int)
     start.add_argument('landing', choices=['none', 'merge', 'local', 'report'])
     start.add_argument('--kind', default='task')
+    start.add_argument('--serves', default='')
     end = commands.add_parser('finish')
     end.add_argument('token')
     end.add_argument('action', choices=['start', 'done', 'reopen'])
@@ -252,7 +257,7 @@ def main():
     path = args.data / 'flow-history.jsonl'
     try:
         if args.command == 'begin':
-            begin(path, args.task_id, args.priority, args.landing, args.kind)
+            begin(path, args.task_id, args.priority, args.landing, args.kind, args.serves)
         elif args.command == 'finish':
             finish(path, args.token, args.action, args.task_id, args.result, sys.stdin.read())
         elif args.command == 'health':
