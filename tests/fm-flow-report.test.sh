@@ -170,7 +170,7 @@ assert rows[-1]['type']=='transition' and rows[-1]['task_id']=='oldest', rows[-1
 PYTAIL
 first_alerts=$(awk -F '\t' '$3 == "check" && $4 == "flow-history" { count++ } END { print count + 0 }' "$FM_HOME/state/.wake-queue")
 cp "$TMP_ROOT/good-history" "$FM_HOME/data/flow-history.jsonl"
-bash "$wrapper" done oldest --note repaired --no-prune >/dev/null
+bash "$wrapper" "done" oldest --note repaired --no-prune >/dev/null
 assert_absent "$FM_HOME/state/.flow-history-warning" 'healthy history closes the warning episode'
 bash "$wrapper" reopen oldest >/dev/null
 printf '{"type":"attempt","tok' >> "$FM_HOME/data/flow-history.jsonl"

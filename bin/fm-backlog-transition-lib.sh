@@ -637,7 +637,10 @@ fm_backlog_canonical_existing() {
 
 fm_backlog_record_parent_authorized() {  # <path> <label> <root> [parent-only]
   local path=$1 label=$2 root=$3 parent_only=${4:-} parent base parent_resolved expected_path
-  local path_resolved root_resolved root_prefix home_resolved final_matches=1
+  # FM_HOME is supplied by the caller; same-named assignments in command
+  # substitutions cannot replace this shell's environment.
+  # shellcheck disable=SC2031
+  local path_resolved root_resolved root_prefix home_resolved final_matches=1 configured_home=${FM_HOME:-}
   parent=${path%/*}
   [ "$parent" != "$path" ] || parent=.
   base=${path##*/}
@@ -649,11 +652,11 @@ fm_backlog_record_parent_authorized() {  # <path> <label> <root> [parent-only]
     FM_BACKLOG_TRANSITION_ERROR="$label authorized directory is not a directory at $root"
     return 1
   }
-  if [ -n "${FM_HOME:-}" ]; then
+  if [ -n "$configured_home" ]; then
     case "$root" in
-      "$FM_HOME"|"$FM_HOME"/*)
-        home_resolved=$(fm_backlog_canonical_existing "$FM_HOME") || {
-          FM_BACKLOG_TRANSITION_ERROR="$label home directory cannot be resolved at $FM_HOME"
+      "$configured_home"|"$configured_home"/*)
+        home_resolved=$(fm_backlog_canonical_existing "$configured_home") || {
+          FM_BACKLOG_TRANSITION_ERROR="$label home directory cannot be resolved at $configured_home"
           return 1
         }
         case "$root_resolved" in

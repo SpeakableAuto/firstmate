@@ -86,24 +86,25 @@ RELAUNCH=0
 KIND=ship
 PROJ=demo
 seed='{"task":"candidate","request":{},"checks":{},"admitted":true}'
+placement_state=$FM_HOME/state
 decision=$(fm_placement_finish_first "$seed")
 assert_equals fail "$(jq -r '.checks["finish-first"].status' <<< "$decision")" 'placement checks order and WIP'
 rc=0
 fm_placement_publish "$decision" >/dev/null 2>&1 || rc=$?
 expect_code 1 "$rc" 'placement refuses work above WIP'
-assert_equals wip "$(jq -r '.waits.candidate.state' "$STATE/capacity.json")" 'WIP wait is not a machine-capacity bottleneck'
-assert_equals '["finish-first"]' "$(jq -c '.waits.candidate.failed' "$STATE/capacity.json")" 'refusal enters existing queue'
+assert_equals wip "$(jq -r '.waits.candidate.state' "$placement_state/capacity.json")" 'WIP wait is not a machine-capacity bottleneck'
+assert_equals '["finish-first"]' "$(jq -c '.waits.candidate.failed' "$placement_state/capacity.json")" 'refusal enters existing queue'
 printf '{"version":1,"max_crew":2}\n' > "$CONFIG/crew-placement.json"
 FM_PLACEMENT_MODE=recheck
 decision=$(fm_placement_finish_first "$seed")
 fm_placement_publish "$decision" >/dev/null
-assert_equals ready "$(jq -r '.waits.candidate.state' "$STATE/capacity.json")" 'capacity recheck releases the waiting item'
+assert_equals ready "$(jq -r '.waits.candidate.state' "$placement_state/capacity.json")" 'capacity recheck releases the waiting item'
 # Queue ordering is independent of admission: older queued work leads, and
 # carried resumptions lead new work within the same impact level.
 for id in oldest current; do
-  printf '%s\n' "$decision" | jq --arg id "$id" '.task=$id | .impact="P2"' | python3 "$ROOT/bin/fm-placement.py" record "$STATE" "$id" recheck >/dev/null
+  printf '%s\n' "$decision" | jq --arg id "$id" '.task=$id | .impact="P2"' | python3 "$ROOT/bin/fm-placement.py" record "$placement_state" "$id" recheck >/dev/null
 done
-ordered=$(backlog_json "$DATA/backlog.md" | python3 "$ROOT/bin/fm-placement.py" ordered "$STATE")
+ordered=$(backlog_json "$DATA/backlog.md" | python3 "$ROOT/bin/fm-placement.py" ordered "$placement_state")
 assert_equals 'current,oldest,candidate' "$(jq -r '[.[].task]|join(",")' <<< "$ordered")" 'carried work then oldest queued work leads its level'
 pass 'finish-first refusal, recovery and runnable queue order use the placement ledger'
 # The real spawn entrypoint refuses before allocating a worker or local copy.

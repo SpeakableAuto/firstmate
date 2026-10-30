@@ -532,8 +532,13 @@ resolve_directory_input() {
   printf '%s\n' "$resolved"
 }
 
+# These outer-shell configuration values are intentionally read after the
+# sourced helpers; their similarly named subshell locals do not replace them.
+# shellcheck disable=SC2031
 FM_HOME=$(resolve_directory_input FM_HOME "$FM_HOME") || exit 1
+# shellcheck disable=SC2031
 if [ -n "${FM_STATE_OVERRIDE:-}" ]; then
+  # shellcheck disable=SC2031
   FM_STATE_OVERRIDE=$(resolve_directory_input FM_STATE_OVERRIDE "$FM_STATE_OVERRIDE") || exit 1
 fi
 if [ -n "${FM_DATA_OVERRIDE:-}" ]; then
