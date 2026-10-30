@@ -1,0 +1,37 @@
+scenario: real spawn admission at WIP cap
+session: fm-lab-ff1793378735-12767-26104
+/Users/maxverstappen/.no-mistakes/evidence/01M66S21Y11R5984JQ333PDJ93/live-finish-first.dgLjZX
+spawn_exit: 1
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /Users/maxverstappen/.no-mistakes/evidence/01M66S21Y11R5984JQ333PDJ93/live-finish-first.dgLjZX
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  Unfinished delivery programs need supervision, but no live watcher process holds this home lock (last beat: 0s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Claude quota: cached reading 42s old
+error: placement refused: finish-first: finish-first: WIP 3/2; finish current first (state/capacity.json)
+worker_record: absent
+candidate_backlog:
+task:
+  id: candidate
+  title: New work
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: ship
+  repo: demo
+  priority: 2
+  created: 2026-10-30
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+admission checks:
+  current exit=0 output=finish-first: resume allowed for current
+  urgent exit=0 output=finish-first: P0 start allowed for urgent

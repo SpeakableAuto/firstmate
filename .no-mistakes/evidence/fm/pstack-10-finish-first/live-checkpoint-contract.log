@@ -1,0 +1,15 @@
+scenario: generated checkpoint contract and supervision warning
+/Users/maxverstappen/.no-mistakes/evidence/01M66S21Y11R5984JQ333PDJ93/live-checkpoint.1jH8rt
+ship generated checkpoint fields:
+102:Record the pushed commit as checkpoint_sha=<full 40-character SHA> in that note, or explicitly say the checkpoint is local and not yet pushed.
+105:Use this fixed checkpoint form (semicolon-separated, every value nonempty):
+106:`working [at=<epoch>]: checkpoint; done=<result and validation>; next=<remaining step>; how_to_resume=<command or evidence>; branch=<branch or none>; checkpoint_sha=<full 40-character SHA or local>`
+scout generated checkpoint fields:
+84:Use this fixed checkpoint form (semicolon-separated, every value nonempty):
+85:`working [at=<epoch>]: checkpoint; done=<result and validation>; next=<remaining step>; how_to_resume=<command or evidence>; branch=<branch or none>; checkpoint_sha=<full 40-character SHA or local>`
+first drain after malformed checkpoint:
+UNREAD STATUS (new since last drain, not re-printed after this presentation):
+checkpoint working: checkpoint; done=tests
+checkpoint warning: checkpoint missing or invalid next, how_to_resume, branch, checkpoint_sha; use the fixed resume-note fields
+second drain without new status:
+(no output)

@@ -1,0 +1,15 @@
+scenario: previous-day AEST flow report and two-day stop admission
+/Users/maxverstappen/.no-mistakes/evidence/01M66S21Y11R5984JQ333PDJ93/live-flow.au31O3
+day_one=2026-10-29 day_two=2026-10-30
+previous-day report:
+flow_history: AEST; complete coverage from 2026-10-29; wrapper/lifecycle transitions only
+2026-10-30 finished=1 closed-not-landed=1 started=2
+  finished: candidate
+  closed-not-landed: oldest
+  started: candidate, oldest
+signal_basis: recorded worker starts; proven deliveries
+stop_starting: yes
+admission checks under stop signal:
+  same-target exit=1 output=finish-first: two-day stop; finish flow-day-one-b first (P2, in_flight)
+  higher-target exit=0 output=finish-first: start allowed for higher-target
+  urgent exit=0 output=finish-first: P0 start allowed for urgent
