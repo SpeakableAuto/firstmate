@@ -1,0 +1,50 @@
+=== tick 1 (FM_CLEAR_UNMERGED_MAX_CALLS=2, 7 CLEAR URLs incl. one for a non-existent repo)
+CLEAR unmerged scan diagnostics: forge call budget exhausted; read 2, deferred 5, finished-skipped 0
+exit=0
+ugrep: error: error at position 20
+(?m)name:\"[^\"]*\"\) {[^p]*pullRequest(number:[0-9]*
+  mismatched ( )___/
+
+
+gh-axi calls: 2 -> 
+finished: 2 deferred: 5 heads: []
+=== tick 2 (FM_CLEAR_UNMERGED_MAX_CALLS=2, 7 CLEAR URLs incl. one for a non-existent repo)
+CLEAR unmerged scan diagnostics: forge call budget exhausted; read 2, deferred 3, finished-skipped 2
+exit=0
+ugrep: error: error at position 20
+(?m)name:\"[^\"]*\"\) {[^p]*pullRequest(number:[0-9]*
+  mismatched ( )___/
+
+
+gh-axi calls: 2 -> 
+finished: 4 deferred: 3 heads: []
+=== tick 3 (FM_CLEAR_UNMERGED_MAX_CALLS=2, 7 CLEAR URLs incl. one for a non-existent repo)
+CLEAR unmerged scan diagnostics: forge call budget exhausted; read 2, deferred 1, finished-skipped 4
+exit=0
+ugrep: error: error at position 20
+(?m)name:\"[^\"]*\"\) {[^p]*pullRequest(number:[0-9]*
+  mismatched ( )___/
+
+
+gh-axi calls: 2 -> 
+finished: 5 deferred: 1 heads: ['https://github.com/SpeakableAuto/firstmate/pull/49']
+=== tick 4 (FM_CLEAR_UNMERGED_MAX_CALLS=2, 7 CLEAR URLs incl. one for a non-existent repo)
+CLEAR unmerged scan diagnostics: https://github.com/SpeakableAuto/lab-fake-3/pull/1: skipped: gh-axi read unavailable; check access and complete output
+exit=0
+ugrep: error: error at position 20
+(?m)name:\"[^\"]*\"\) {[^p]*pullRequest(number:[0-9]*
+  mismatched ( )___/
+
+
+gh-axi calls: 2 -> 
+finished: 5 deferred: 0 heads: ['https://github.com/SpeakableAuto/firstmate/pull/49']
+=== tick 5 (FM_CLEAR_UNMERGED_MAX_CALLS=2, 7 CLEAR URLs incl. one for a non-existent repo)
+exit=0
+ugrep: error: error at position 20
+(?m)name:\"[^\"]*\"\) {[^p]*pullRequest(number:[0-9]*
+  mismatched ( )___/
+
+
+gh-axi calls: 2 -> 
+finished: 5 deferred: 0 heads: ['https://github.com/SpeakableAuto/firstmate/pull/49']
+NOTE: the per-tick 'gh-axi calls: N' count is accurate; the PR-number listing grep in this harness had a regex error (ugrep) and printed nothing - see the 'read N' counts in the check's own diagnostic line.

@@ -1,0 +1,59 @@
+=== tick 1 (default budget 12, 28 registered projects, 6 CLEAR reports: 5 merged, 1 open)
+exit=0
+gh-axi calls this tick: 6
+   1 pullRequest(number:42
+   1 pullRequest(number:43
+   1 pullRequest(number:44
+   1 pullRequest(number:45
+   1 pullRequest(number:48
+   1 pullRequest(number:49
+=== tick 2 (default budget 12, 28 registered projects, 6 CLEAR reports: 5 merged, 1 open)
+exit=0
+gh-axi calls this tick: 1
+   1 pullRequest(number:49
+=== tick 3 (default budget 12, 28 registered projects, 6 CLEAR reports: 5 merged, 1 open)
+exit=0
+gh-axi calls this tick: 1
+   1 pullRequest(number:49
+=== state after tick 3
+{
+ "schema": 1,
+ "alerted": [],
+ "error": "",
+ "finished": {
+  "https://github.com/SpeakableAuto/firstmate/pull/42": {
+   "state": "MERGED",
+   "head": "90cfdcaef44f3749d86f78776ccde876cc024d5a",
+   "seen_at": 1793330197.376292
+  },
+  "https://github.com/SpeakableAuto/firstmate/pull/43": {
+   "state": "MERGED",
+   "head": "22084c1771589b92e0b2e73d1223b1dfe1fbc335",
+   "seen_at": 1793330197.376292
+  },
+  "https://github.com/SpeakableAuto/firstmate/pull/44": {
+   "state": "MERGED",
+   "head": "3947324ec1247644afbbd4bedd03bd34507b8396",
+   "seen_at": 1793330197.376292
+  },
+  "https://github.com/SpeakableAuto/firstmate/pull/45": {
+   "state": "MERGED",
+   "head": "c9bfa5511e98501d807216a34979853d7a2b66e5",
+   "seen_at": 1793330197.376292
+  },
+  "https://github.com/SpeakableAuto/firstmate/pull/48": {
+   "state": "MERGED",
+   "head": "155da738b7882e30d4ac8a56b26cdffc571c90e2",
+   "seen_at": 1793330197.376292
+  }
+ },
+ "heads": {
+  "https://github.com/SpeakableAuto/firstmate/pull/49": {
+   "sha": "1743efbd1c4cc8db49d2f47c03a3147ee5aa9146",
+   "changed_at": 1793329057.0
+  }
+ },
+ "cursor": null,
+ "deferred": [],
+ "report_diagnostics": ""
+}

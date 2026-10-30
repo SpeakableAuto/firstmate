@@ -1,0 +1,6 @@
+=== overdue open PR #49 (CLEAR report mtime 29 Oct 00:00, 28 registered projects)
+exit=0
+gh-axi calls:
+api POST
+alerted: []
+Result explained: PR #49 was created 2026-10-30T02:54:37Z, 24 min before this run (03:18 UTC); the clock starts at the later of report time and PR creation/head push, so it is correctly not overdue. Open PRs #46/#47 are also under 2h old, so no live overdue alert could be driven.
