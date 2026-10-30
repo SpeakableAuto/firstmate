@@ -27,6 +27,16 @@ fm_quota_balance_episode_clear() {
   rm -f "$STATE/quota-balance-unverifiable.open"
 }
 
+fm_quota_balance_wake_append() {
+  # shellcheck disable=SC2016 # The child Bash expands its positional parameters.
+  env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash -c '
+    wake_lib=$1
+    shift
+    . "$wake_lib"
+    fm_wake_append "$@"
+  ' fm-quota-balance-wake "$SCRIPT_DIR/fm-wake-lib.sh" "$@"
+}
+
 fm_quota_balance_unverifiable() { # <id> <harness> <model> <reason>
   local id=$1 harness=$2 model=$3 reason=$4 at open
   at=$(date +%s)
@@ -38,12 +48,8 @@ fm_quota_balance_unverifiable() { # <id> <harness> <model> <reason>
       >> "$STATE/quota-balance-unverifiable.jsonl" 2>/dev/null || true
   fi
   if (set -C; : > "$open") 2>/dev/null; then
-    if ! (
-      # shellcheck source=bin/fm-wake-lib.sh
-      . "$SCRIPT_DIR/fm-wake-lib.sh"
-      fm_wake_append check "quota-balance-unverifiable-$at" \
-        "check: quota-balance-unverifiable: crew starts are proceeding without a balanced pick ($reason)"
-    ); then
+    if ! fm_quota_balance_wake_append check "quota-balance-unverifiable-$at" \
+      "check: quota-balance-unverifiable: crew starts are proceeding without a balanced pick ($reason)"; then
       rm -f "$open"
     fi
   fi
@@ -87,6 +93,7 @@ fm_quota_balance_last_refusal() { # <resolver-output> <rule> <harness> <model>
 
 fm_quota_balance_gate() {
   local id=$1 harness=$2 model=$3 effort=$4 project=$5
+  # shellcheck disable=SC2153 # DATA is supplied by the sourcing caller.
   local rules="$CONFIG/crew-dispatch.json" work="$DATA/$1/placement.json" brief="$DATA/$1/brief.md"
   local rule='' override='' out verdict local_reason last points requested fuller seen
   local -a extra=()

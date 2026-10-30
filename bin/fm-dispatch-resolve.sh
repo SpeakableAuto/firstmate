@@ -1454,6 +1454,16 @@ render() { # <index>
 # later pool in the same batch that never saw an allowance cannot clear or
 # replace another pool's condition. A condition no pool has confirmed for a day
 # (an account renamed by its reset) is dropped.
+dispatch_wake_append() {
+  # shellcheck disable=SC2016 # The child Bash expands its positional parameters.
+  env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash -c '
+    wake_lib=$1
+    shift
+    . "$wake_lib"
+    fm_wake_append "$@"
+  ' fm-dispatch-wake "$SCRIPT_DIR/fm-wake-lib.sh" "$@"
+}
+
 spread_alert() {
   local file="$STATE/quota-spread.json" previous='{}' next notices line
   [ ! -f "$file" ] || previous=$(jq -c '.conditions // {} | if type == "object" then . else {} end' "$file" 2>/dev/null) || previous='{}'
@@ -1481,8 +1491,9 @@ spread_alert() {
   fi
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    ( FM_HOME=$FM_HOME STATE=$STATE . "$SCRIPT_DIR/fm-wake-lib.sh" && fm_wake_append check "quota-spread-$NOW-$RANDOM" \
-        "$(jq -r '"check: quota-spread: \(.top) has \(.points) more points of headroom than \(.bottom) after adjusting for time to reset (alarm above \(.threshold)); new work moves to the fuller allowance automatically"' <<<"$line")" ) >/dev/null 2>&1 || true
+    dispatch_wake_append check "quota-spread-$NOW-$RANDOM" \
+      "$(jq -r '"check: quota-spread: \(.top) has \(.points) more points of headroom than \(.bottom) after adjusting for time to reset (alarm above \(.threshold)); new work moves to the fuller allowance automatically"' <<<"$line")" \
+      >/dev/null 2>&1 || true
   done <<<"$notices"
 }
 spread_alert
