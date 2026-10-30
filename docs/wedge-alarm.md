@@ -39,11 +39,15 @@ Hermes keeps the platform login; firstmate only hands it the plain message.
 Delivery is rate limited to one message per condition per six hours, the same condition and key once per day after Hermes confirms it, and four messages in any 24 hours.
 Every attempt is logged in `state/urgent-alert/sent.jsonl`, delivered attempts include the platform message id, and message text and Telegram chat ids are never logged.
 Once Hermes has run, a timeout, an error exit or a reply without a message id may still have reached the phone, so it is reported as failed and counts toward the daily cap, while the same key retries a few times about an hour apart instead of being treated as delivered.
+For a supervisor-down incident, retries continue at a slower pace after the initial attempts, still within the daily cap.
 Delivery waits up to 60 seconds, enough for Hermes to start and finish its own Telegram retries, and an unreadable log line is skipped rather than muting later alerts.
 `fm_urgent_alert` in [`bin/fm-active-alert-lib.sh`](../bin/fm-active-alert-lib.sh) owns those limits and the log format, and the script header owns the commands, including the scheduled `check-machine` probe.
 `tests/fm-active-alert.test.sh` covers the allow-list, fixed Telegram hand-off, rate limits, retry, message-id log and machine probe with a recording sender.
 
 ## Test safety
+
+The urgent sender refuses automatic Hermes discovery in tests and no-mistakes gate agents; its marker and explicit sender override contract lives in [`bin/fm-active-alert-lib.sh`](../bin/fm-active-alert-lib.sh).
+The alert suite injects recording senders with an isolated home and executable search path, and proves that both automatic lookup routes are refused under test and gate markers.
 
 Every notifier routes through `FM_WEDGE_ALARM_EXEC` in `wedge_alarm_emit`.
 The daemon defaults that seam to `discard` when sourced as a library, and test callers otherwise replace the notifier or point the seam at a recorder before exercising an alert.

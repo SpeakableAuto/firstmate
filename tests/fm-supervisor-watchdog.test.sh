@@ -665,7 +665,7 @@ check "$(jq -r .alerted "$DIR/stall.json")" true 'the retried alert closes the i
 check "$(jq -r 'select(.result=="sent") | .at' "$FM_HOME/state/urgent-alert/sent.jsonl")" 8200 'the retry lands an hour after the timed-out send'
 real_urgent_case hang
 for t in $(seq 1000 600 94600); do TICK=$t; watchdog_tick; done
-check "$(jq -s '[.[] | select(.result=="unconfirmed") | .at] | . as $a | [$a[] as $t | [$a[] | select(. >= $t and . < $t + 86400)] | length] | max' "$FM_HOME/state/urgent-alert/sent.jsonl")" 3 'a sender that keeps timing out is tried at most three times in any day'
+check "$(jq -s '[.[] | select(.result=="unconfirmed") | .at] | . as $a | [$a[] as $t | [$a[] | select(. >= $t and . < $t + 86400)] | length] | max' "$FM_HOME/state/urgent-alert/sent.jsonl")" 4 'a sender that keeps timing out stays under the four-attempt daily cap'
 check "$(jq -r 'select(.result=="unconfirmed") | .at' "$FM_HOME/state/urgent-alert/sent.jsonl" | head -3 | tr '\n' ' ')" '4600 8200 11800 ' 'timed-out alerts retry an hour apart'
 check "$(jq -r .alerted "$DIR/stall.json")" false 'an alert never confirmed never reads as delivered'
 check "$(stage)" down 'an unconfirmed alert keeps the incident down'

@@ -257,9 +257,10 @@ wedge_alarm_notify() {  # <summary> <marker>
 # and is logged as `unconfirmed`, which counts toward the daily cap and holds
 # the condition for other keys, but never makes its own key a duplicate: the
 # same key retries after FM_URGENT_ALERT_UNCONFIRMED_RETRY_SECS (default
-# 3600), at most FM_URGENT_ALERT_UNCONFIRMED_TRIES (default 3) times within
-# the dedupe window, so a lost reply can neither repeat the message nor lose
-# the alert. Only a sender that never started (not found, not executable, a
+# 3600) for FM_URGENT_ALERT_UNCONFIRMED_TRIES (default 3) attempts within
+# the dedupe window. After that, supervisor-down retries every two hours,
+# still under the daily cap; other conditions stop until the window rolls.
+# Only a sender that never started (not found, not executable, a
 # usage error, or a runner that could not start) is a plain `failed` attempt.
 # Delivery is bounded by FM_URGENT_ALERT_TIMEOUT_SECS (default 60), which
 # covers Hermes startup and its own Telegram retries.
@@ -288,6 +289,9 @@ fm_urgent_alert_record() {  # <log> <now> <condition> <key> <result> <reason> <s
      + (if $id == "" then {} else {message_id:$id} end)' >> "$1"
 }
 
+# Automatic Hermes discovery is refused under FM_TEST_SEAM=1 or any set
+# NO_MISTAKES_GATE. Tests must inject FM_URGENT_ALERT_EXEC or FM_HERMES_BIN
+# explicitly; they are trusted sender overrides, not automatic discovery.
 # The bounded runner starts a background job, which does not reliably inherit
 # a pipe on stdin, so the message travels through a private file instead.
 fm_urgent_alert_deliver() {  # <message-file>  -> prints Hermes JSON
@@ -301,6 +305,8 @@ fm_urgent_alert_deliver() {  # <message-file>  -> prints Hermes JSON
     return
   fi
   hermes=${FM_HERMES_BIN:-}
+  # Tests/gate agents must explicitly inject a sender; never discover a login.
+  if [ -z "$hermes" ] && { [ "${FM_TEST_SEAM:-}" = 1 ] || [ "${NO_MISTAKES_GATE+x}" = x ]; }; then return 123; fi
   [ -n "$hermes" ] || hermes=$(command -v hermes 2>/dev/null) || hermes=
   [ -n "$hermes" ] || [ ! -x "$HOME/.local/bin/hermes" ] || hermes="$HOME/.local/bin/hermes"
   [ -n "$hermes" ] || return 127
@@ -363,8 +369,8 @@ fm_urgent_alert() {
       | [ $r[] | select(.result == "unconfirmed") ] as $u
       | [ $u[] | select(.condition == $c and .key == $k and $now - .at < $ds) ] as $uk
       | if any($s[]; .condition == $c and .key == $k and $now - .at < $ds) then "duplicate"
-        elif ($uk | length) >= $ut then "unconfirmed-exhausted"
-        elif any($uk[]; $now - .at < $us) then "unconfirmed-backoff"
+        elif ($uk | length) >= $ut and $c != "supervisor-down" then "unconfirmed-exhausted"
+        elif any($uk[]; $now - .at < (if ($uk | length) >= $ut then 7200 else $us end)) then "unconfirmed-backoff"
         elif any($s[], ($u[] | select(.key != $k)); .condition == $c and $now - .at < $cs) then "condition-rate-limit"
         elif any($r[]; .result == "failed" and .condition == $c and $now - .at < $rs) then "retry-backoff"
         else [$s[], $u[] | select($now - .at < 86400)] | length | tostring end' "$log" 2>/dev/null) \
@@ -400,6 +406,7 @@ fm_urgent_alert() {
   verdict=unconfirmed
   case "$rc" in
     0) reason='no-message-id' ;;
+    123) reason='real-send-refused'; verdict=failed ;;
     124) reason='delivery-timeout' ;;
     2) reason='hermes-usage-error'; verdict=failed ;;
     125) reason='runner-not-started'; verdict=failed ;;

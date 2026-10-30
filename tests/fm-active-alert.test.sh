@@ -10,6 +10,11 @@ set -eu
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export FM_HOME="$TMP/home"
+# Keep credentials and automatically discovered senders outside this fixture.
+mkdir -p "$TMP/user-home" "$TMP/bin"
+ln -s "$(command -v jq)" "$TMP/bin/jq"
+export HOME="$TMP/user-home" PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+unset FM_HERMES_BIN
 mkdir -p "$FM_HOME/state"
 CLI="$ROOT/bin/fm-urgent-alert.sh"
 SENT_DIR="$TMP/sent"
@@ -42,11 +47,48 @@ cat > "$TMP/bin/date" <<SHIM
 if [ "\${1:-}" = +%s ]; then cat "$CLOCK"; else exec /bin/date "\$@"; fi
 SHIM
 chmod +x "$TMP/bin/date"
-export PATH="$TMP/bin:$PATH"
+
 at() { printf '%s\n' "$1" > "$CLOCK"; }
 sent_count() { find "$SENT_DIR" -type f | wc -l | tr -d ' '; }
 check() { [ "$1" = "$2" ] || fail "$3 (got '$1', expected '$2')"; pass "$3"; }
 run() { FULL=$("$CLI" "$@" 2>/dev/null) && RC=0 || RC=$?; OUT=${FULL%%$'\n'*}; }
+
+# Even if Hermes is discoverable, test and gate markers must refuse it.
+# The discoverable executable is itself a recorder, never a real sender.
+mkdir -p "$HOME/.local/bin"
+cat > "$TMP/discovered-hermes" <<'HERMES'
+#!/usr/bin/env bash
+touch "$HOME/sender-reached"
+printf '{"success":true,"message_id":"isolated-probe"}\n'
+HERMES
+chmod +x "$TMP/discovered-hermes"
+for lookup in home path; do
+  if [ "$lookup" = home ]; then
+    ln -s "$TMP/discovered-hermes" "$HOME/.local/bin/hermes"
+  else
+    rm "$HOME/.local/bin/hermes"
+    ln -s "$TMP/discovered-hermes" "$TMP/bin/hermes"
+  fi
+  for marker in test gate; do
+    rm -rf "$FM_HOME/state/urgent-alert"
+    if [ "$marker" = test ]; then
+      OUT=$(env -u FM_URGENT_ALERT_EXEC -u NO_MISTAKES_GATE "$CLI" test) || true
+    else
+      OUT=$(env -u FM_URGENT_ALERT_EXEC -u FM_TEST_SEAM NO_MISTAKES_GATE= "$CLI" test) || true
+    fi
+    check "$OUT" failed:real-send-refused "$marker marker refuses automatic Hermes via $lookup"
+    [ ! -e "$HOME/sender-reached" ] || fail "$marker reached discovered Hermes via $lookup"
+    pass "$marker marker never invoked the discovered $lookup sender"
+    check "$(tail -1 "$LOG" | jq -r .result)" failed 'refused send does not consume a delivery attempt'
+  done
+  rm -rf "$FM_HOME/state/urgent-alert"
+  OUT=$(env -u FM_URGENT_ALERT_EXEC -u FM_TEST_SEAM -u NO_MISTAKES_GATE "$CLI" test)
+  check "${OUT%%$'\n'*}" sent "unmarked production path still discovers Hermes via $lookup"
+  [ -f "$HOME/sender-reached" ] || fail "unmarked $lookup path was not exercised"
+  rm "$HOME/sender-reached"
+done
+rm "$TMP/bin/hermes"
+rm -rf "$FM_HOME/state/urgent-alert"
 
 run send routine-update k 'All shipshape.'
 check "$RC" 2 'a routine update is not an urgent condition'
@@ -134,7 +176,7 @@ done
 check "$(sent_count)" 3 'id-less replies reach the phone at most once per condition window'
 
 # A timed-out send may never have left: the same key retries about an hour
-# later instead of reading as delivered, and stops after a few tries.
+# later instead of reading as delivered, then slows to two-hour retries.
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 at 230000
 SENDER_MODE=hang FM_URGENT_ALERT_TIMEOUT_SECS=1 run send supervisor-down down-1 'Firstmate: supervisor stopped.'
@@ -153,9 +195,23 @@ rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 for t in $(seq 240000 900 325500); do
   at "$t"; SENDER_MODE=hang FM_URGENT_ALERT_TIMEOUT_SECS=1 run send supervisor-down down-2 'Firstmate: supervisor stopped.'
 done
-check "$(sent_count)" 3 'a sender that always times out is tried three times in a day'
-check "$OUT" skipped:unconfirmed-exhausted 'an exhausted key reports its retries are used, not delivered'
-check "$(jq -r 'select(.result=="unconfirmed") | .at' "$LOG" | tr '\n' ' ')" '240000 243600 247200 ' 'unconfirmed retries are an hour apart'
+check "$(sent_count)" 4 'a sender that always times out stays within the four-attempt daily cap'
+check "$OUT" skipped:daily-cap 'an unconfirmed key remains capped, never treated as delivered'
+check "$(jq -r 'select(.result=="unconfirmed") | .at' "$LOG" | tr '\n' ' ')" '240000 243600 247200 254400 ' 'three hourly tries are followed by a two-hour retry'
+
+# An outage outlasting the quick attempts must not defer recovery for a day.
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+for t in $(seq 350000 600 368000); do
+  at "$t"
+  if [ "$t" -lt 362600 ]; then
+    SENDER_MODE=error run send supervisor-down outage 'Firstmate: supervisor stopped.'
+  else
+    run send supervisor-down outage 'Firstmate: supervisor stopped.'
+  fi
+done
+check "$(sent_count)" 4 'a 3.5-hour outage gets a fourth attempt after the quick tries'
+check "$(jq -r 'select(.result=="sent") | .at' "$LOG")" 364400 'delivery recovers half an hour after the 3.5-hour outage ends'
+check "$OUT" skipped:duplicate 'confirmed outage delivery stops further retries'
 
 # A reply lost after Telegram accepted the message makes Hermes exit with an
 # error; that may have reached the phone, so the limits still hold.
@@ -163,7 +219,7 @@ rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 for t in $(seq 400000 900 486000); do
   at "$t"; SENDER_MODE=error run send supervisor-down lost-1 'Firstmate: supervisor stopped.'
 done
-check "$(sent_count)" 3 'a lost reply with an error exit reaches the phone at most three times a day for one key'
+check "$(sent_count)" 4 'a lost reply with an error exit stays within the daily cap for one key'
 check "$(jq -r 'select(.result=="unconfirmed") | .reason' "$LOG" | sort -u)" delivery-failed 'an error exit after Hermes ran is logged as unconfirmed'
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 n=0
