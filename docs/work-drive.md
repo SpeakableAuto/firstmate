@@ -99,6 +99,7 @@ A large scan can take several minutes, so schedule it rather than running it int
 ## Daily launchd enrollment
 
 `fm-work-drive.sh install` performs host enrollment by writing and bootstrapping the per-user `local.firstmate.internal-growth` LaunchAgent.
+Installation refuses a failed bootstrap, and `verify` refuses unless launchd reports that LaunchAgent as loaded.
 `install --dry-run` prints the complete plist and the `launchctl bootout` and `launchctl bootstrap` commands without writing or loading anything.
 The baseline's minimum age keeps a missed or repeated run comparing against an approximately day-old baseline.
 
