@@ -323,6 +323,8 @@ test_raw_compound_launch_command_carries_the_switch() {
   read_case "$rec"
   printf '%s\n' '{"rules":[{"when":"current events","use":{"harness":"grok","model":"grok-4","effort":"high"}}],"default":{"harness":"codex","model":"gpt-5","effort":"medium"}}' \
     > "$HOME_DIR/config/crew-dispatch.json"
+  jq -n '{balance_override:"raw compound launch is the behavior under test"}' \
+    > "$HOME_DIR/data/raw-compound-a1/placement.json"
 
   probe_dir="$CASE_DIR/agent-cwd"
   mkdir -p "$probe_dir"

@@ -20,8 +20,9 @@
 # Quota balance is the default (docs/configuration.md "Quota balance";
 #   quota_balance only tunes reserve_percent and spread_points): candidates rank
 #   by pace headroom (headroom=, the worst window's points left minus window
-#   left) with no preferred provider whenever every rankable candidate publishes
-#   it, else by spendPriority; a candidate that would fall under the reserve after
+#   left) with no preferred provider whenever any candidate publishes it;
+#   candidates without it rank only when none publish it; a candidate that
+#   would fall under the reserve after
 #   its own draw is not eligible; an allowance past the spread alarm is passed
 #   over (spread: line) or the task is held; each call samples burn through
 #   fm-quota-burn.py and charges the measured draw; and each new spread
@@ -991,7 +992,8 @@ POOL_JQ='
        alarm: (($top.headroom - $bottom.headroom) > $balance.spread_points),
        behind: [$accts[] | select($top.headroom - .headroom > $balance.spread_points) | .acct],
        labels: ($accts | map({(.acct): acct_label(.)}) | add),
-       headrooms: ($accts | map({(.acct): .headroom}) | add), accounts: [$accts[].acct]}
+       headrooms: ($accts | map({(.acct): .headroom}) | add), accounts: [$accts[].acct],
+       allowances: [$accts[] | {acct, home, provider, account, headroom, label: acct_label(.)}]}
     end;
   # The spread that moves work: allowances this task could use that have
   # quota for it, counting one whose only obstacle is a free seat.
@@ -1128,28 +1130,33 @@ POOL_JQ='
      $ev + {status: "escalate", reason: "no profiles configured for \($lead.source)", note: $lead.note, candidates: []}
    else
      ($ev + {selection: $mode}) as $ev |
-     # Pace headroom ranks when every rankable candidate publishes it (quota-axi
-     # does); otherwise the set falls back to spendPriority ranking, disclosed.
-     ([$cands[] | select(.eligible and ((.unranked // false) | not))]) as $ranked |
-     (($ranked | length) > 0 and all($ranked[]; .headroom != null)) as $by_pace |
+     # Any candidate with pace evidence ranks ahead of candidates without it;
+     # spendPriority is used only when no candidate publishes pace headroom.
+     ([$cands[] | select(.eligible and ((.unranked // false) | not) and .headroom != null)]) as $pace_ranked |
+     (($pace_ranked | length) > 0) as $by_pace |
+     ($cands | map(
+       if $by_pace and .eligible and ((.unranked // false) | not) and .headroom == null
+       then . + {unranked: true, reason: "pace headroom missing; candidates with pace evidence rank first"}
+       else . end)) as $rank_cands |
+     ([$rank_cands[] | select(.eligible and ((.unranked // false) | not))]) as $ranked |
      ($ranked | map(.score = (if $by_pace then .headroom else (.spendPriority // 0) end))) as $elig |
-     ([$cands[] | select(.eligible and .unranked)]) as $unranked |
-     if ($elig | length) == 0 and any($cands[]; .behind // false) then
-       $ev + {status: "escalate", candidates: $cands, spread: $spread,
+     ([$rank_cands[] | select(.eligible and .unranked)]) as $unranked |
+     if ($elig | length) == 0 and any($rank_cands[]; .behind // false) then
+       $ev + {status: "escalate", candidates: $rank_cands, spread: $spread,
          reason: "holding rather than draining a behind allowance: \($spread.top.label) is \($spread.points) points of headroom ahead and has no free seat for this task"}
-     elif ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", candidates: $cands}
+     elif ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", candidates: $rank_cands}
      else
        pool_pick($elig; $mode; $by_pace) as $pick |
        ($pick.best) as $best |
        ([$usable[] | select(.id == $best.home) | .sel] | first) as $chosen_sel |
-       $ev + {status: "clear", candidates: $cands, chosen: $best,
+       $ev + {status: "clear", candidates: $rank_cands, chosen: $best,
               passed_over: ($pick.passed_over // []), passed_kind: $pick.passed_kind}
        + (if $chosen_sel.note then {note: $chosen_sel.note} else {} end)
        + (if $pick.exact_tie then {exact_tie: $pick.exact_tie} else {} end)
        + (if $pick.near_tie then {near_tie: $pick.near_tie, near_tie_band: near_tie_band} else {} end)
        + (if $pick.balance_tie then {balance_tie: $pick.balance_tie} else {} end)
        + (if $spread != null then {spread: $spread} else {} end)
-       + {ranked_by: (if $by_pace then "pace headroom" else "spendPriority (pace headroom not published)" end)}
+       + {ranked_by: (if $by_pace then "pace headroom" else "spendPriority (no pace headroom published)" end)}
        + (if ($unranked | length) > 0 then
             {unranked_note: "\($unranked | length) eligible candidate(s) unranked (\([$unranked[].provider] | unique | join(", ")))"}
           else {} end)
@@ -1326,6 +1333,23 @@ if ! cmp -s "$WORK/ledger.start" "$WORK/ledger.json"; then
   if mkdir -p "$STATE" 2>/dev/null && tmp=$(mktemp "$STATE/.dispatch-charges.XXXXXX" 2>/dev/null); then
     if ! { jq -c '.entries[]' "$WORK/ledger.json" > "$tmp" && mv -f "$tmp" "$LEDGER_FILE"; }; then
       rm -f "$tmp"
+    fi
+  fi
+fi
+
+# Keep the newest successful pool reading so a degraded spawn can still refuse
+# an allowance that was recently known to be behind.
+last_global=$(for i in "${!BRIEFS[@]}"; do
+  jq -c '.global_spread | select(. != null and (.allowances | length) > 1)' "$WORK/result.$i.json" 2>/dev/null
+done | tail -1)
+if [ -n "$last_global" ] && mkdir -p "$STATE" 2>/dev/null; then
+  if last_tmp=$(mktemp "$STATE/.quota-balance-last.XXXXXX" 2>/dev/null); then
+    if jq -cn --argjson at "$NOW" --argjson spread "$last_global" \
+        '{at: $at, accounts: $spread.allowances}' > "$last_tmp" &&
+      mv -f "$last_tmp" "$STATE/quota-balance-last.json"; then
+      :
+    else
+      rm -f "$last_tmp"
     fi
   fi
 fi
