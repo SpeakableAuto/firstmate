@@ -16,11 +16,12 @@
 #   null when the gate does not apply.
 # The rule comes from data/<id>/placement.json dispatch_rule, else the default
 # profiles when they hold the requested profile, else the first rule that does.
-# A profile in no rule refuses until its allowance is configured. Unknown quota for
-# every candidate is disclosed uncertainty, recorded and alerted once per open
-# episode; a recent successful reading can still refuse a known-behind account.
-# A non-empty placement.json balance_override can justify a different allowance:
-# it states why the task class needs this profile, and the decision keeps it.
+# A profile in no rule refuses without a non-empty placement.json
+# balance_override; with one, it proceeds only when its allowance can be mapped.
+# Unknown quota for every candidate is disclosed uncertainty, recorded and
+# alerted once per open episode; a recent successful reading can still refuse a
+# known-behind account. An override states why the task class needs this profile,
+# and the decision keeps it.
 # Needs SCRIPT_DIR, FM_HOME, CONFIG, DATA, and STATE from the sourcing caller.
 
 # Remote transfer: the resolver emits parent_placement for a remote pick.

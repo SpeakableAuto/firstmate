@@ -1260,7 +1260,8 @@ Only a final `no rankable eligible candidate` result caused by pacing with a kno
 
 ## Quota balance
 
-Quota balance is the default dispatch rule whenever `config/crew-dispatch.json` exists: every allowance (each machine's Claude account, each Codex account, and any other configured provider) runs down at the same pace relative to its own reset, and every crew start is held to that rather than left to whoever chose the profile.
+Quota balance applies whenever `config/crew-dispatch.json` exists: every allowance (each machine's Claude account, each Codex account, and any other configured provider) runs down at the same pace relative to its own reset, and every crew start is held to that rather than left to whoever chose the profile.
+`quota-balanced` is the default selection policy, while an explicit `candidate-order` still keeps configured position first inside the same reserve, spread, and spawn-enforcement policy.
 This section owns the policy; the [resolver header](../bin/fm-dispatch-resolve.sh), [spawn gate](../bin/fm-quota-balance-lib.sh), and [measured-draw tool](../bin/fm-quota-burn.py) own their mechanics.
 
 The policy uses a fixed 10% reserve and a fixed 20-point spread threshold, so dispatch configuration cannot weaken either safeguard.
@@ -1320,7 +1321,7 @@ Structural resolver errors refuse; only missing quota evidence takes the unverif
 When no candidate has quota evidence at all, the start proceeds with the verdict `unverifiable` recorded, because unknown quota is disclosed uncertainty rather than an unconditional block.
 On a home without `config/crew-placement.json`, each such start is also appended to `state/quota-balance-unverifiable.jsonl`, and the first start in an open episode raises one `check: quota-balance-unverifiable:` wake.
 A balanced or refused verdict closes the episode, so a later degraded episode alerts again.
-Each successful resolver reading saves `state/quota-balance-last.json`; while that reading is under 15 minutes old, an unverifiable start is refused when its local provider allowance was more than 20 points behind the fullest allowance in the reading.
+Each successful resolver reading that measures more than one allowance in the global spread saves `state/quota-balance-last.json`; while that reading is under 15 minutes old, an unverifiable start is refused when its local provider allowance was more than 20 points behind the fullest allowance in the reading.
 Every machine in the task's [pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines) is judged, so a pick on a second mate's machine refuses the local start and names that second mate.
 A non-empty `balance_override` in `placement.json` states why the task class needs that profile and is kept with the decision, including on the last-reading path.
 Ordinary overrides cannot pass the reserve or an exhausted window.
@@ -1330,7 +1331,7 @@ Machine fit and room still apply.
 A parent's fresh, task-bound `parent_placement` can be carried with the remote task classification; the receiving home honors that pool decision while checking its own allowance reserve.
 The [gate header](../bin/fm-quota-balance-lib.sh) owns the transfer record and expiry checks.
 The verdict, rule, pick, and any override are recorded as `quota.balance` in the `state/capacity.json` decision, and a successful launch charges its allowance after admission, brief and provisioning checks pass.
-A controlled relaunch checks balance before stopping the worker and carries that verdict within the authenticated lifecycle transaction, so a later ranking change cannot strand the stopped worker.
+Controlled relaunches apply this gate through the [relaunch transaction](agent-control.md#transactional-relaunch).
 The resolver excludes machines whose placement profile rejects the task workload or whose reported crew, memory, swap or disk room is unavailable.
 Each dispatching home runs its own check against its own `config/crew-dispatch.json`; secondmate homes inherit that file from the primary.
 **Apply and rollback**
