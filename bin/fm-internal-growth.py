@@ -291,7 +291,7 @@ def main():
     record["new"] = [episode_key(row) for row in flagged if episode_key(row) not in episodes]
     if dry:
         print(json.dumps(dict(record, alert=alert), sort_keys=True))
-        return 0
+        return 0 if cur is not None else 1
     alerted = True
     if alert:
         alerted = subprocess.run(["bash", wake, "--queue-alert", alert], check=False).returncode == 0

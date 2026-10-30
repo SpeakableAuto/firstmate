@@ -26,7 +26,18 @@
 # config/crew-placement.json must exist, its drive must equal root, and its
 # required_drive_dirs must cover every target, so placement refuses heavy work on
 # the same paths. verify and install fail closed until that profile is active.
-# verify also requires the daily internal-growth LaunchAgent to be loaded.
+# install and verify require a non-writable mount parent (for the current user).
+# This prevents tools from recreating an absent mount path on the internal disk,
+# including tools already running and light work outside placement admission.
+# Provision mount parents through the host administrator, never this command.
+# verify also requires a valid internal-growth config, successful read-only
+# measurement, and the daily internal-growth LaunchAgent to be loaded.
+# install creates a missing internal-growth config with scan=$HOME, the Data
+# volume on macOS (otherwise /), and explicit allowances for Firstmate's
+# operational folders, user apps/application support and internal Codex sessions.
+# Existing invalid config is never replaced. The initial measurement/baseline
+# must succeed before enrollment. Additional always-on services need explicit
+# allow= entries reviewed by the operator; project folders are not allowed.
 # install first proves the drive root, creates missing target directories on that
 # mounted drive, rewrites only the marked block in the shell env file, sets the
 # user npm cache and Xcode DerivedData default, enrolls the daily internal-growth
@@ -243,6 +254,53 @@ PY
   echo "ok treehouse root $treehouse_root"
 }
 
+check_mount_parent() {
+  local parent
+  parent=$(dirname "$root")
+  if ! real_dir "$parent" || [ -w "$parent" ]; then
+    echo "refused mount parent: $parent must be a real directory not writable by $(id -un); otherwise tools can recreate an absent drive internally" >&2
+    return 3
+  fi
+  echo "ok protected mount parent $parent"
+}
+
+prepare_growth_config() {
+  local dry=$1 path volume part tmp
+  path="$CONFIG/internal-growth"
+  # Existing malformed files and symlinks are left to the checker's parser.
+  [ ! -e "$path" ] && [ ! -L "$path" ] || return 0
+  volume=/
+  [ ! -d /System/Volumes/Data ] || volume=/System/Volumes/Data
+  if [ "$dry" = 1 ]; then
+    echo "would create $path: volume=$volume, scan=$HOME, threshold_gib=1 with explicit operational allowances"
+    return 0
+  fi
+  tmp=$(mktemp "$CONFIG/.internal-growth.XXXXXXXX") || return 3
+  {
+    printf 'volume=%s\nscan=%s\nthreshold_gib=1\ndepth=3\n' "$volume" "$HOME"
+    for part in bin config data state docs .agents skills; do
+      printf 'allow=%s/%s\n' "$FM_HOME" "$part"
+    done
+    printf 'allow=%s/Applications\nallow=%s/Library/Application Support\nallow=%s/.codex/sessions\n' "$HOME" "$HOME" "$HOME"
+  } > "$tmp"
+  # Create only when still absent; never replace another install's configuration.
+  if ! ln "$tmp" "$path"; then
+    rm -f "$tmp"
+    echo 'refused internal growth configuration: concurrent creation' >&2
+    return 3
+  fi
+  rm -f "$tmp"
+  echo "created internal growth configuration $path"
+}
+
+check_growth_measurement() {
+  if ! bash "$SCRIPT_DIR/fm-internal-growth.sh" --dry-run; then
+    echo 'refused internal growth measurement: configure a valid internal-growth file and resolve its measurement error before enrollment' >&2
+    return 3
+  fi
+  echo 'ok internal growth measurement'
+}
+
 check_growth_enrollment() {
   local service
   service="gui/$(id -u)/$GROWTH_LABEL"
@@ -312,6 +370,8 @@ run_verify() {
     done
   fi
   check_placement || failed=1
+  check_mount_parent || failed=1
+  check_growth_measurement || failed=1
   [ -z "$project" ] || check_project_treehouse "$project" || failed=1
   check_growth_enrollment || failed=1
   [ "$failed" -eq 0 ] || return 3
@@ -473,8 +533,13 @@ run_install() {
   local dry=$1
   run_drive_check >/dev/null || return $?
   check_placement >/dev/null || return $?
+  check_mount_parent >/dev/null || return $?
   command -v python3 >/dev/null || { echo 'refused internal growth enrollment: python3 is unavailable' >&2; return 3; }
   command -v launchctl >/dev/null || { echo 'refused internal growth enrollment: launchctl is unavailable' >&2; return 3; }
+  prepare_growth_config "$dry" || return $?
+  if [ "$dry" = 0 ] || [ -e "$CONFIG/internal-growth" ] || [ -L "$CONFIG/internal-growth" ]; then
+    check_growth_measurement || return $?
+  fi
   prepare_targets "$dry" || return $?
   if [ "$dry" = 1 ]; then
     echo "would write to $shell_env_file:"
@@ -493,6 +558,10 @@ run_install() {
   if [ -n "$xcode_rel" ]; then
     command -v defaults >/dev/null || { echo 'refused xcode derived data: defaults is unavailable' >&2; return 3; }
     defaults write com.apple.dt.Xcode IDECustomDerivedDataLocation -string "$root/$xcode_rel"
+  fi
+  if ! bash "$SCRIPT_DIR/fm-internal-growth.sh"; then
+    echo 'refused internal growth baseline: initial check failed; daily service not enrolled' >&2
+    return 3
   fi
   enroll_growth_check 0 || return $?
   run_verify

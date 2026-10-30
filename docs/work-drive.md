@@ -37,7 +37,11 @@ Worker placement refuses heavy work on a missing or unwritable drive when `confi
 The [crew-placement configuration](configuration.md#crew-placement-configcrew-placementjson) owns that profile's full contract and example.
 `verify` and `install` refuse an absent profile, a different drive, or a profile that does not cover every target in `config/work-drive`.
 This fail-closed behavior prevents an incomplete host configuration from being reported as active.
-The tool settings above point at the drive with no fallback, so a tool started while the drive is absent fails instead of writing to internal storage.
+Installation and verification also require the real mount parent to be non-writable by the build user, as `/Volumes` normally is on macOS.
+This filesystem boundary prevents any configured tool, including an already running process or light work outside placement admission, from recreating an absent mount directory internally.
+The installer refuses unsafe parents and never changes host permissions; an administrator must provision the mount location first.
+Do not run build tools as root or deliberately replace that protected mount arrangement.
+Placement still checks the mounted drive and required targets before heavy admission; these are separate checks for admission and persistent tool paths.
 
 ## Treehouse project pools
 
@@ -61,7 +65,10 @@ Codex session data is separable through its documented `log_dir` and `sqlite_hom
 
 ## Configure the internal growth check
 
-Write `config/internal-growth` in the same home, for example:
+Install creates `config/internal-growth` if absent, with the user's home as its scan root and concrete allowances for operational folders, user applications/application support, and the retained internal Codex sessions.
+Review that generated list and add specific always-on service directories when applicable; project directories are not blanket-allowed.
+An existing invalid configuration is refused rather than replaced.
+To customize the scope before installation, write `config/internal-growth` in the same home, for example:
 
 ```text
 volume=/System/Volumes/Data
@@ -69,11 +76,13 @@ threshold_gib=1
 depth=3
 scan=/Users/me
 scan=/opt/homebrew
-allow=/Users/me/firstmate
+allow=/Users/me/firstmate/data
+allow=/Users/me/firstmate/config
+allow=/Users/me/firstmate/state
 ```
 
 Each `scan=` path must be on `volume`; `du -x` keeps each measurement on that volume, so the work drive is never counted.
-List under `allow=` only folders that are meant to live internally, such as the Firstmate home, always-on services, and application data.
+List under `allow=` only folders that are meant to live internally, such as specific Firstmate operational directories, always-on services, and application data.
 A folder that `du` cannot read is retained in the log row's `unmeasured` list and labeled `UNMEASURED` in any alert emitted during that run.
 A nonzero `du` exit remains a usable partial measurement when the scan-root total exists, while a missing scan-root total is a failed measurement.
 The check also reads total volume use from `df` and opens a separate episode when used-space growth above the threshold is not explained by allowed or already flagged folder growth.
@@ -86,7 +95,9 @@ A large scan can take several minutes, so schedule it rather than running it int
 ## Daily launchd enrollment
 
 `fm-work-drive.sh install` performs host enrollment by writing and bootstrapping the per-user `local.firstmate.internal-growth` LaunchAgent.
-Installation refuses a failed bootstrap, and `verify` refuses unless launchd reports that LaunchAgent as loaded.
+Installation requires a valid growth configuration, a successful read-only measurement, and an initial recorded check before enrollment, and refuses a failed bootstrap.
+`verify` requires that same valid configuration and read-only measurement as well as the loaded LaunchAgent; a loaded service alone is not proof that the check works.
+Failed dry-run measurements return a nonzero status without creating baseline, logs, or alerts.
 `install --dry-run` prints the complete plist and the `launchctl bootout` and `launchctl bootstrap` commands without writing or loading anything.
 The baseline's minimum age keeps a missed or repeated run comparing against an approximately day-old baseline.
 
