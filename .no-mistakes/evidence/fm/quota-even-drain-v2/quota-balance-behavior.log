@@ -1,0 +1,9 @@
+# review probes: F1=1 F2rule=1 F2shape=1 F8=1 (all must refuse with 1)
+ok - the spawn gate enforces the balanced pick, alerts degraded starts, uses fresh evidence, and honors recorded overrides
+ok - optional quota windows do not block crew admission with outstanding measured charges
+# jitter probes: wakes=1 open=1 reopen=1 (want 1/1/1)
+# window burn probe: {"models":{"claude:opus":{"windows":{"five_hour":{"crew_hours":2.0,"draw":40.0,"points_per_hour":40.0,"run_seconds":3600,"span":3600},"seven_day":{"crew_hours":2.0,"draw":2.0,"points_per_hour":2.0,"run_seconds":3600,"span":3600}}}},"providers":{"claude":{"windows":{"five_hour":{"crew_hours":2.0,"draw":40.0,"points_per_hour":40.0,"run_seconds":3600,"span":3600},"seven_day":{"crew_hours":2.0,"draw":2.0,"points_per_hour":2.0,"run_seconds":3600,"span":3600}}}}}
+ok - measured draw comes from sampled allowance loss per crew-hour and crew lifetimes
+ok - fm-spawn refuses an off-balance crew before provisioning and launches the balanced one
+ok - placement-enabled spawn admits only a quota-checked recorded task-class override
+# all fm-quota-balance tests passed

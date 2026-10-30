@@ -1,0 +1,12 @@
+LIVE QUOTA-BALANCE RESOLVER EVIDENCE
+captured_at=2026-10-30T21:14:28Z
+--- live quota summary ---
+{"generatedAt":"2026-10-30T21:14:29.038Z","providers":[{"provider":"claude","status":"fresh","stale":false,"availability":[{"remaining":62,"headroom":-17.6182,"runway":"projected_exhaustion"}]},{"provider":"codex","status":"fresh","stale":false,"availability":[{"remaining":59,"headroom":-35.568,"runway":"projected_exhaustion"}]}]}
+--- requested Codex while Claude is the balanced pick ---
+{"ranked_by":"pace headroom","requested":{"provider":"codex","headroom":-35.57},"pick":{"provider":"claude","headroom":-17.62},"verdict":"refused","reason":"the balanced pick is claude:opus on claude (headroom -17.62); requested codex:gpt-6-astra has headroom -35.57"}
+--- same profile outside the task rule without an override ---
+{"verdict":"refused","reason":"requested profile is not a candidate of rule_1 on this machine","charge":null}
+--- recorded task-class override, admitted and charged ---
+{"verdict":"override","override":"live browser computer-use exception","requested":{"provider":"codex","model":"gpt-6-astra"},"charge":{"at":1793394871,"key":"live","home":"local","provider":"codex","account":"","model":"gpt-6-astra","scopes":["all_models"],"claude":false,"signature":"codex|weekly@2026-11-06T12:06:56.000Z"}}
+--- persisted lab charge ---
+{"key":"live","provider":"codex","model":"gpt-6-astra","draw":null,"span":null}
