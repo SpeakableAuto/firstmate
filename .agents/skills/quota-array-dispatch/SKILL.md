@@ -120,7 +120,7 @@ When `quota_pacing.accounts` is configured, use the current snapshot's per-windo
 Apply its concurrency allowance as an eligibility gate, then prefer the passing paced account with the soonest reset; the selected policy ranks candidates within that window.
 Unknown pacing evidence cannot authorize a paced placement.
 
-When `quota_balance` is configured, the [quota balance policy](../../../docs/configuration.md#quota-balance) replaces `spendPriority` with pace headroom, prefers no provider, keeps a uniform reserve instead of percentage floors, and holds work off any allowance past the spread alarm; `fm-spawn.sh` refuses any start that is not on the balanced pick's allowance, so choose the profile its check accepts or record `balance_override` with the task-class reason.
+The default [quota balance policy](../../../docs/configuration.md#quota-balance) replaces `spendPriority` with pace headroom whenever the snapshot publishes it, prefers no provider, keeps a uniform reserve instead of percentage floors, and holds work off any allowance past the spread alarm; `fm-spawn.sh` refuses any start that is not on the balanced pick's allowance, so choose the profile its check accepts or record `balance_override` with the task-class reason.
 
 Decide the selection policy once per intake under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson): use the matched rule's `select`, else the file's `select`, else `quota-balanced`.
 A per-machine rule-floor shortfall changes only the profiles that machine contributes and never changes the intake's selection policy.
@@ -141,7 +141,7 @@ Never resolve that terminal uncertainty by treating unknown as healthy or by cho
 Show the scalar or the literal `unknown` in the rationale; do not hide it in a score.
 
 Do not compare headroom against runway by hand.
-Outside quota balance, do not use pace or signed reserve as a later tie-break layer.
+Outside the quota balance ranking, do not use pace or signed reserve as a later tie-break layer.
 Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWindowIds`, or other window-id lists to reconstruct what `spendPriority` already computed.
 
 Near-ties within `quota-balanced`, exact ties included: select the earliest near-tied candidate in configured order and report every near-tied candidate with its scalar.

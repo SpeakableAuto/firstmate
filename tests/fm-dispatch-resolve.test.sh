@@ -761,10 +761,10 @@ assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex/gpt-5.6-
 
 FLOOR_BOUNDS="$TMP_ROOT/floor-bounds.json"
 jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability) += [
-  {"scope":"model:gpt-5.6-sol","status":"known","effectivePercentRemaining":10,"runway":{"status":"projected_exhaustion"},"selection":{"spendPriority":-0.9}}
+  {"scope":"model:gpt-5.6-sol","status":"known","effectivePercentRemaining":20,"runway":{"status":"projected_exhaustion"},"selection":{"spendPriority":-0.9}}
 ]' "$QUOTA" > "$FLOOR_BOUNDS"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$FLOOR_BOUNDS" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=31%  spendPriority=-  runway=projected_exhaustion  bounds=all_models:31%/projected_exhaustion,model:gpt-5.6-sol:10%/projected_exhaustion  -> not eligible: profile floor all_models below 50%' "a failed profile floor reports its named row while retaining all bounds"
+assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=31%  spendPriority=-  runway=projected_exhaustion  bounds=all_models:31%/projected_exhaustion,model:gpt-5.6-sol:20%/projected_exhaustion  -> not eligible: profile floor all_models below 50%' "a failed profile floor reports its named row while retaining all bounds"
 
 FLOOR_WITH_UNKNOWN="$TMP_ROOT/floor-with-unknown.json"
 jq '(.providers[] | select(.provider == "codex") | .quotaSemantics) |= (.status = "partial" | .effectiveAvailability += [
@@ -1079,7 +1079,7 @@ cat > "$SCHEMA6" <<'JSON'
     { "provider": "codex", "accountKey": "openai-codex", "quotaSemantics": { "status": "known", "effectiveAvailability": [
       { "scope": "all_models", "status": "known", "effectivePercentRemaining": 0, "runway": { "status": "exhausted_now" }, "selection": { "spendPriority": -1.4788 } } ] } },
     { "provider": "codex", "accountKey": "openai-codex-work", "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 11, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -5.6819 } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 21, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -5.6819 } } ] } },
     { "provider": "cursor", "accountKey": "default", "quotaSemantics": { "status": "known", "effectiveAvailability": [
       { "scope": "all_models", "status": "known", "effectivePercentRemaining": 24, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.3917 } } ] } }
   ]
@@ -1096,7 +1096,7 @@ reset_log
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SCHEMA6" run code out err "$BRIEF"
 expect_code 0 "$code" "schema 6 snapshot exits 0"
 assert_contains "$out" '  status: clear' "schema 6 snapshot resolves"
-assert_contains "$out" 'candidate: pi:openai-codex-work/gpt-5.6-terra  provider=codex  scope=all_models  remaining=11%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a Pi lane binds to its own account row"
+assert_contains "$out" 'candidate: pi:openai-codex-work/gpt-5.6-terra  provider=codex  scope=all_models  remaining=21%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a Pi lane binds to its own account row"
 assert_contains "$out" 'candidate: pi:openai-codex/gpt-5.6-sol  provider=codex  scope=all_models  remaining=0%  spendPriority=-  runway=exhausted_now  -> not eligible: runway exhausted_now at all_models' "the sibling lane reads its own exhausted row"
 assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  -> eligible, unranked: provider codex has no quota row for account codex-home: disclosed uncertainty' "native Codex never infers an account from a Pi lane"
 assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex-work/gpt-5.6-terra'" "the lane with headroom is chosen"
@@ -1136,7 +1136,7 @@ jq '.schemaVersion = 5 | .providers |= map(select(.accountKey != "openai-codex")
 reset_log
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SCHEMA5_PAIR" run code out err "$BRIEF"
 assert_contains "$out" '  near-tie broken by configured order: pi:openai-codex-work/gpt-5.6-terra=-5.6819, pi:openai-codex/gpt-5.6-sol=-5.6819, codex:gpt-5.6-sol=-5.6819 (within 0.05)' "every codex profile reads the one schema 5 codex row"
-assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=11%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a schema 5 row never needs accountKey"
+assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=21%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a schema 5 row never needs accountKey"
 
 SCHEMA6_PI_NATIVE="$TMP_ROOT/schema6-pi-native.json"
 jq '.providers |= map(select(.provider != "codex" or .accountKey != "default"))' "$SCHEMA6_NATIVE" > "$SCHEMA6_PI_NATIVE"
@@ -1161,7 +1161,7 @@ for harness in pi pi-signed; do
 
   reset_log
   TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SCHEMA5_PAIR" run code out err "$BRIEF"
-  assert_contains "$out" "candidate: $harness:codex-native/gpt-6-astra  provider=codex  scope=all_models  remaining=11%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible" "$harness native adapter still joins schema 5 by provider alone"
+  assert_contains "$out" "candidate: $harness:codex-native/gpt-6-astra  provider=codex  scope=all_models  remaining=21%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible" "$harness native adapter still joins schema 5 by provider alone"
 done
 cp "$LANE_RULES" "$RULES"
 pass "Pi native adapters bind to codex-home with existing fallbacks and schema 5 compatibility"
@@ -1570,9 +1570,10 @@ pool_case "$BRIEF" --project pager
 assert_contains "$out" 'candidate: home=peer claude:sonnet  provider=claude  scope=all_models  remaining=90%  spendPriority=1.4  runway=through_reset  -> not eligible: Claude crew at its limit on peer: 3 of 3 (live: crew1, crew2, crew3)' "the remote guard comes from the remote home's own crew"
 assert_contains "$out" 'placement: local' "a remote machine at its Claude limit leaves Claude work here"
 live_claude "$REMOTE_HOME/state" 0
-write_pool_quota "$REMOTE_QUOTA" 1.4 through_reset 0.2 through_reset 38
+write_pool_quota "$REMOTE_QUOTA" 1.4 through_reset 0.2 through_reset 8
 pool_case "$BRIEF" --project pager
-assert_contains "$out" 'not eligible: Claude session 38% below the 40% floor on peer' "the 40% session floor applies per machine"
+assert_contains "$out" 'candidate: home=peer claude:sonnet  provider=claude  scope=all_models  remaining=8%' "the remote account is judged from its own reading"
+assert_contains "$out" 'not eligible: below the 10% reserve at all_models' "the 10% reserve applies per machine"
 assert_contains "$out" 'placement: local' "a remote account under its session floor is passed by"
 pass "the Claude crew cap and session floor apply per account on each machine"
 
@@ -1787,13 +1788,13 @@ set_runway "$QUOTA" claude through_reset
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" 'near quota tie picks Claude'
-jq '.providers[0].windows[0].percentRemaining=39' "$QUOTA" > "$TMP_ROOT/low.json"
+jq '.providers[0].windows[0].percentRemaining=9' "$QUOTA" > "$TMP_ROOT/low.json"
 mv "$TMP_ROOT/low.json" "$QUOTA"
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
-assert_contains "$out" "profile: --harness 'cursor'" 'quota tie cannot waive Claude 40 percent floor'
+assert_contains "$out" "profile: --harness 'cursor'" 'quota tie cannot waive the Claude 10 percent session floor'
 rm "$HOME_DIR/config/crew-placement.json"
-pass 'placement selection keeps task fit, ranks by quota, and gives Claude only ties above its floor'
+pass 'placement selection keeps task fit, ranks by quota, and gives Claude only ties above its session floor'
 
 # --- quota balance: pace headroom, reserve, spread, and the spawn-time check ---
 # Pace headroom (points left minus window still to run) ranks every allowance
@@ -1840,6 +1841,15 @@ cp "$BAL_RULES" "$RULES"
 mkdir -p "$HOME_DIR/state"
 rm -f "$HOME_DIR/state"/crew*.meta "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
 
+# Quota balance is the default: without quota_balance the same ranking applies.
+jq 'del(.quota_balance)' "$BAL_RULES" > "$RULES"
+write_balance_quota "$QUOTA" 70 -5 60 -30
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'claude' --model 'opus' --effort 'high'" 'pace headroom ranks without any quota_balance key'
+assert_contains "$out" 'spread: claude is 25 points of headroom ahead of codex (alarm above 20)' 'the default spread alarm is 20 points'
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue"
+cp "$BAL_RULES" "$RULES"
+
 # A known rule needs no key and sends nothing.
 write_balance_quota "$QUOTA" 70 -5 60 -30
 balance_run "$BRIEF" --rule rule_1
@@ -1873,6 +1883,10 @@ assert_contains "$out" 'below the 10% reserve at all_models' 'an allowance under
 write_balance_quota "$QUOTA" 15 3 60 -30 30
 balance_run "$BRIEF" --rule rule_1
 assert_contains "$out" "profile: --harness 'claude' --model 'opus'" 'Claude at 15% with headroom still takes work'
+# The reserve counts the new crew's own draw: 12% less the fixed 5 leaves 7%.
+write_balance_quota "$QUOTA" 12 5 60 -30 30
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" 'below the 10% reserve at all_models after its own expected draw of 5 points' 'a crew that would eat into the reserve is not eligible'
 
 # Spawn-time check: one JSON line, the requested profile against the pick.
 write_balance_quota "$QUOTA" 70 -5 60 -30
@@ -1906,8 +1920,8 @@ assert_contains "$out" 'holding rather than draining a behind allowance: claude 
 rm -f "$HOME_DIR/state"/crew*.meta
 cp "$BAL_RULES" "$RULES"
 
-# Measured draw: samples showing Codex losing 6 points an hour per crew charge
-# the next placement with draw over its measured span, not the fixed 5 points.
+# Measured draw: Codex samples (crew seen at both ends weigh 1, at one end 0.5)
+# charge the next placement with draw over its measured span, not the fixed 5.
 now=$(date +%s)
 {
   printf '{"at":%s,"rows":[{"provider":"codex","account":"","pct":40,"limiting":"weekly","resets":"r"}],"crews":[{"task":"a","provider":"codex","model":"gpt-6-astra"},{"task":"b","provider":"codex","model":"gpt-6-astra"}]}\n' $((now - 7200))
@@ -1917,8 +1931,30 @@ now=$(date +%s)
 write_balance_quota "$QUOTA" 70 -10 60 -4
 balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high
 assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'Codex is the pick by pace'
-assert_equals '6000:3600' "$(jq -r '"\(.draw * 1000 | round):\(.span)"' "$HOME_DIR/state/dispatch-charges.jsonl")" 'the charge carries the measured draw and span'
+assert_equals '8571:3600' "$(jq -r '"\(.draw * 1000 | round):\(.span)"' "$HOME_DIR/state/dispatch-charges.jsonl")" 'the charge carries the measured draw and span'
 rm -f "$HOME_DIR/state/quota-samples.jsonl" "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue"
+
+# Spread alarm across a batch: each distinct open gap is its own condition. One
+# pool sees the second machine, the other does not; neither clears the other.
+BRIEF_B="$TMP_ROOT/brief-b.md"
+cp "$BRIEF" "$BRIEF_B"
+rm -rf "$HOME_DIR/state/quota-remote"
+printf 'ok\n' > "$SSH_MODE"
+write_balance_quota "$QUOTA" 70 -5 60 -30
+write_balance_quota "$REMOTE_QUOTA" 90 10 80 -30
+balance_run "$BRIEF" --project pager "$BRIEF_B" --project other --rule rule_1
+expect_code 0 "$code" 'a batch with two pools exits 0'
+assert_equals 3 "$(grep -c 'check: quota-spread' "$HOME_DIR/state/.wake-queue")" 'every distinct open gap is announced once'
+assert_contains "$(cat "$HOME_DIR/state/.wake-queue")" 'peer claude has 40 more points of headroom than codex' 'the remote gap is announced'
+assert_contains "$(cat "$HOME_DIR/state/.wake-queue")" 'claude has 25 more points of headroom than codex' 'the local gap is announced'
+assert_equals 3 "$(jq '.conditions | length' "$HOME_DIR/state/quota-spread.json")" 'each condition is kept'
+write_balance_quota "$QUOTA" 70 -5 60 -10
+balance_run "$BRIEF_B" --project other --rule rule_1
+assert_equals '["peer|claude|>local|codex|","peer|claude|>peer|codex|"]' "$(jq -c '.conditions | keys' "$HOME_DIR/state/quota-spread.json")" \
+  'a pool that never saw the second machine closes only its own gap'
+assert_equals 3 "$(grep -c 'check: quota-spread' "$HOME_DIR/state/.wake-queue")" 'closing a gap announces nothing new'
+rm -rf "$HOME_DIR/state/quota-remote"
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
 cp "$BASE_RULES" "$RULES"
 write_quota "$QUOTA" 0.7597
 pass 'quota balance ranks by pace with no preferred provider, keeps a 10% reserve, alarms on spread, and checks spawns'

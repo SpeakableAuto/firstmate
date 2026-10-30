@@ -16,8 +16,9 @@ rates prints one JSON object measured from those samples:
   M = {points_per_hour, crew_hours, run_seconds, draw, span}
 Between two consecutive samples of one account (at most 3 hours apart, same
 limiting window and reset, no refill) the percentage the account lost is split
-equally across the crew live at the first sample, giving points per crew-hour
-by model. run_seconds is the median lifetime of finished crew (first to last
+across the crew live during the interval: a crew seen at both samples weighs
+1 and one seen at only one end (started or finished inside it) weighs 0.5,
+giving points per crew-hour by model. run_seconds is the median lifetime of finished crew (first to last
 sample seen). draw is the points one new crew is expected to take
 (points_per_hour x run_seconds, clamped 0.5..40) and span is the seconds over
 which that draw is still owed (run_seconds clamped 900..14400). A model or
@@ -129,14 +130,20 @@ def rates(state, now):
             if not 0 < gap <= MAX_PAIR or a.get("limiting") != b.get("limiting") or a.get("resets") != b.get("resets"):
                 continue
             lost = a["pct"] - b["pct"]
-            crews = [c for c in first.get("crews") or [] if c.get("provider") == provider]
-            if lost < 0 or not crews:
+            # A crew seen at both ends ran the whole interval; one seen at only
+            # one end started or finished inside it and counts for half.
+            weight = {}
+            for record in (first, second):
+                for crew in record.get("crews") or []:
+                    if crew.get("provider") == provider:
+                        weight[crew["task"]] = (weight.get(crew["task"], (0.0, crew["model"]))[0] + 0.5, crew["model"])
+            total = sum(w for w, _model in weight.values())
+            if lost < 0 or not total:
                 continue
-            share = lost / len(crews)
-            for crew in crews:
-                for key in (f'{provider}:{crew["model"]}', provider):
-                    points[key] = points.get(key, 0.0) + share
-                    hours[key] = hours.get(key, 0.0) + gap / 3600
+            for share_weight, model in weight.values():
+                for key in (f'{provider}:{model}', provider):
+                    points[key] = points.get(key, 0.0) + lost * share_weight / total
+                    hours[key] = hours.get(key, 0.0) + share_weight * gap / 3600
     seen = {}
     for record in samples:
         for crew in record.get("crews") or []:
