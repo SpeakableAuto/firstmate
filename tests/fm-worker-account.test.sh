@@ -98,6 +98,10 @@ spawn_ship() {
   local id=$1
   shift
   fm_test_spawn_brief "$HOME_DIR" "$id"
+  if [ -f "$HOME_DIR/config/crew-dispatch.json" ]; then
+    jq -n '{balance_override:"worker-account fixture exercises admission outside dispatch classification"}' \
+      > "$HOME_DIR/data/$id/placement.json"
+  fi
   signed_in_claude_root "$CASE/ambient-claude"
   : > "$CASE/launch.log"
   FM_FAKE_LAUNCH_LOG="$CASE/launch.log" FM_TEST_CLAUDE_CONFIG_DIR="$CASE/ambient-claude" \
@@ -451,13 +455,13 @@ SH
       assert_contains "$out" 'quota floor is unverifiable' 'old quota cannot establish the floor'
     fi
   done
-  quota_fixture 39
+  quota_fixture 9
   jq '.providers[].state = {status:"fresh",stale:false,reused:true,
     refreshedAt:((now-300)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"
   cp "$CASE/rate-limited.json" "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "recent cached quota below floor refuses: $out"
-  assert_contains "$out" 'five_hour remaining 39% below 40%' 'cached reading preserves the fixed floor'
+  assert_contains "$out" 'five_hour remaining 9% below 10%' 'cached reading preserves the fixed floor'
   for stamp in 'bad timestamp' '2039-01-01T00:00:00Z' ''; do
     jq --arg stamp "$stamp" '.providers[].state.refreshedAt = $stamp' \
     "$FM_TEST_CACHED_QUOTA" > "$CASE/invalid-age.json"
@@ -479,12 +483,12 @@ SH
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "other failures cannot admit from a recent cache: $out"
   assert_contains "$out" 'quota floor is unverifiable' 'authentication failure stays unknown'
-  quota_fixture 39
+  quota_fixture 9
   out=$(check_admission); rc=$?
-  expect_code 1 "$rc" "a 39% session refuses: $out"
-  assert_contains "$out" 'five_hour remaining 39% below 40%' 'session floor is independent of weekly availability'
+  expect_code 1 "$rc" "a 9% session refuses: $out"
+  assert_contains "$out" 'five_hour remaining 9% below 10%' 'session floor is independent of weekly availability'
   assert_contains "$out" 'choose Codex' 'refusal gives an alternative'
-  quota_fixture 40
+  quota_fixture 10
   out=$(check_admission); rc=$?
   expect_code 0 "$rc" "the exact floor admits: $out"
   cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
@@ -545,9 +549,9 @@ JSON
   printf '%s\n' '{"claude_admission":{"max_concurrent":4}}' > "$HOME_DIR/config/crew-dispatch.json"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "a looser concurrency override refuses: $out"
-  printf '%s\n' '{"claude_admission":{"min_session_percent":39}}' > "$HOME_DIR/config/crew-dispatch.json"
+  printf '%s\n' '{"claude_admission":{"min_session_percent":9}}' > "$HOME_DIR/config/crew-dispatch.json"
   out=$(check_admission); rc=$?
-  expect_code 1 "$rc" "a looser session override refuses: $out"
+  expect_code 1 "$rc" "a session override below the 10% reserve refuses: $out"
   rm "$HOME_DIR/config/crew-dispatch.json"
   printf '%s\n' '{"schemaVersion":6,"providers":[{"provider":"claude","accountKey":"default","quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}' > "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?
@@ -727,12 +731,12 @@ test_spawn_enforces_claude_admission() {
   new_case admission-spawn claude
   cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","percentRemaining":39}],"quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}'
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","percentRemaining":9}],"quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}'
 SH
   chmod +x "$FAKEBIN/quota-axi"
   out=$(spawn_ship guarded --harness claude); rc=$?
   expect_code 1 "$rc" "real spawn refuses a depleted session: $out"
-  assert_refused_before_launch guarded "$out" 'five_hour remaining 39% below 40%'
+  assert_refused_before_launch guarded "$out" 'five_hour remaining 9% below 10%'
   assert_absent "$HOME_DIR/state/.claude-admission.lock" 'refusal releases admission lock'
   cat > "$FAKEBIN/claude-wrapper" <<'SH'
 #!/usr/bin/env bash

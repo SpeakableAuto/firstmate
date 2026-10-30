@@ -4,7 +4,7 @@
 # through launch and metadata publication. No supervisor or secondmate admission
 # is charged against crew.
 # docs/configuration.md "Claude crew admission" owns configuration and semantics.
-# Usage: fm_claude_admission_check <config> <state> <id> <identity> <floor-scope> <floor-min-percent> [model]
+# Usage: fm_claude_admission_check <config> <state> <id> <identity> <floor-scope> <floor-min-percent> [model] [P0]
 # The caller supplies the selected Claude config root, or ordinary, as identity.
 # Existing records without identity are conservatively charged to every account.
 # Backend recovery-grade liveness is reused, never inferred from status events.
@@ -63,15 +63,16 @@ fm_claude_admission_limits() {
     if type != "object" then error("invalid dispatch object") else . end |
     (if has("claude_admission") then .claude_admission else {} end) as $c |
     ($c | if has("max_concurrent") then .max_concurrent else 3 end) as $cap |
-    ($c | if has("min_session_percent") then .min_session_percent else 40 end) as $floor |
+    # Quota balance keeps only a small reserve for the supervisor'"'"'s own session.
+    ($c | if has("min_session_percent") then .min_session_percent else 10 end) as $floor |
     (if $floor_min_percent == "" then null else (try ($floor_min_percent | tonumber) catch null) end) as $profile_min |
     if ($c | type) != "object" or ($cap | type) != "number" or $cap < 1 or $cap > 3 or $cap != ($cap | floor)
-      or ($floor | type) != "number" or $floor < 40 or $floor > 100
+      or ($floor | type) != "number" or $floor < 10 or $floor > 100
       then error("invalid claude_admission") else . end |
     (if $floor_scope == "" then [] else [{scope:$floor_scope,min_percent:$profile_min}] end) as $floors |
     {cap:$cap, floor:$floor, floors:$floors}
   ' 2>/dev/null || {
-    echo 'error: invalid Claude admission settings or selected profile floor; max_concurrent must be 1..3 and min_session_percent must be 40..100' >&2
+    echo 'error: invalid Claude admission settings or selected profile floor; max_concurrent must be 1..3 and min_session_percent must be 10..100' >&2
     return 1
   }
 }
@@ -144,6 +145,7 @@ fm_claude_admission_check() {
   limits=$(fm_claude_admission_limits "$settings" "$floor_scope" "$floor_min_percent") || return 1
   cap=$(printf '%s\n' "$limits" | jq -r .cap)
   floor=$(printf '%s\n' "$limits" | jq -r .floor)
+  [ "${8:-}" != P0 ] || floor=5
   floors=$(printf '%s\n' "$limits" | jq -c .floors)
   fm_claude_admission_count "$state" "$id" "$identity" || return 1
   count=$FM_CLAUDE_ADMISSION_COUNT

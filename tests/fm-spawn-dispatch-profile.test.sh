@@ -78,8 +78,14 @@ make_spawn_case() {
 
 enable_dispatch_profile() {
   local home=$1
-  printf '%s\n' '{"rules":[{"when":"current events","use":{"harness":"grok","model":"grok-4","effort":"high"}}],"default":{"harness":"codex","model":"gpt-5","effort":"medium"}}' \
+  printf '%s\n' '{"rules":[{"when":"current events","use":{"harness":"grok","model":"grok-4","effort":"high"}}],"default":[{"harness":"codex","model":"gpt-5","effort":"medium"},{"harness":"codex","model":"gpt-5","effort":"high"},{"harness":"pi","model":"codex-native/gpt-6-astra","effort":"ultra","provider":"codex"}]}' \
     > "$home/config/crew-dispatch.json"
+}
+
+record_balance_override() {
+  local home=$1 id=$2
+  jq -n '{balance_override:"dispatch-profile fixture exercises an intentional profile outside task classification"}' \
+    > "$home/data/$id/placement.json"
 }
 
 make_seeded_secondmate_home() {
@@ -435,11 +441,12 @@ test_active_dispatch_profile_allows_explicit_harness() {
   rec=$(make_spawn_case profile-explicit claude "$id")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
+  record_balance_override "$HOME_DIR" "$id"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" --harness codex --model gpt-5 --effort high)
   status=$?
-  expect_code 0 "$status" "explicit harness should satisfy active dispatch-profile requirement"
+  expect_code 0 "$status" "explicit harness should satisfy active dispatch-profile requirement: $out"
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report explicit codex harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
@@ -454,6 +461,7 @@ test_active_dispatch_profile_allows_positional_harness() {
   rec=$(make_spawn_case profile-positional claude "$id")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
+  record_balance_override "$HOME_DIR" "$id"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" codex --model gpt-5 --effort high)
@@ -464,25 +472,22 @@ test_active_dispatch_profile_allows_positional_harness() {
   pass "active crew-dispatch profile allows the legacy positional harness form"
 }
 
-test_active_dispatch_profile_allows_raw_launch_command() {
-  local rec id out status launch
+test_active_dispatch_profile_refuses_unmapped_raw_launch_command() {
+  local rec id out status
   id=profile-raw-z15
   rec=$(make_spawn_case profile-raw claude "$id")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
+  record_balance_override "$HOME_DIR" "$id"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" "custom-agent --flag")
   status=$?
-  expect_code 0 "$status" "raw launch command should satisfy active dispatch-profile requirement"
-  assert_contains "$out" "spawned $id harness=custom-agent" "spawn did not report raw command harness"
-  assert_meta_profile "$HOME_DIR/state/$id.meta" custom-agent default default
-  launch=$(cat "$LAUNCH_LOG")
-  # The unverified-adapter escape hatch is still an agent this fleet launched,
-  # so it carries the compact-adviser floor and the AI-trailer strip; nothing
-  # else may rewrite the captain's own command.
-  [ "$launch" = "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$HOME_DIR" "$id")custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
-  pass "active crew-dispatch profile allows the raw launch-command escape hatch"
+  expect_code 1 "$status" "an unmapped raw override must refuse: $out"
+  assert_contains "$out" "is in no dispatch rule" "raw refusal must name the missing allowance mapping"
+  assert_absent "$HOME_DIR/state/$id.meta" "unmapped raw start must not publish a worker"
+  [ ! -s "$LAUNCH_LOG" ] || fail "unmapped raw start delivered a launch command"
+  pass "active crew-dispatch profile refuses an unmapped raw override before launch"
 }
 
 test_chained_raw_launch_strips_ai_trailer_in_every_step() {
@@ -876,6 +881,8 @@ test_batch_preserves_native_ultra() {
   rec=$(make_spawn_case ultra-batch pi "$id1" "$id2")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
+  record_balance_override "$HOME_DIR" "$id1"
+  record_balance_override "$HOME_DIR" "$id2"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness pi --model codex-native/gpt-6-astra --effort ultra)
   expect_code 0 "$?" "native Ultra batch failed: $out"
@@ -1052,6 +1059,8 @@ test_batch_forwards_shared_profile_flags() {
   rec=$(make_spawn_case profile-batch claude "$id1" "$id2")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
+  record_balance_override "$HOME_DIR" "$id1"
+  record_balance_override "$HOME_DIR" "$id2"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness codex --model gpt-5 --effort high)
@@ -1829,7 +1838,7 @@ test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness
 test_active_dispatch_profile_allows_positional_harness
-test_active_dispatch_profile_allows_raw_launch_command
+test_active_dispatch_profile_refuses_unmapped_raw_launch_command
 test_chained_raw_launch_strips_ai_trailer_in_every_step
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort

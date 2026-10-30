@@ -1,0 +1,318 @@
+{
+ "about": "Crew starts on the main firstmate machine from the Codex weekly reset (2026-10-28T06:39:32Z) to 2026-10-30T08:30Z, with no task names; draw per start measured from that week's quota readings. Codex: 98 weekly points over 42 fresh Codex starts. Claude: 21 weekly points from 2026-10-29T12:41Z to 2026-10-30T08:33Z, less 0.37 points an hour of supervisor use measured over 25-29 Oct when no Claude crew ran, over the fresh Claude starts in that span. The second machine's Claude account (claude_m0002) starts at 40%, which with the same supervisor use matches its one reading in the window (32% at 2026-10-29T01:33Z); the Codex account is shared by both machines.",
+ "start": "2026-10-28T06:39:32Z",
+ "end": "2026-10-30T08:30:00Z",
+ "allowances": {
+  "codex": {
+   "percent": 100,
+   "resets": [
+    "2026-11-04T06:39:32Z"
+   ],
+   "window_hours": 168
+  },
+  "claude": {
+   "percent": 13,
+   "resets": [
+    "2026-10-29T11:00:00Z",
+    "2026-11-05T11:00:00Z"
+   ],
+   "window_hours": 168
+  },
+  "claude_m0002": {
+   "percent": 40,
+   "resets": [
+    "2026-10-30T02:00:00Z",
+    "2026-11-06T02:00:00Z"
+   ],
+   "window_hours": 168
+  }
+ },
+ "draw": {
+  "codex": {
+   "points_per_start": 2.33,
+   "run_seconds": 3600
+  },
+  "claude": {
+   "points_per_start": 1.14,
+   "run_seconds": 3600,
+   "background_points_per_hour": 0.37
+  },
+  "claude_m0002": {
+   "points_per_start": 1.14,
+   "run_seconds": 3600,
+   "background_points_per_hour": 0.37
+  }
+ },
+ "starts": [
+  {
+   "offset": 21916,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 21916,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 23076,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 23198,
+   "class": "trivial",
+   "historical": "codex:gpt-6-luna"
+  },
+  {
+   "offset": 23669,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 25084,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 25288,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 26802,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 27691,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 28892,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 29513,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 29898,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 29949,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 30251,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 31059,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 31663,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 31973,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 32774,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 33770,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 34729,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 34954,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 37712,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 40169,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 43211,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 57262,
+   "class": "trivial",
+   "historical": "codex:gpt-6-luna"
+  },
+  {
+   "offset": 58967,
+   "class": "trivial",
+   "historical": "codex:gpt-6-luna"
+  },
+  {
+   "offset": 61376,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 62257,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 62317,
+   "class": "trivial",
+   "historical": "codex:gpt-6-luna"
+  },
+  {
+   "offset": 62636,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 62636,
+   "class": "trivial",
+   "historical": "codex:gpt-6-luna"
+  },
+  {
+   "offset": 63256,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 63256,
+   "class": "trivial",
+   "historical": "codex:gpt-6-luna"
+  },
+  {
+   "offset": 63256,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 63622,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 64391,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 65489,
+   "class": "trivial",
+   "historical": "codex:gpt-6-luna"
+  },
+  {
+   "offset": 66792,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 144162,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 145351,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 146435,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 146827,
+   "class": "hard",
+   "historical": "claude:default"
+  },
+  {
+   "offset": 147905,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 149065,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 149065,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 150524,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 151364,
+   "class": "design",
+   "historical": "claude:fable"
+  },
+  {
+   "offset": 152063,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 153195,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 155758,
+   "class": "hard",
+   "historical": "codex:gpt-6-astra"
+  },
+  {
+   "offset": 164813,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 165139,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 166259,
+   "class": "hard",
+   "historical": "claude:opus"
+  },
+  {
+   "offset": 168590,
+   "class": "design",
+   "historical": "claude:fable"
+  }
+ ]
+}

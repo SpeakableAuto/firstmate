@@ -8,6 +8,8 @@
 # network, and the absent-key case proves the tool makes no call
 # at all.
 set -u
+# A real key in the caller environment must not leak into the absent-key cases.
+unset TYPESAFE_API_KEY
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -27,6 +29,16 @@ mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN"
 for command_name in bash chmod cp dirname jq mktemp rm; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
 done
+
+cat > "$FAKEBIN/memory_pressure" <<'SH'
+#!/usr/bin/env bash
+printf 'System-wide memory free percentage: 80%%\n'
+SH
+cat > "$FAKEBIN/sysctl" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = vm.swapusage ]; then printf 'vm.swapusage: total = 0M used = 0M free = 0M\n'; else /usr/sbin/sysctl "$@"; fi
+SH
+chmod +x "$FAKEBIN/memory_pressure" "$FAKEBIN/sysctl"
 
 cat > "$BRIEF" <<'MD'
 # Task
@@ -407,7 +419,7 @@ expect_withheld() {  # <label> <stderr fragment> [<value that must not print>...
   assert_equals '' "$out" "$label prints nothing on stdout, so firstmate uses its existing intake"
   assert_contains "$err" "dispatch-resolve: off ($fragment" "$label names why on stderr"
   assert_contains "$err" 'nothing sent)' "$label says nothing was sent"
-  assert_equals '1' "$(grep -c . <<<"$err")" "$label prints one diagnostic line"
+  assert_equals '1' "$(grep -c . <<<"$err")" "$label prints one diagnostic line: $err"
   assert_absent "$LOG/argv" "$label never calls curl"
   assert_absent "$LOG/quota-axi.calls" "$label never reads quota"
   local value
@@ -759,10 +771,10 @@ assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex/gpt-5.6-
 
 FLOOR_BOUNDS="$TMP_ROOT/floor-bounds.json"
 jq '(.providers[] | select(.provider == "codex") | .quotaSemantics.effectiveAvailability) += [
-  {"scope":"model:gpt-5.6-sol","status":"known","effectivePercentRemaining":10,"runway":{"status":"projected_exhaustion"},"selection":{"spendPriority":-0.9}}
+  {"scope":"model:gpt-5.6-sol","status":"known","effectivePercentRemaining":20,"runway":{"status":"projected_exhaustion"},"selection":{"spendPriority":-0.9}}
 ]' "$QUOTA" > "$FLOOR_BOUNDS"
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$FLOOR_BOUNDS" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=31%  spendPriority=-  runway=projected_exhaustion  bounds=all_models:31%/projected_exhaustion,model:gpt-5.6-sol:10%/projected_exhaustion  -> not eligible: profile floor all_models below 50%' "a failed profile floor reports its named row while retaining all bounds"
+assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=31%  spendPriority=-  runway=projected_exhaustion  bounds=all_models:31%/projected_exhaustion,model:gpt-5.6-sol:20%/projected_exhaustion  -> not eligible: profile floor all_models below 50%' "a failed profile floor reports its named row while retaining all bounds"
 
 FLOOR_WITH_UNKNOWN="$TMP_ROOT/floor-with-unknown.json"
 jq '(.providers[] | select(.provider == "codex") | .quotaSemantics) |= (.status = "partial" | .effectiveAvailability += [
@@ -854,7 +866,7 @@ jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAva
 ]' "$QUOTA" > "$BOUNDED"
 write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$BOUNDED" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=79%  spendPriority=-0.4627' "the limiting provider-wide row drives ranking"
+assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=79%  spendPriority=-0.4627' "the limiting provider-wide row drives ranking; exit=$code stderr=$err"
 assert_contains "$out" 'bounds=all_models:79%/projected_exhaustion,model:sonnet:99%/through_reset' "all applicable quota bounds are disclosed"
 
 EXHAUSTED_WIDE="$TMP_ROOT/exhausted-wide.json"
@@ -1077,7 +1089,7 @@ cat > "$SCHEMA6" <<'JSON'
     { "provider": "codex", "accountKey": "openai-codex", "quotaSemantics": { "status": "known", "effectiveAvailability": [
       { "scope": "all_models", "status": "known", "effectivePercentRemaining": 0, "runway": { "status": "exhausted_now" }, "selection": { "spendPriority": -1.4788 } } ] } },
     { "provider": "codex", "accountKey": "openai-codex-work", "quotaSemantics": { "status": "known", "effectiveAvailability": [
-      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 11, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -5.6819 } } ] } },
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 21, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -5.6819 } } ] } },
     { "provider": "cursor", "accountKey": "default", "quotaSemantics": { "status": "known", "effectiveAvailability": [
       { "scope": "all_models", "status": "known", "effectivePercentRemaining": 24, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.3917 } } ] } }
   ]
@@ -1094,7 +1106,7 @@ reset_log
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SCHEMA6" run code out err "$BRIEF"
 expect_code 0 "$code" "schema 6 snapshot exits 0"
 assert_contains "$out" '  status: clear' "schema 6 snapshot resolves"
-assert_contains "$out" 'candidate: pi:openai-codex-work/gpt-5.6-terra  provider=codex  scope=all_models  remaining=11%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a Pi lane binds to its own account row"
+assert_contains "$out" 'candidate: pi:openai-codex-work/gpt-5.6-terra  provider=codex  scope=all_models  remaining=21%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a Pi lane binds to its own account row"
 assert_contains "$out" 'candidate: pi:openai-codex/gpt-5.6-sol  provider=codex  scope=all_models  remaining=0%  spendPriority=-  runway=exhausted_now  -> not eligible: runway exhausted_now at all_models' "the sibling lane reads its own exhausted row"
 assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  -> eligible, unranked: provider codex has no quota row for account codex-home: disclosed uncertainty' "native Codex never infers an account from a Pi lane"
 assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex-work/gpt-5.6-terra'" "the lane with headroom is chosen"
@@ -1134,7 +1146,7 @@ jq '.schemaVersion = 5 | .providers |= map(select(.accountKey != "openai-codex")
 reset_log
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SCHEMA5_PAIR" run code out err "$BRIEF"
 assert_contains "$out" '  near-tie broken by configured order: pi:openai-codex-work/gpt-5.6-terra=-5.6819, pi:openai-codex/gpt-5.6-sol=-5.6819, codex:gpt-5.6-sol=-5.6819 (within 0.05)' "every codex profile reads the one schema 5 codex row"
-assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=11%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a schema 5 row never needs accountKey"
+assert_contains "$out" 'candidate: codex:gpt-5.6-sol  provider=codex  scope=all_models  remaining=21%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible' "a schema 5 row never needs accountKey"
 
 SCHEMA6_PI_NATIVE="$TMP_ROOT/schema6-pi-native.json"
 jq '.providers |= map(select(.provider != "codex" or .accountKey != "default"))' "$SCHEMA6_NATIVE" > "$SCHEMA6_PI_NATIVE"
@@ -1159,7 +1171,7 @@ for harness in pi pi-signed; do
 
   reset_log
   TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$SCHEMA5_PAIR" run code out err "$BRIEF"
-  assert_contains "$out" "candidate: $harness:codex-native/gpt-6-astra  provider=codex  scope=all_models  remaining=11%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible" "$harness native adapter still joins schema 5 by provider alone"
+  assert_contains "$out" "candidate: $harness:codex-native/gpt-6-astra  provider=codex  scope=all_models  remaining=21%  spendPriority=-5.6819  runway=projected_exhaustion  -> eligible" "$harness native adapter still joins schema 5 by provider alone"
 done
 cp "$LANE_RULES" "$RULES"
 pass "Pi native adapters bind to codex-home with existing fallbacks and schema 5 compatibility"
@@ -1366,9 +1378,45 @@ assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=curso
 assert_contains "$out" 'candidate: home=peer cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=0.8  runway=through_reset  -> eligible' "the remote candidates are listed beside them"
 assert_contains "$out" 'home: peer  claude-crew=0/3  session=79%' "the remote machine's Claude guard evidence is shown"
 assert_equals peer-host "$(cat "$SSH_CALLS")" "the remote quota is read through the registered route"
+# Transfer an actual resolver verdict to a receiving home with different brief
+# bytes and a different local task id. The route identity crosses that boundary.
+parent=$(sed -n 's/^  parent_placement: //p' <<<"$out")
+mkdir -p "$REMOTE_HOME/config" "$REMOTE_HOME/data/child-task"
+cp "$RULES" "$REMOTE_HOME/config/crew-dispatch.json"
+printf 'peer\n' > "$REMOTE_HOME/.fm-secondmate-home"
+printf '# Locally rewritten brief\nPaths belong to the receiving home.\n' > "$REMOTE_HOME/data/child-task/brief.md"
+jq -n --argjson parent "$parent" '{dispatch_rule:3,route:{task:$parent.task,correlation:$parent.correlation},parent_placement:$parent}' > "$REMOTE_HOME/data/child-task/placement.json"
+jq '(.providers[] | select(.provider=="claude") | .quotaSemantics.effectiveAvailability[]) |= (.selection.spendPriority=2 | .runway.status="through_reset")' "$REMOTE_QUOTA" > "$TMP_ROOT/child-quota.json"
+child_gate() {
+  ( export PATH="$FAKEBIN:$BASE_PATH" QUOTA_AXI_FIXTURE="$TMP_ROOT/child-quota.json"
+    # shellcheck disable=SC2034
+    SCRIPT_DIR="$ROOT/bin" FM_HOME="$REMOTE_HOME" CONFIG="$REMOTE_HOME/config" DATA="$REMOTE_HOME/data" STATE="$REMOTE_HOME/state"
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-quota-balance-lib.sh"
+    rc=0
+    fm_quota_balance_gate child-task cursor cursor-grok-4.6-medium '' "$REMOTE_HOME/projects/pager" preflight || rc=$?
+    printf '%s|%s\n' "$rc" "$FM_QUOTA_BALANCE_RECORD"
+  )
+}
+child_result=$(child_gate)
+assert_equals 0 "${child_result%%|*}" 'the routed decision survives rewritten brief and local task id'
+assert_contains "$child_result" 'honoring parent pool placement' 'the receiving gate uses the transferred pool verdict'
+jq 'del(.parent_placement)' "$REMOTE_HOME/data/child-task/placement.json" > "$TMP_ROOT/child-placement.json"
+cp "$REMOTE_HOME/data/child-task/placement.json" "$TMP_ROOT/valid-parent.json"
+cp "$TMP_ROOT/child-placement.json" "$REMOTE_HOME/data/child-task/placement.json"
+child_result=$(child_gate)
+assert_equals 1 "${child_result%%|*}" 'without the parent verdict the receiving ledger picks another allowance'
+for change in '.route.correlation="different"' '.route.task="other-task"' '.parent_placement.target="other-home"' '.parent_placement.at-=901' '.parent_placement.profile.model="other-model"' '.parent_placement.version=1' 'del(.route)'; do
+  jq "$change" "$TMP_ROOT/valid-parent.json" > "$REMOTE_HOME/data/child-task/placement.json"
+  child_result=$(child_gate)
+  assert_equals 1 "${child_result%%|*}" "a mismatched transfer refuses: $change"
+done
+rm "$REMOTE_HOME/data/child-task/placement.json" "$REMOTE_HOME/config/crew-dispatch.json"
+pass 'a real pooled decision crosses the route boundary and rejects mismatched route identities'
+
 write_quota "$REMOTE_QUOTA" 0.7
 placement_case ok --project pager
-assert_contains "$out" 'placement: local (local cursor:cursor-grok-4.6-medium has the pool'"'"'s highest spendPriority 0.7597)' "a higher local candidate keeps the task local"
+assert_contains "$out" 'placement: local (local cursor:cursor-grok-4.6-medium has the pool'"'"'s highest spendPriority 0.7597)' "a higher local candidate keeps the task local; exit=$code stderr=$err"
 pass "the pool ranks every machine's candidates by spendPriority with no home-machine margin"
 
 PLACEMENT_RULE=rule_3 placement_case ok --project pager
@@ -1568,9 +1616,10 @@ pool_case "$BRIEF" --project pager
 assert_contains "$out" 'candidate: home=peer claude:sonnet  provider=claude  scope=all_models  remaining=90%  spendPriority=1.4  runway=through_reset  -> not eligible: Claude crew at its limit on peer: 3 of 3 (live: crew1, crew2, crew3)' "the remote guard comes from the remote home's own crew"
 assert_contains "$out" 'placement: local' "a remote machine at its Claude limit leaves Claude work here"
 live_claude "$REMOTE_HOME/state" 0
-write_pool_quota "$REMOTE_QUOTA" 1.4 through_reset 0.2 through_reset 38
+write_pool_quota "$REMOTE_QUOTA" 1.4 through_reset 0.2 through_reset 8
 pool_case "$BRIEF" --project pager
-assert_contains "$out" 'not eligible: Claude session 38% below the 40% floor on peer' "the 40% session floor applies per machine"
+assert_contains "$out" 'candidate: home=peer claude:sonnet  provider=claude  scope=all_models  remaining=8%' "the remote account is judged from its own reading"
+assert_contains "$out" 'not eligible: below the 10% reserve at all_models' "the 10% reserve applies per machine"
 assert_contains "$out" 'placement: local' "a remote account under its session floor is passed by"
 pass "the Claude crew cap and session floor apply per account on each machine"
 
@@ -1646,9 +1695,9 @@ assert_contains "$out" 'local:codex:gpt-5.6-sol=7' "this machine's Codex account
 assert_contains "$out" 'peer:codex:gpt-5.6-sol=7' "the other machine's Codex account shares the rest"
 assert_contains "$out" 'charged=' "later placements show the charge of earlier ones"
 assert_equals 1 "$(ssh_calls)" "a batch reads each remote machine once"
-first_block=$(awk '/^dispatch-resolve:$/ { n++ } n == 1' <<<"$out" | grep -v -e '^  brief: ' -e '^  project: ' -e '^  model: ')
+first_block=$(awk '/^dispatch-resolve:$/ { n++ } n == 1' <<<"$out" | grep -v -e '^  brief: ' -e '^  project: ' -e '^  model: ' -e '^  parent_placement: ')
 pool_case "$TMP_ROOT/brief-1.md" --project pager
-assert_equals "$first_block" "$(grep -v '^  model: ' <<<"$out")" "the same brief resolves identically alone and first in a batch"
+assert_equals "$first_block" "$(grep -v -e '^  model: ' -e '^  parent_placement: ' <<<"$out")" "the same brief resolves identically alone and first in a batch"
 pass "a batch of 20 charges each placement and spreads across accounts and machines"
 
 # Separate calls inside the charge window spread like one batch.
@@ -1768,7 +1817,7 @@ pass "bounded Claude cache recovery ranks recent evidence, preserves candidate o
 # Placement mode keeps the matched task-fit rule, lets quota decide within it,
 # and gives Claude only a quota tie; the Claude floor stays an admission check.
 cp "$BASE_RULES" "$RULES"
-printf '{"version":1}\n' > "$HOME_DIR/config/crew-placement.json"
+printf '{"version":1,"workloads":["review"],"max_crew":4,"min_free_memory_percent":0,"max_swap_mib":1048575}\n' > "$HOME_DIR/config/crew-placement.json"
 write_quota "$QUOTA" 0.9 -0.4
 set_runway "$QUOTA" claude through_reset
 write_response "$RESPONSE" rule_4 0.9
@@ -1785,13 +1834,243 @@ set_runway "$QUOTA" claude through_reset
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" "profile: --harness 'claude' --model 'sonnet'" 'near quota tie picks Claude'
-jq '.providers[0].windows[0].percentRemaining=39' "$QUOTA" > "$TMP_ROOT/low.json"
+jq '.providers[0].windows[0].percentRemaining=9' "$QUOTA" > "$TMP_ROOT/low.json"
 mv "$TMP_ROOT/low.json" "$QUOTA"
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
-assert_contains "$out" "profile: --harness 'cursor'" 'quota tie cannot waive Claude 40 percent floor'
+assert_contains "$out" "profile: --harness 'cursor'" 'quota tie cannot waive the Claude 10 percent session floor'
 rm "$HOME_DIR/config/crew-placement.json"
-pass 'placement selection keeps task fit, ranks by quota, and gives Claude only ties above its floor'
+pass 'placement selection keeps task fit, ranks by quota, and gives Claude only ties above its session floor'
+
+# --- quota balance: pace headroom, reserve, spread, and the spawn-time check ---
+# Pace headroom (points left minus window still to run) ranks every allowance
+# with no preferred provider; configured order matters only within one account.
+BAL_RULES="$TMP_ROOT/balance-rules.json"
+cat > "$BAL_RULES" <<'JSON'
+{
+  "rules": [
+    { "when": "Hard engineering.",
+      "use": [ { "harness": "codex", "model": "gpt-6-astra", "effort": "high" },
+               { "harness": "claude", "model": "opus", "effort": "high" } ] },
+    { "when": "Design work.", "select": "candidate-order",
+      "use": [ { "harness": "claude", "model": "fable", "effort": "high" },
+               { "harness": "claude", "model": "opus", "effort": "high" } ] }
+  ],
+  "default": [ { "harness": "codex", "model": "gpt-6-sol", "effort": "high" },
+               { "harness": "claude", "model": "sonnet", "effort": "high" } ]
+}
+JSON
+write_balance_quota() {  # <path> <claude pct> <claude headroom> <codex pct> <codex headroom> [claude session pct]
+  local session=${6:-$2}
+  cat > "$1" <<JSON
+{ "generatedAt": "2030-01-01T00:00:00Z", "schemaVersion": 5, "providers": [
+  { "provider": "claude", "state": { "status": "fresh", "stale": false },
+    "windows": [ { "id": "five_hour", "kind": "session", "percentRemaining": $session } ],
+    "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": $2, "limitingWindowIds": ["seven_day"],
+        "pace": { "worstReservePercentPoints": $3 }, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.1 } },
+      { "scope": "model:fable", "status": "known", "effectivePercentRemaining": $2, "limitingWindowIds": ["seven_day"],
+        "pace": { "worstReservePercentPoints": $3 }, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.1 } } ] } },
+  { "provider": "codex", "state": { "status": "fresh", "stale": false },
+    "windows": [ { "id": "weekly", "kind": "weekly", "percentRemaining": $4 } ],
+    "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": $4, "limitingWindowIds": ["weekly"],
+        "pace": { "worstReservePercentPoints": $5 }, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": 0.9 } } ] } } ] }
+JSON
+}
+balance_run() {  # [args...]: known rule, no key, no network
+  reset_log
+  run code out err "$@"
+}
+cp "$BAL_RULES" "$RULES"
+mkdir -p "$HOME_DIR/state"
+rm -f "$HOME_DIR/state"/crew*.meta "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
+
+# Quota balance is the default without a configuration key.
+cp "$BAL_RULES" "$RULES"
+write_balance_quota "$QUOTA" 70 -5 60 -30
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'claude' --model 'opus' --effort 'high'" 'pace headroom ranks without an opt-in configuration key'
+assert_contains "$out" 'spread: claude is 25 points of headroom ahead of codex (alarm above 20)' 'the default spread alarm is 20 points'
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue"
+cp "$BAL_RULES" "$RULES"
+
+# A known rule needs no key and sends nothing.
+write_balance_quota "$QUOTA" 70 -5 60 -30
+balance_run "$BRIEF" --rule rule_1
+expect_code 0 "$code" 'known rule exits 0 without a key'
+assert_absent "$LOG/argv" 'a known rule never calls the network'
+assert_contains "$out" 'model: known-rule' 'a known rule is reported as such'
+# The fuller allowance by pace wins although Codex is listed first and has the
+# higher spendPriority; Codex is 25 points behind, past the 20-point alarm.
+assert_contains "$out" "profile: --harness 'claude' --model 'opus' --effort 'high'" 'higher pace headroom wins over configured Codex-first order'
+assert_contains "$out" 'headroom=-30' 'candidates show their pace headroom'
+assert_contains "$out" 'allowance 25 points of headroom behind claude; new work moves to the fuller allowance' 'the behind allowance is named and passed over'
+assert_contains "$out" 'spread: claude is 25 points of headroom ahead of codex (alarm above 20)' 'the spread alarm is shown'
+assert_contains "$(cat "$HOME_DIR/state/.wake-queue")" 'check: quota-spread: claude has 25 more points of headroom than codex' 'firstmate hears the spread alarm'
+balance_run "$BRIEF" --rule rule_1
+assert_equals 1 "$(grep -c 'quota-spread' "$HOME_DIR/state/.wake-queue")" 'one alarm per open spread condition'
+assert_equals '2' "$(jq '.accounts | length' "$HOME_DIR/state/quota-balance-last.json")" 'the last successful spread reading keeps both allowances'
+assert_equals 'local:claude:-5,local:codex:-30' \
+  "$(jq -r '[.accounts[] | "\(.home):\(.provider):\(.headroom)"] | sort | join(",")' "$HOME_DIR/state/quota-balance-last.json")" \
+  'the last successful spread reading keeps local provider headroom'
+
+# Missing pace evidence cannot demote the candidates that still publish it.
+jq 'del(.providers[1].quotaSemantics.effectiveAvailability[0].pace)' "$QUOTA" > "$TMP_ROOT/missing-codex-pace.json"
+mv "$TMP_ROOT/missing-codex-pace.json" "$QUOTA"
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" 'a candidate with pace evidence outranks one without it'
+assert_contains "$out" 'pace headroom missing; candidates with pace evidence rank first' 'the missing-headroom candidate is visibly unranked'
+balance_run "$BRIEF" --rule rule_1 --check claude opus high
+assert_equals 'pace headroom' "$(jq -r .ranked_by <<<"$out")" 'the result records the ranking that chose the profile'
+
+# Close allowances: no provider preference, the higher headroom still wins.
+write_balance_quota "$QUOTA" 70 3 60 5
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[].runway.status) = "through_reset"' \
+  "$QUOTA" > "$TMP_ROOT/pace-runway.json"
+mv "$TMP_ROOT/pace-runway.json" "$QUOTA"
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" 'through-reset runway outranks higher pace headroom'
+assert_contains "$out" 'passed over: codex:gpt-6-astra: projected to run out before reset' 'pace ranking reports the runway safeguard'
+write_balance_quota "$QUOTA" 70 -10 60 -4
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'codex' --model 'gpt-6-astra'" 'Codex wins when it is fuller by pace'
+assert_not_contains "$out" 'spread:' 'no alarm inside 20 points'
+assert_absent "$HOME_DIR/state/quota-spread.json" 'a closed spread clears its condition'
+write_balance_quota "$QUOTA" 70 -5.2 60 -5
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" 'near-tie broken by stable task-key hash' 'a near-tie across allowances prefers no provider'
+
+# The reserve replaces the 40% floor: below 10% is ineligible, 15% is not.
+write_balance_quota "$QUOTA" 70 -5 1 -69
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" 'below the 10% reserve at all_models' 'an allowance under the reserve is not eligible'
+write_balance_quota "$QUOTA" 15 3 60 -30 30
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" "profile: --harness 'claude' --model 'opus'" 'Claude at 15% with headroom still takes work'
+# The reserve counts the new crew's own draw: 12% less the fixed 5 leaves 7%.
+write_balance_quota "$QUOTA" 12 5 60 -30 30
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" 'below the 10% reserve at all_models after its own expected draw of 5 points' 'a crew that would eat into the reserve is not eligible'
+
+# Spawn-time check: one JSON line, the requested profile against the pick.
+write_balance_quota "$QUOTA" 70 -5 60 -30
+balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high
+expect_code 0 "$code" 'check exits 0'
+assert_equals refused "$(jq -r .check.verdict <<<"$out")" 'a non-balanced profile is refused'
+assert_contains "$(jq -r .check.reason <<<"$out")" 'the balanced pick is claude:opus on claude (headroom -5)' 'the refusal names the balanced pick'
+assert_absent "$HOME_DIR/state/dispatch-charges.jsonl" 'a refused check charges nothing'
+KEEP_LEDGER=0 balance_run "$BRIEF" --rule rule_1 --check claude opus high
+assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'the balanced profile passes'
+assert_equals claude "$(jq -r .provider "$HOME_DIR/state/dispatch-charges.jsonl")" 'a passing check charges its allowance'
+balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high --override 'needs browser computer use'
+assert_equals override "$(jq -r .check.verdict <<<"$out")" 'a recorded override passes a spread hold'
+assert_equals codex "$(jq -r .provider "$HOME_DIR/state/dispatch-charges.jsonl")" 'an override charges the allowance it uses'
+write_balance_quota "$QUOTA" 70 -5 5 -60
+balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high --override 'needs browser computer use'
+assert_equals refused "$(jq -r .check.verdict <<<"$out")" 'an override never passes the reserve'
+balance_run "$BRIEF" --rule rule_2 --check claude opus high
+assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'a model choice within one allowance is not a balance question'
+write_balance_quota "$QUOTA" 70 -5 60 -30
+balance_run "$BRIEF" --rule rule_2 --check codex gpt-6-astra high --override 'design task requires browser computer use'
+assert_equals override "$(jq -r .check.verdict <<<"$out")" 'a recorded task-class exception can use a mapped profile outside its rule'
+assert_equals 'codex:gpt-6-astra' "$(jq -r '"\(.provider):\(.model)"' "$HOME_DIR/state/dispatch-charges.jsonl")" 'an out-of-rule exception charges its mapped allowance'
+write_balance_quota "$QUOTA" 70 -5 5 -60
+balance_run "$BRIEF" --rule rule_2 --check codex gpt-6-astra high --override 'design task requires browser computer use'
+assert_equals refused "$(jq -r .check.verdict <<<"$out")" 'an out-of-rule exception still refuses unavailable quota'
+assert_contains "$(jq -r .check.reason <<<"$out")" 'below the 10% reserve' 'the out-of-rule quota refusal names the admission failure'
+assert_absent "$HOME_DIR/state/dispatch-charges.jsonl" 'a refused out-of-rule exception charges nothing'
+balance_run "$BRIEF" --check claude opus high
+expect_code 2 "$code" '--check without --rule is a usage error'
+
+# A fuller allowance with no free seat holds the task instead of draining the
+# behind one.
+write_balance_quota "$QUOTA" 70 -5 60 -30
+jq '.claude_admission = {max_concurrent: 1}' "$BAL_RULES" > "$RULES"
+live_claude "$HOME_DIR/state" 1
+balance_run "$BRIEF" --rule rule_1
+assert_contains "$out" 'status: escalate' 'a spread hold escalates'
+assert_contains "$out" 'holding rather than draining a behind allowance: claude is 25 points of headroom ahead and has no free seat' 'the hold names the fuller allowance'
+rm -f "$HOME_DIR/state"/crew*.meta
+cp "$BAL_RULES" "$RULES"
+
+# Measured draw: Codex samples (crew seen at both ends weigh 1, at one end 0.5)
+# charge the next placement with draw over its measured span, not the fixed 5.
+now=$(date +%s)
+{
+  printf '{"at":%s,"rows":[{"provider":"codex","account":"","pct":40,"limiting":"weekly","resets":"r"}],"crews":[{"task":"a","provider":"codex","model":"gpt-6-astra"},{"task":"b","provider":"codex","model":"gpt-6-astra"}]}\n' $((now - 7200))
+  printf '{"at":%s,"rows":[{"provider":"codex","account":"","pct":28,"limiting":"weekly","resets":"r"}],"crews":[{"task":"a","provider":"codex","model":"gpt-6-astra"}]}\n' $((now - 3600))
+  printf '{"at":%s,"rows":[{"provider":"codex","account":"","pct":25,"limiting":"weekly","resets":"r"}],"crews":[]}\n' $((now - 1800))
+} > "$HOME_DIR/state/quota-samples.jsonl"
+write_balance_quota "$QUOTA" 70 -10 60 -4
+balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high
+assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'Codex is the pick by pace'
+assert_equals '8571:3600' "$(jq -r '"\(.draw * 1000 | round):\(.span)"' "$HOME_DIR/state/dispatch-charges.jsonl")" 'the charge carries the measured draw and span'
+rm -f "$HOME_DIR/state/quota-samples.jsonl" "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue"
+
+# Spread alarm across a batch: each distinct open gap is its own condition. One
+# pool sees the second machine, the other does not; neither clears the other.
+BRIEF_B="$TMP_ROOT/brief-b.md"
+cp "$BRIEF" "$BRIEF_B"
+rm -rf "$HOME_DIR/state/quota-remote"
+printf 'ok\n' > "$SSH_MODE"
+write_balance_quota "$QUOTA" 70 -5 60 -30
+write_balance_quota "$REMOTE_QUOTA" 90 10 80 -30
+balance_run "$BRIEF" --project pager "$BRIEF_B" --project other --rule rule_1
+expect_code 0 "$code" 'a batch with two pools exits 0'
+assert_equals 3 "$(grep -c 'check: quota-spread' "$HOME_DIR/state/.wake-queue")" 'every distinct open gap is announced once'
+assert_contains "$(cat "$HOME_DIR/state/.wake-queue")" 'peer claude has 40 more points of headroom than codex' 'the remote gap is announced'
+assert_contains "$(cat "$HOME_DIR/state/.wake-queue")" 'claude has 25 more points of headroom than codex' 'the local gap is announced'
+assert_equals 3 "$(jq '.conditions | length' "$HOME_DIR/state/quota-spread.json")" 'each condition is kept'
+write_balance_quota "$QUOTA" 70 -5 60 -10
+balance_run "$BRIEF_B" --project other --rule rule_1
+assert_equals '["peer|claude|>local|codex|","peer|claude|>peer|codex|"]' "$(jq -c '.conditions | keys' "$HOME_DIR/state/quota-spread.json")" \
+  'a pool that never saw the second machine closes only its own gap'
+assert_equals 3 "$(grep -c 'check: quota-spread' "$HOME_DIR/state/.wake-queue")" 'closing a gap announces nothing new'
+# A machine that may not take the project is outside the spread: remote-pager
+# is registered only on the second machine, so this machine's gap is not seen.
+rm -rf "$HOME_DIR/state/quota-remote"
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue"
+write_balance_quota "$QUOTA" 70 -5 60 -40
+write_balance_quota "$REMOTE_QUOTA" 90 -6 80 -8
+balance_run "$BRIEF" --project remote-pager --rule rule_1 --check claude opus high
+assert_equals '["peer|claude|","peer|codex|"]' "$(jq -c '.global_spread.accounts' <<<"$out")" 'the spread measures only machines in the project pool'
+assert_absent "$HOME_DIR/state/quota-spread.json" 'an excluded machine raises no alarm'
+rm -rf "$HOME_DIR/state/quota-remote"
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
+cp "$BASE_RULES" "$RULES"
+write_quota "$QUOTA" 0.7597
+pass 'quota balance ranks by pace with no preferred provider, keeps a 10% reserve, alarms on spread, and checks spawns'
+
+# Same-account placement must not refuse a local start on a fresher remote reading.
+cp "$BAL_RULES" "$RULES"
+rm -rf "$HOME_DIR/state/quota-remote"
+write_balance_quota "$QUOTA" 70 -30 90 -5.02
+write_balance_quota "$REMOTE_QUOTA" 70 -30 90 -5
+for q in "$QUOTA" "$REMOTE_QUOTA"; do
+  jq '.providers[1].windows[0].resetsAt="2030-01-08T00:00:00Z"' "$q" > "$TMP_ROOT/shared.json"
+  mv "$TMP_ROOT/shared.json" "$q"
+done
+balance_run "$BRIEF" --project pager --rule rule_1 --check codex gpt-6-astra high
+assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'a shared Codex account is the same allowance on both machines'
+assert_equals local "$(jq -r .chosen.home <<<"$out")" 'one allowance prefers the local machine'
+# Machine fit and room exclude a remote candidate before ranking.
+write_balance_quota "$QUOTA" 70 -30 90 -40
+write_balance_quota "$REMOTE_QUOTA" 70 -5 90 -40
+mkdir -p "$REMOTE_HOME/config"
+printf '%s\n' '{"version":1,"workloads":["backend"],"max_crew":2,"min_free_memory_percent":0,"max_swap_mib":1048575}' > "$REMOTE_HOME/config/crew-placement.json"
+printf '%s\n' '{"workload":"iphone-build","requires_drive":false}' > "$TMP_ROOT/placement.json"
+rm -rf "$HOME_DIR/state/quota-remote"
+balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
+assert_equals local "$(jq -r .chosen.home <<<"$out")" 'an iPhone task is never sent to a backend-only machine'
+rm "$TMP_ROOT/placement.json"
+live_claude "$REMOTE_HOME/state" 2
+rm -rf "$HOME_DIR/state/quota-remote"
+balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
+assert_equals local "$(jq -r .chosen.home <<<"$out")" 'a full remote machine is not named as the pick'
+live_claude "$REMOTE_HOME/state" 0
+rm "$REMOTE_HOME/config/crew-placement.json"
+cp "$BASE_RULES" "$RULES"
 
 placement_s16
 printf '# all fm-dispatch-resolve tests passed\n'

@@ -659,6 +659,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
 # shellcheck source=bin/fm-placement-lib.sh
 . "$SCRIPT_DIR/fm-placement-lib.sh"
+# shellcheck source=bin/fm-quota-balance-lib.sh
+. "$SCRIPT_DIR/fm-quota-balance-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -2658,7 +2660,8 @@ if [ "$HARNESS_FAMILY" = claude ] && [ "$KIND" != secondmate ]; then
   CLAUDE_ADMISSION_LOCK="$STATE/.claude-admission.lock"
   fm_lock_acquire_wait "$CLAUDE_ADMISSION_LOCK" || exit 1
   CLAUDE_ADMISSION_LOCK_HELD=1
-  if fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" "$MODEL"; then
+  BALANCE_IMPACT=$(jq -r 'if .impact == "P0" and ((.balance_override // "") | strings | length) > 0 then "P0" else "" end' "$DATA/$ID/placement.json" 2>/dev/null || true)
+  if fm_claude_admission_check "$CONFIG" "$STATE" "$ID" "$CLAUDE_QUOTA_IDENTITY" "$PROFILE_FLOOR_SCOPE" "$PROFILE_FLOOR_MIN_PERCENT" "$MODEL" "$BALANCE_IMPACT"; then
     PLACEMENT_QUOTA=pass
   else
     fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" fail || true
@@ -3297,6 +3300,25 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
       exit 1
     fi
   fi
+fi
+# Quota balance: a crew starts only on the allowance the balanced pick names
+# (bin/fm-quota-balance-lib.sh), before any worktree is provisioned.
+# The authenticated control parent already checked before stopping the old
+# agent. Keep that transaction's verdict instead of reranking after the stop.
+BALANCE_PREFLIGHT_REUSED=0
+if [ "$RELAUNCH" = 1 ] && [ "$SPAWN_CONTROL_PARENT" = 1 ] \
+   && [ "$(fm_meta_get "$STATE/$ID.control-relaunch" phase)" = launching ] \
+   && [ "$(fm_meta_get "$STATE/$ID.control-relaunch" relaunch_tx)" = "${FM_CONTROL_RELAUNCH_TX:-}" ]; then
+  FM_QUOTA_BALANCE_RECORD=$(fm_meta_get "$STATE/$ID.control-relaunch" quota_balance)
+  if printf '%s\n' "$FM_QUOTA_BALANCE_RECORD" | jq -e '. == null or (.verdict == "balanced" or .verdict == "override" or .verdict == "unverifiable")' >/dev/null 2>&1; then
+    BALANCE_PREFLIGHT_REUSED=1
+  fi
+fi
+if [ "$KIND" != secondmate ] && [ "$BALANCE_PREFLIGHT_REUSED" = 0 ] && ! fm_quota_balance_gate "$ID" "$HARNESS" "$MODEL" "$EFFORT" "${PROJ_ABS:-${PROJ:-}}" preflight; then
+  echo "error: $FM_QUOTA_BALANCE_REASON" >&2
+  FM_PLACEMENT_QUOTA_REASON=$FM_QUOTA_BALANCE_REASON
+  fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" fail || true
+  exit 1
 fi
 fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" "$PLACEMENT_QUOTA" || exit 1
 [ -f "$BRIEF" ] || {
@@ -5322,6 +5344,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_REPLACEMENT_PENDING=0
   SPAWN_META_PUBLISH_STARTED=0
   SPAWN_META_TMP=
+fi
+if ! fm_quota_balance_charge; then
+  echo "error: launched $ID but failed to record its quota charge; reconcile before further starts" >&2
+  exit 1
 fi
 # A dispatch or relaunch keeps the per-task meta lock through launch delivery.
 # The backlog mutation is deliberately the final fallible commit below, so

@@ -254,10 +254,32 @@ def assess(config, data, task, harness, model, effort):
         candidates = use if isinstance(use, list) else [use]
         if not candidates or not all(isinstance(c, dict) for c in candidates):
             raise ValueError("dispatch candidates absent or malformed")
-        if sum(c.get("harness") == harness and c.get("model", "") == model
-               and c.get("effort", "") == effort for c in candidates) != 1:
+        matches = sum(c.get("harness") == harness and c.get("model", "") == model
+                      and c.get("effort", "") == effort for c in candidates)
+        quota_evidence = evidence.get("quota", {})
+        balance = quota_evidence.get("balance", {}) if isinstance(quota_evidence, dict) else {}
+        balance = balance if isinstance(balance, dict) else {}
+        requested = balance.get("requested", {})
+        requested = requested if isinstance(requested, dict) else {}
+        charge = balance.get("charge", {})
+        charge = charge if isinstance(charge, dict) else {}
+        override = work.get("balance_override")
+        admitted_override = (
+            isinstance(override, str) and override != ""
+            and balance.get("verdict") == "override"
+            and balance.get("override") == override
+            and requested.get("harness") == harness
+            and requested.get("model", "") == model
+            and requested.get("effort", "") == effort
+            and charge.get("home") == "local"
+            and charge.get("provider") == requested.get("provider")
+            and charge.get("account", "") == requested.get("account", "")
+            and charge.get("model", "") == model
+        )
+        if matches != 1 and not admitted_override:
             raise ValueError("selected model is outside the task-fit dispatch rule")
-        checks["fit"] = result(True, f"workload={workload}; dispatch_rule={rule}")
+        checks["fit"] = result(True, f"workload={workload}; dispatch_rule={rule}"
+                               + ("; balance_override=admitted" if admitted_override else ""))
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
         checks["fit"] = result(False, str(error))
     profile = machine
@@ -421,9 +443,40 @@ def ledger(state, operation, task=None, mode=None):
         return due
 
 
+def pool(config, count):
+    """Read-only machine fit/room evidence for the quota resolver pool."""
+    path = config / "crew-placement.json"
+    if not path.exists():
+        return {"configured": False, "available": True}
+    try:
+        profile = read(path)
+        cap = profile["max_crew"]
+        if type(cap) is not int or not 1 <= cap <= 4:
+            raise ValueError("invalid machine crew cap")
+        if count < 0 or count >= cap:
+            raise ValueError(f"machine crew cap: {count}/{cap}")
+        free, swap = memory()
+        if free < profile["min_free_memory_percent"] or swap > profile["max_swap_mib"]:
+            raise ValueError("machine memory or swap limit")
+        if profile.get("drive"):
+            drive = Path(profile["drive"])
+            if not real_directory(drive) or not drive.is_mount() or not os.access(drive, os.W_OK):
+                raise ValueError("required machine drive unavailable")
+        volume = profile.get("data_volume")
+        if volume:
+            stat = os.statvfs(volume["path"])
+            if stat.f_bavail * stat.f_frsize / 1024**3 < volume["min_free_gib"]:
+                raise ValueError("machine disk below floor")
+        return {"configured": True, "available": True, "profile": profile, "crew_count": count}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return {"configured": True, "available": False, "reason": str(error)}
+
+
 def main():
     operation, *args = sys.argv[1:]
-    if operation == "memory":
+    if operation == "pool":
+        output = pool(Path(args[0]), int(args[1]))
+    elif operation == "memory":
         free, swap = memory()
         output = {"free_percent": free, "swap_mib": swap}
     elif operation == "worktree":

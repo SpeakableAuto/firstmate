@@ -947,8 +947,9 @@ resolve_relaunch_profile() {
 }
 
 preflight_relaunch_admission() {
-  local identity
+  local identity impact
   [ "$KIND" != secondmate ] || return 0
+  impact=$(jq -r 'if .impact == "P0" and ((.balance_override // "") | strings | length) > 0 then "P0" else "" end' "$DATA/$ID/placement.json" 2>/dev/null || true)
   if [ "$TARGET_HARNESS" = claude ]; then
     if [ -n "$TARGET_WORKER_ACCOUNT" ]; then
       identity=${TARGET_WORKER_ACCOUNT%%$'\t'*}
@@ -956,11 +957,21 @@ preflight_relaunch_admission() {
       identity=$(fm_worker_account_claude_ambient_identity) || return 1
     fi
     fm_claude_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
-      "$identity" "$TARGET_PROFILE_FLOOR_SCOPE" "$TARGET_PROFILE_FLOOR_MIN_PERCENT" "$TARGET_MODEL"
-    return
+      "$identity" "$TARGET_PROFILE_FLOOR_SCOPE" "$TARGET_PROFILE_FLOOR_MIN_PERCENT" "$TARGET_MODEL" "$impact" || return 1
+  else
+    fm_quota_pacing_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
+    "$TARGET_HARNESS" "$TARGET_MODEL" || return 1
   fi
-  fm_quota_pacing_admission_check "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$STATE" "$ID" \
-    "$TARGET_HARNESS" "$TARGET_MODEL"
+  local CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" balance_model=$TARGET_MODEL balance_effort=$TARGET_EFFORT
+  [ "$balance_model" != default ] || balance_model=''
+  [ "$balance_effort" != default ] || balance_effort=''
+  # shellcheck source=bin/fm-quota-balance-lib.sh
+  . "$SCRIPT_DIR/fm-quota-balance-lib.sh"
+  if ! fm_quota_balance_gate "$ID" "$TARGET_HARNESS" "$balance_model" "$balance_effort" "$(fm_meta_get "$META" project)" preflight; then
+    echo "error: $FM_QUOTA_BALANCE_REASON" >&2
+    return 1
+  fi
+  CHECKPOINT_LINES+=("quota_balance=$FM_QUOTA_BALANCE_RECORD")
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch

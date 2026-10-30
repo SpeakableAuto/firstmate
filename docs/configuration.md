@@ -1115,22 +1115,24 @@ At manual intake, this policy follows the [quota-array-dispatch procedure](../.a
 Typed resolution applies the same runway-aware ordering after its documented rankability checks and reports candidates passed over; its `clear` result remains subject to Firstmate's full intake gates as described below under **Firstmate retains the dispatch decision**.
 Neither path allows order to override a gate or treats unknown evidence as healthy.
 A rule-level `select` overrides the file-level value for the whole intake, including a per-machine rule-floor fallback to `default`; only a neutral no-match uses the file's policy directly.
-Omitting `select` everywhere preserves `quota-balanced`: the highest known `spendPriority` among passing candidates wins within the earliest configured paced window when one applies, and configured order only breaks a near-tie.
-A near-tie is every rankable passing candidate whose `spendPriority` is at most 0.05 below the highest; the earliest of them in configured order wins, exact ties included, and the result reports them on a `near-tie broken by configured order` line.
-Across the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines), the same configured position on two machines is ordered by the higher `spendPriority`; an exact scalar tie goes to the machine and account with fewer live workers plus recent charges, then a stable hash of the task key spreads a remaining tie across machines, and the result reports the tied candidates and rule used.
-The band is fixed at 0.05 so that only practically equal quota defers to configured order.
-While any passing candidate has `through_reset` runway, `quota-balanced` passes over every candidate with `projected_exhaustion` runway, and the result names each one that would otherwise have won or tied on a `passed over` line.
+Omitting `select` everywhere preserves `quota-balanced`, whose default [quota balance](#quota-balance) ranks by pace headroom whenever any candidate publishes it and prefers no provider.
+Only when no candidate publishes pace headroom does `quota-balanced` fall back to the highest known `spendPriority` within the earliest configured paced window when one applies.
+In that fallback, a near-tie is every rankable passing candidate whose `spendPriority` is at most 0.05 below the highest; the earliest of them in configured order wins, exact ties included, and the result reports them on a `near-tie broken by configured order` line.
+Across the [machine pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines), the same configured position on two machines is ordered by the higher fallback `spendPriority`; an exact scalar tie goes to the machine and account with fewer live workers plus recent charges, then a stable hash of the task key spreads a remaining tie across machines, and the result reports the tied candidates and rule used.
+The fallback band is fixed at 0.05 so that only practically equal quota defers to configured order.
+While any passing candidate has `through_reset` runway, the `spendPriority` fallback passes over every candidate with `projected_exhaustion` runway, and the result names each one that would otherwise have won or tied on a `passed over` line.
 
 **Charging placements**
 
 Every placement is charged against its account before the next is placed, whether the next comes in the same batch or a separate call.
-The charge is one Claude crew slot on that machine for a Claude candidate, plus a fixed estimated draw of 5 percentage points from every applicable quota row of that account and 0.1 from its `spendPriority`.
-`spendPriority` falls by a draw divided by the window's remaining-time percentage, which the snapshot does not publish, so the fixed charge assumes half the window remains.
-A placement stays charged for 900 seconds, the longest a reused quota reading can be, recorded in `state/dispatch-charges.jsonl` with its selected model and applicable quota scopes.
+The charge is one Claude crew slot on that machine for a Claude candidate, plus the measured draw from every applicable quota row when evidence exists or a fixed fallback draw of 5 percentage points.
+Every charge also subtracts 0.1 from `spendPriority`; because the snapshot does not publish a window's remaining-time percentage, that fallback scalar approximates a 5-point draw with half the window remaining.
+An unmeasured placement stays charged for 900 seconds, the longest a reused quota reading can be, while a measured quota-balance charge stays for its recorded `span`; both are recorded in `state/dispatch-charges.jsonl` with the selected model and applicable quota scopes.
 A task is keyed by its `data/<id>/` directory when its brief is `data/<id>/brief.md`, else by the brief path, so resolving the same task again replaces its own charge instead of adding to it.
-A clear recommendation that Firstmate overrides keeps its charge until the 900-second window expires or the same task is resolved again.
+A clear recommendation that Firstmate overrides keeps its charge until the fixed 900-second window or measured span expires, or until the same task is resolved again.
 A charged Claude slot whose task already appears in that machine's live crew is not counted twice.
-The draw is an estimate to spread a burst, not a measurement; deleting the file clears every charge, for example after a decision-only test run.
+The fallback draw is an estimate to spread a burst, not a measurement; deleting the file clears every charge, for example after a decision-only test run.
+Under [quota balance](#quota-balance) the draw is measured per model instead where evidence exists.
 A rule can explicitly set `"select": "quota-balanced"` to retain that behavior inside an ordered file.
 Other values, including null and non-string values, are configuration errors.
 The [quota-array-dispatch procedure](../.agents/skills/quota-array-dispatch/SKILL.md#rank-by-the-configured-selection-policy) owns manual selection and uncertainty handling.
@@ -1256,6 +1258,93 @@ The file is a dispatch view, refreshed when the resolver runs, rather than a con
 An account's queue is cleared when its reset timestamp changes, and accounts absent from the current pool are removed.
 Only a final `no rankable eligible candidate` result caused by pacing with a known reset adds a task to the queue; approval, ambiguity, unknown pacing evidence, and non-pacing refusals do not.
 
+## Quota balance
+
+Quota balance applies whenever `config/crew-dispatch.json` exists: every allowance (each machine's Claude account, each Codex account, and any other configured provider) runs down at the same pace relative to its own reset, and every crew start is held to that rather than left to whoever chose the profile.
+`quota-balanced` is the default selection policy, while an explicit `candidate-order` still keeps configured position first inside the same reserve, spread, and spawn-enforcement policy.
+This section owns the policy; the [resolver header](../bin/fm-dispatch-resolve.sh), [spawn gate](../bin/fm-quota-balance-lib.sh), and [measured-draw tool](../bin/fm-quota-burn.py) own their mechanics.
+
+The policy uses a fixed 10% reserve and a fixed 20-point spread threshold, so dispatch configuration cannot weaken either safeguard.
+
+**Pace headroom**
+
+A candidate's pace headroom is the worst, over every window that bounds it, of the percentage points it has left minus the percentage of that window still to run; quota-axi publishes it per scope as `pace.worstReservePercentPoints`.
+Positive headroom means the allowance is on track to reach its reset unused, zero means it is exactly on pace, and negative means it is being drawn faster than its reset can refill it.
+Because the short windows count too, a Claude account whose five-hour window is nearly spent early in that window ranks low until the window refills.
+When any rankable candidate publishes headroom, candidates with it rank first and candidates without it remain eligible but unranked with the reason `pace headroom missing; candidates with pace evidence rank first`.
+Only when no candidate publishes headroom does the pool fall back to `spendPriority` ranking under **Candidate selection policy**, and the result's `ranked_by` field says which ranking was used.
+
+**Selection**
+
+`quota-balanced` ranks by pace headroom instead of `spendPriority` and prefers no provider.
+The highest headroom wins.
+Candidates within 1 point of it on different allowances go to the allowance with fewer live workers plus recent charges, then a stable hash of the task key; candidates on one allowance keep configured order, so configured order chooses only the model within an account.
+`candidate-order` keeps configured position first and uses headroom to order the same profile across machines.
+The `projected_exhaustion` pass-over does not apply, because headroom already weighs every window's pace against its own reset.
+
+**Reserve**
+
+A candidate whose applicable row, after charges and its own expected draw (measured, else the fixed 5-point charge), would fall below the fixed 10% reserve is not eligible, on every provider alike.
+The reserve replaces the old practice of a 40% Claude floor, which stopped crews with 40% of a Claude allowance unused; drop the profile and rule `floor` declarations when adopting it, since declared floors still apply.
+[Claude crew admission](#claude-crew-admission) refuses only below a 10% five-hour session by default, keeping that much for the supervisor's own session.
+
+**Spread alarm**
+
+An allowance is one machine's provider account; a shared Codex account with identical window resets counts once across machines, and choosing that account locally is valid even if a remote reading is fresher.
+Claude allowance identity uses machine and account, so drifting reset timestamps cannot rename an open alarm.
+Among the allowances a task could use that have quota for it, counting one whose only obstacle is a free seat, any allowance more than 20 points of headroom behind the fullest takes no new work while that gap stands, and the result names it as behind.
+When no fuller allowance has a seat, the result escalates with "holding rather than draining a behind allowance", and a spawn waits as an ordinary capacity wait instead of draining the behind allowance.
+Separately, every resolver run measures the spread across every configured provider's allowances in each pool it resolves.
+Each distinct gap (a fuller allowance more than 20 points ahead of a behind one) is one condition in `state/quota-spread.json` and is announced once through a `check: quota-spread:` wake for firstmate.
+A pool closes a condition only when it measured both allowances and saw the gap shrink to at least 5 points below the opening threshold, so in a batch a pool that never saw an allowance cannot clear or replace another pool's condition; a condition no pool confirms for a day is dropped.
+A reopened condition alerts at most once per hour; the recent notification history survives closing the condition.
+The alarm is for firstmate, which reaches the captain only when work cannot self-correct.
+
+**Measured draw**
+
+Each resolver call records one sample of this machine's allowances and its live crew by model in `state/quota-samples.jsonl` (8 days kept).
+A placement's charge is measured separately for each bounding window of its provider and model: points lost per crew-hour times the median finished-crew lifetime, owed in proportion to the unexpired part of that lifetime.
+Each window keeps its own `draw` and `span`; session points are never subtracted from weekly points.
+A snapshot window without a numeric remaining percentage is not charged and cannot by itself limit admission.
+Reset timestamps within five minutes are treated as one reset unless the percentage refilled, and remote candidates use their own machine's measured rates.
+A model or provider with under half a crew-hour of evidence keeps the fixed 5-point, 900-second charge described under **Charging placements**.
+Between two samples, a crew seen at both ends carries a full share of the loss and one seen at only one end (started or finished in between) carries half.
+Supervisor use on an account is attributed to its crew, which overstates rather than hides draw.
+
+**Enforcement at spawn**
+
+Before anything is provisioned, `fm-spawn.sh` asks the resolver for the balanced pick for every crewmate and scout start, fresh or relaunch, with a known rule (`--rule`) and the requested profile (`--check`), and refuses unless the requested profile is on the pick's allowance.
+An unreadable or malformed `config/crew-dispatch.json` refuses the start rather than skipping the check.
+The rule is `data/<id>/placement.json`'s `dispatch_rule`, else the default profiles when they hold the requested profile, else the first rule that does.
+An inferred specialist rule cannot evade the global spread; record the task classification or an explicit override when the task genuinely requires that class.
+A profile in no rule refuses without a non-empty `balance_override`; with one, it proceeds only when its allowance can be mapped, records `verdict: "override"` with reason `profile is in no dispatch rule`, and charges that allowance.
+Structural resolver errors refuse; only missing quota evidence takes the unverifiable path.
+When no candidate has quota evidence at all, the start proceeds with the verdict `unverifiable` recorded, because unknown quota is disclosed uncertainty rather than an unconditional block.
+On a home without `config/crew-placement.json`, each such start is also appended to `state/quota-balance-unverifiable.jsonl`, and the first start in an open episode raises one `check: quota-balance-unverifiable:` wake.
+A balanced or refused verdict closes the episode, so a later degraded episode alerts again.
+Each successful resolver reading that measures more than one allowance in the global spread saves `state/quota-balance-last.json`; while that reading is under 15 minutes old, an unverifiable start is refused when its local provider allowance was more than 20 points behind the fullest allowance in the reading.
+Every machine in the task's [pool](../.agents/skills/quota-array-dispatch/SKILL.md#one-pool-across-machines) is judged, so a pick on a second mate's machine refuses the local start and names that second mate.
+A non-empty `balance_override` in `placement.json` states why the task class needs that profile and is kept with the decision, including on the last-reading path.
+Ordinary overrides cannot pass the reserve or an exhausted window.
+An explicit `impact: "P0"` together with that override may start when every applicable allowance reading is strictly above 5% before its own expected draw, with one supervisor alert per task.
+The P0 may then consume through the 5% boundary by its expected draw; this admission check does not stop an already running worker.
+This deliberate P0 exception follows Kitchen rule 20, which requires a P0 to drop everything.
+Machine fit and room still apply.
+A parent's fresh, route-bound `parent_placement` can be carried with the remote task classification; the receiving home honors that pool decision while checking its own allowance reserve.
+The [gate header](../bin/fm-quota-balance-lib.sh) owns the transfer record and expiry checks.
+The verdict, rule, pick, and any override are recorded as `quota.balance` in the `state/capacity.json` decision, and a successful launch charges its allowance after admission, brief and provisioning checks pass.
+Controlled relaunches apply this gate through the [relaunch transaction](agent-control.md#transactional-relaunch).
+The resolver excludes machines whose placement profile rejects the task workload or whose reported crew, memory, swap or disk room is unavailable.
+Each dispatching home runs its own check against its own `config/crew-dispatch.json`; secondmate homes inherit that file from the primary.
+**Apply and rollback**
+
+Install the code on every participating dispatch machine before changing any inherited configuration, which enables the fixed gate wherever `config/crew-dispatch.json` exists.
+The only dispatch-configuration change on each machine is removing the old provider preference and 40% Claude floor declarations in one sitting.
+Leave `min_session_percent` absent so the code owns its default; a configured value of 10 would be rejected by the earlier code on rollback.
+Verify the local and remote spawn checks after installation before releasing queued work.
+For rollback, pause new starts, restore the preceding code on all dispatch machines, restore the preceding dispatch profiles and selection policy with `min_session_percent` still absent, and verify admission before resuming.
+Keep existing workers and their worktrees intact; rollback does not require deleting charges or task records.
+
 ## Crew placement (config/crew-placement.json)
 
 Install this private per-home profile to enable code-enforced placement for ship and scout launches, including relaunches and individual members of a batch.
@@ -1328,10 +1417,10 @@ Intake writes `data/<task-id>/placement.json` beside the brief:
 ```
 
 The classification must name the actual work and the zero-based matched rule in `crew-dispatch.json`; changing the brief requires renewing its classification.
-Missing classification, a disallowed workload, a required drive absent from the machine profile, or a selected harness/model/effort outside that rule refuses fit.
+Missing classification, a disallowed workload, a required drive absent from the machine profile, or a selected harness/model/effort outside that rule without a quota-admitted recorded `balance_override` refuses fit.
 An iPhone build therefore cannot use the light example, and Plane work cannot use the heavy example.
-The typed resolver keeps matched-rule candidates ahead of default fallbacks in placement-enabled homes, then lets the existing quota selection policy (soonest paced window, spendPriority and its near-tie band) decide within that fit class; an admitted Claude candidate wins only when that quota comparison is an exact or near tie.
-Claude's live account admission and minimum 40% session floor remain owned by the following section.
+The typed resolver keeps matched-rule candidates ahead of default fallbacks in placement-enabled homes, then lets the existing quota selection policy (soonest paced window, then pace headroom or fallback `spendPriority`) decide within that fit class; the existing Claude preference applies only to an exact or near tie in the `spendPriority` fallback.
+Claude's live account admission and minimum session floor remain owned by the following section.
 Other harnesses must prove a fresh, positive applicable quota bound for their selected account through the existing quota snapshot reader; unknown evidence refuses placement.
 
 The placement lock spans checks, provisioning, and launch publication or rollback.
@@ -1364,10 +1453,10 @@ Script headers own command and ledger mechanics; `tests/fm-placement.test.sh` ex
 
 `fm-spawn.sh` enforces directly classified Claude ship and scout admission, including explicit, raw, batch, and relaunch paths, independently of typed dispatch resolution; raw executable basenames in the shared `claude*` harness family receive the same guard and count.
 Arbitrary raw shell expressions remain a deliberate operator escape hatch: admission classifies only their leading executable after transparent `env` and `exec` prefixes, so shell indirection such as `sh -c` can hide a Claude process and bypass the guard.
-Optional top-level `claude_admission` in `config/crew-dispatch.json` may only make the fixed safeguards stricter: `max_concurrent` is an integer from 1 through 3 (default `3`), and `min_session_percent` is a number from 40 through 100 (default `40`):
+Optional top-level `claude_admission` in `config/crew-dispatch.json` tunes the fixed safeguards: `max_concurrent` is an integer from 1 through 3 (default `3`), and `min_session_percent` is a number from 10 through 100 (default `10`, the [quota balance](#quota-balance) reserve for the supervisor's own session):
 
 ```json
-{ "claude_admission": { "max_concurrent": 3, "min_session_percent": 40 } }
+{ "claude_admission": { "max_concurrent": 3, "min_session_percent": 10 } }
 ```
 
 The cap counts this home's direct Claude crew on the selected account, excluding the task being relaunched and all secondmate agents.
@@ -1436,6 +1525,9 @@ Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFI
 bin/fm-dispatch-resolve.sh data/<id>/brief.md --project <name>        # TOON block on stdout
 bin/fm-dispatch-resolve.sh data/<a>/brief.md --project <name> data/<b>/brief.md --project <name>   # one batch
 ```
+
+`--rule <rule_N|default>` names the matched rule instead of asking the model, so it needs no key and sends nothing.
+With `--rule`, one brief, and `--check <harness> <model> <effort>`, the resolver prints one JSON result whose `check.verdict` is `balanced`, `override` (with `--override <reason>`), or `refused` with a reason; this is the spawn-time [quota balance](#quota-balance) check, and only a passing verdict charges the requested profile.
 
 Several briefs in one call are one batch: each is answered and placed in order, every placement is charged against its account under **Charging placements** above before the next, and a closing `dispatch-batch:` block reports the split by machine, provider, and profile.
 A single brief resolves exactly as the first brief of a batch.

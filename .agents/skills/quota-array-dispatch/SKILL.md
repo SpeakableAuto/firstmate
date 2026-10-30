@@ -47,9 +47,9 @@ Sparse `exhaustion[]` carries finite-runway seconds only for `projected_exhausti
 Sparse `attention[]` names auth, stale, and unmeasurable facts.
 `spendPriority` is the quota-perspective ranker after any configured quota pacing preference.
 It already computes the economics that older instructions reconstructed by hand from headroom, pace, reserve, and window-id lists; do not recompute those.
-Do not read `--json` on the normal path, and do not reach for `--full` to rebuild that economics.
+Do not read `--json` unless one of the defined fallbacks below applies, and do not reach for `--full` to rebuild that economics.
 
-After reading the TOON, fall back to one `quota-axi --json --max-age 900s` call only when that TOON is genuinely ambiguous for the decision, when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`, or when configured quota pacing requires the per-window percentage absent from TOON.
+After reading the TOON, fall back to one `quota-axi --json --max-age 900s` call only when that TOON is genuinely ambiguous for the decision, when the installed quota-axi is somehow below the floor so its TOON lacks `spendPriority`, when default quota balance needs pace headroom absent from TOON, or when configured quota pacing requires the per-window percentage absent from TOON.
 Ambiguous means a candidate's `spendPriority` is the literal `unknown` or unmeasurable, or a candidate's eligibility is unclear from `quota[]` plus `attention[]`.
 The fallback therefore has an explicit TOON-then-JSON call sequence; reuse its JSON result and do not take any further quota snapshots.
 Below-floor is rare: bootstrap enforces `FM_QUOTA_AXI_MIN` and normally reports `MISSING` before dispatch; if an intake somehow reaches an older build whose TOON lacks `spendPriority`, use the defensive `--json` fallback rather than treating the missing scalar as healthy.
@@ -120,14 +120,18 @@ When `quota_pacing.accounts` is configured, use the current snapshot's per-windo
 Apply its concurrency allowance as an eligibility gate, then prefer the passing paced account with the soonest reset; the selected policy ranks candidates within that window.
 Unknown pacing evidence cannot authorize a paced placement.
 
+The default [quota balance policy](../../../docs/configuration.md#quota-balance) replaces `spendPriority` with pace headroom whenever the snapshot publishes it, prefers no provider, keeps a uniform reserve instead of percentage floors, and holds work off any allowance past the spread alarm; `fm-spawn.sh` refuses any start that is not on the balanced pick's allowance, so choose the profile its check accepts or record `balance_override` with the task-class reason.
+
 Decide the selection policy once per intake under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson): use the matched rule's `select`, else the file's `select`, else `quota-balanced`.
 A per-machine rule-floor shortfall changes only the profiles that machine contributes and never changes the intake's selection policy.
-For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, optional pacing preference, and rankability checks under the uncertainty rules below.
-Pass over a candidate with `projected_exhaustion` runway only when a later passing candidate has `through_reset` runway; otherwise retain the configured order.
+For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, optional pacing preference, and rankability checks under the uncertainty rules below; pace headroom orders only the same profile across machines.
+Only when the pool has no pace headroom and falls back to `spendPriority`, pass over a candidate with `projected_exhaustion` runway when a later passing candidate has `through_reset` runway; otherwise retain the configured order.
 Select the first candidate not passed over, and account for each skipped candidate as "passed over: projected to run out before reset".
 Earlier candidates with failed gates or unrankable evidence remain in the accounting with their reasons; preference never overrides those gates.
-For `quota-balanced` (the default), quota decides within the passing paced window when one applies: pick the highest known `spendPriority`, and use configured order only to break a near-tie under the [configuration schema's band](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
-While any passing candidate has `through_reset` runway, pass over every candidate with `projected_exhaustion` runway, however high its scalar, and account for each one passed over that would otherwise have won or tied.
+For `quota-balanced` (the default), quota decides within the passing paced window when one applies: if any candidate publishes pace headroom, candidates with it rank first and the highest headroom wins.
+Within 1 point of the highest headroom, configured order chooses the model on one allowance, while different allowances go to the one with fewer live workers plus recent charges and then a stable task-key hash.
+Only when no candidate publishes headroom, pick the highest known `spendPriority` and use configured order only to break a near-tie under the [configuration schema's fallback band](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
+In that fallback, while any passing candidate has `through_reset` runway, pass over every candidate with `projected_exhaustion` runway, however high its scalar, and account for each one passed over that would otherwise have won or tied.
 Do not use `spendPriority` to reorder an explicitly ordered array.
 A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
 Rank only from comparable known scalars.
@@ -139,15 +143,15 @@ Never resolve that terminal uncertainty by treating unknown as healthy or by cho
 Show the scalar or the literal `unknown` in the rationale; do not hide it in a score.
 
 Do not compare headroom against runway by hand.
-Do not use pace or signed reserve as a later tie-break layer.
+Outside the quota balance ranking, do not use pace or signed reserve as a later tie-break layer.
 Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWindowIds`, or other window-id lists to reconstruct what `spendPriority` already computed.
 
-Near-ties within `quota-balanced`, exact ties included: select the earliest near-tied candidate in configured order and report every near-tied candidate with its scalar.
+SpendPriority fallback near-ties within `quota-balanced`, exact ties included: select the earliest near-tied candidate in configured order and report every near-tied candidate with its scalar.
 Do not invent harness-name or other preferences beyond that configured order.
 In `candidate-order`, equal scalar evidence does not erase the explicit preference.
 Report duplicate concrete profiles as a configuration error.
 
-Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, `spendPriority`, and runway-versus-horizon result.
+Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, pace headroom or fallback `spendPriority`, and runway-versus-horizon result.
 A blocked credential report must name `harness`, `model`, authentication surface, and concrete failure evidence; never emit a bare `Grok unauthenticated` statement.
 Never conclude with an unexplained "best quota" label.
 
@@ -170,13 +174,15 @@ Form one candidate set: each machine's profiles for the matched rule, with the r
 Judge every candidate with the same three gates and declared floors, plus the [Claude crew admission](../../../docs/configuration.md#claude-crew-admission) cap and session floor of that machine's account and live crew; a candidate the guard would refuse at spawn is not eligible.
 Rank the whole set with the configured selection policy as though it were one array: no machine is a default, and no home-machine margin applies.
 For `candidate-order`, configured position orders the set and quota orders the same profile across machines.
-For `quota-balanced`, the `projected_exhaustion` pass-over above spans the whole pool, and a near-tie prefers configured position first, then the higher scalar.
-When candidates on different machines tie exactly on configured position and scalar, both policies prefer fewer live workers plus recent charges on that machine and account, then use a stable hash of the task key to spread a remaining tie; report the tied candidates and the rule that decided them.
+For `quota-balanced`, headroom ranking spans the whole pool, and its different-allowance near-tie uses account load then a stable task-key hash instead of provider or configured profile order.
+When quota balance falls back to `spendPriority`, the `projected_exhaustion` pass-over above spans the whole pool and configured position breaks its near-tie.
+When candidates on different machines tie exactly on configured position and the active scalar, `candidate-order` and the `spendPriority` fallback prefer fewer live workers plus recent charges on that machine and account, then use a stable hash of the task key to spread a remaining tie; report the tied candidates and the rule that decided them.
 Unknown runway beside a known healthy percentage is disclosed uncertainty that keeps a candidate eligible, never a block.
 An unreachable machine or unknown remote quota is disclosed uncertainty about that machine only; it never blocks, delays, or downgrades the other machines.
 
-Charge every placement against its account before placing the next task, in one batch or across separate intakes: one more Claude crew slot on that machine, and the fixed estimated draw on that account's quota, for the charge window the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns.
+Charge every placement against its account before placing the next task, in one batch or across separate intakes: one more Claude crew slot on that machine, and the estimated draw on that account's quota (measured per model under quota balance), for the charge window the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns.
 That charge is what spreads a burst across accounts and machines instead of sending every task to the first candidate.
 
 Placing a task on a second mate sends it through the ordinary secondmate routing path with the chosen profile; the second mate's own spawn admission still applies.
 The opt-in [typed resolver](../../../docs/configuration.md#typed-dispatch-resolution-env-typesafe_api_key) applies this rule in code, including a batch of several briefs, and prints `placement:` and `home:` lines; without it, apply the same rule by hand at intake.
+Carry a remote pick's `parent_placement` into the receiving task classification under the [spawn gate transfer contract](../../../bin/fm-quota-balance-lib.sh), so both machines enforce the same pool decision.

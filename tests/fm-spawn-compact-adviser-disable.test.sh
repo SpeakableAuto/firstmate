@@ -317,12 +317,13 @@ $launch") \
 # compound launch such as `cd <dir> && <probe>` must still start the probe with
 # the switch on, so this drives that escape hatch and executes the pane's
 # launch under a contrary ambient value.
+# This environment-only fixture uses an unconfigured home, where the quota
+# gate is off by design. Configured homes still refuse unmappable overrides;
+# tests/fm-quota-balance.test.sh covers that F8 guard.
 test_raw_compound_launch_command_carries_the_switch() {
   local rec out status seen launch probe_dir
   rec=$(make_case raw-compound claude raw-compound-a1)
   read_case "$rec"
-  printf '%s\n' '{"rules":[{"when":"current events","use":{"harness":"grok","model":"grok-4","effort":"high"}}],"default":{"harness":"codex","model":"gpt-5","effort":"medium"}}' \
-    > "$HOME_DIR/config/crew-dispatch.json"
 
   probe_dir="$CASE_DIR/agent-cwd"
   mkdir -p "$probe_dir"

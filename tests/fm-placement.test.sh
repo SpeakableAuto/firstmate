@@ -54,6 +54,11 @@ mv "$TMP_ROOT/profile" "$CONFIG/crew-placement.json"
 bad=$(assess "$(jq '.slots={status:"fail",reason:"refuse: slot cap reached"}' <<< "$base")")
 assert_equals fail "$(jq -r .checks.slots.status <<< "$bad")" 'named slot refusal'
 assert_contains "$(jq -r .checks.slots.reason <<< "$bad")" 'slot cap reached' 'slot seam reason retained'
+pool_full=$(python3 "$TOOL" pool "$CONFIG" 2)
+assert_equals false "$(jq .available <<<"$pool_full")" 'the quota pool excludes a full machine before ranking'
+assert_contains "$(jq -r .reason <<<"$pool_full")" 'crew cap: 2/2' 'the pool publishes its concrete room refusal'
+pool_unknown=$(python3 "$TOOL" pool "$CONFIG" -1)
+assert_equals false "$(jq .available <<<"$pool_unknown")" 'unknown live crew count cannot promise room'
 pass 'fit, room, quota, locks and missing evidence refuse bad placement'
 
 blocked=$(assess "$(jq '.crew_count=2' <<< "$base")")
@@ -204,7 +209,7 @@ FM_TEST_QUOTA_FILE="$TMP_ROOT/stale-quota.json" tick >/dev/null 2>&1
 assert_equals capacity "$(jq -r '.waits["task-one"].state' "$STATE/capacity.json")" 'stale quota cannot admit a waiting task'
 assert_contains "$(jq -r '.decisions[-1].checks.quota.reason' "$STATE/capacity.json")" 'stale' 'refusal names stale quota evidence'
 effective=$(FM_HOME="$TMP_ROOT" FM_CONFIG_OVERRIDE="$CONFIG" bash "$ROOT/bin/fm-placement.sh" effective)
-assert_equals '1:15:40:900' "$(jq -r '"\(.placement.max_crew):\(.disk.threshold_gib):\(.claude.floor):\(.recheck_seconds)"' <<< "$effective")" 'effective limits expose configured cap and owner defaults'
+assert_equals '1:15:10:900' "$(jq -r '"\(.placement.max_crew):\(.disk.threshold_gib):\(.claude.floor):\(.recheck_seconds)"' <<< "$effective")" 'effective limits expose configured cap and owner defaults'
 pass 'stale quota refuses and effective limits are inspectable'
 
 SUP_STATE="$TMP_ROOT/supervision-only/state"
