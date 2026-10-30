@@ -131,12 +131,28 @@ fm_placement_release() {
   FM_PLACEMENT_LOCK_HELD=0
 }
 
+# Prints "<heavy> <light>" live crew counts. A crew is light only when its
+# data/<task>/placement.json workload is in the profile's light_workloads;
+# legacy, unclassified and unreadable crews count heavy. Unreadable liveness
+# prints its reason and returns 2.
 fm_placement_count() {
+  local light_names task tasks light=0
   fm_live_workers_count "$STATE" "$FM_PLACEMENT_ID" 2>/dev/null || {
     printf '%s' "$FM_LIVE_WORKERS_ERROR"
     return 2
   }
-  printf '%s' "$FM_LIVE_WORKERS_COUNT"
+  light_names=$(jq -c '.light_workloads // [] | if type == "array" then map(select(type == "string")) else [] end' \
+    "${CONFIG:-}/crew-placement.json" 2>/dev/null) || light_names='[]'
+  tasks=${FM_LIVE_WORKERS_COUNTED//, /$'\n'}
+  while IFS= read -r task; do
+    [ -n "$task" ] || continue
+    if [ "$light_names" != '[]' ] && jq -e --argjson light "$light_names" \
+        '.workload as $w | ($w | type) == "string" and any($light[]; . == $w)' \
+        "${DATA:-}/$task/placement.json" >/dev/null 2>&1; then
+      light=$((light + 1))
+    fi
+  done <<< "$tasks"
+  printf '%s %s' "$((FM_LIVE_WORKERS_COUNT - light))" "$light"
 }
 
 fm_placement_profile() { # <harness> <model> <effort>
@@ -176,7 +192,7 @@ fm_placement_quota() { # <harness> <model> <effort>; Claude guard handled by cal
 }
 
 fm_placement_check() {
-  local harness=$1 model=$2 effort=$3 quota=$4 disk=fail slots=fail locks=fail count liveness evidence decision memory slot_reason
+  local harness=$1 model=$2 effort=$3 quota=$4 disk=fail slots=fail locks=fail count light liveness evidence decision memory slot_reason
   [ "$FM_PLACEMENT_ACTIVE" = 1 ] || return 0
   [ "$FM_PLACEMENT_LOCK_HELD" != 1 ] || locks=pass
   if FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-disk-guard.sh" --check-room >/dev/null 2>&1; then disk=pass; fi
@@ -187,9 +203,13 @@ fm_placement_check() {
     slots=pass
   fi
   liveness=''
-  if ! count=$(fm_placement_count); then
+  if count=$(fm_placement_count); then
+    light=${count#* }
+    count=${count%% *}
+  else
     liveness=$count
     count=null
+    light=null
   fi
   memory=$(python3 "$SCRIPT_DIR/fm-placement.py" memory) || memory='{}'
   FM_PLACEMENT_QUOTA_DETAIL=$(jq -cn --arg status "$quota" --arg account "${CLAUDE_QUOTA_IDENTITY:-}" \
@@ -198,10 +218,10 @@ fm_placement_check() {
     quota=fail
     if fm_placement_quota "$harness" "$model" "$effort"; then quota=pass; fi
   fi
-  evidence=$(jq -cn --argjson quota "$FM_PLACEMENT_QUOTA_DETAIL" --arg disk "$disk" --arg slots "$slots" --arg locks "$locks" --argjson count "$count" --arg liveness "$liveness" --argjson memory "$memory" \
+  evidence=$(jq -cn --argjson quota "$FM_PLACEMENT_QUOTA_DETAIL" --arg disk "$disk" --arg slots "$slots" --arg locks "$locks" --argjson count "$count" --argjson light "$light" --arg liveness "$liveness" --argjson memory "$memory" \
     --arg project "${PROJ_ABS:-${PROJ:-}}" --arg reason "$slot_reason" '
     {quota:$quota,disk:{status:$disk},
-     project:$project,slots:{status:$slots,reason:$reason},locks:{status:$locks,reason:"placement and spawn locks"},crew_count:$count,memory:$memory} + (if $liveness == "" then {} else {crew_liveness:$liveness} end)') || return 1
+     project:$project,slots:{status:$slots,reason:$reason},locks:{status:$locks,reason:"placement and spawn locks"},crew_count:$count,light_crew_count:$light,memory:$memory} + (if $liveness == "" then {} else {crew_liveness:$liveness} end)') || return 1
   decision=$(printf '%s\n' "$evidence" | python3 "$SCRIPT_DIR/fm-placement.py" assess "$CONFIG" "$DATA" "$FM_PLACEMENT_ID" "$harness" "$model" "$effort") || return 1
   fm_placement_publish "$decision"
 }

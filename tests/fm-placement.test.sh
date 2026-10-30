@@ -56,6 +56,44 @@ assert_equals fail "$(jq -r .checks.slots.status <<< "$bad")" 'named slot refusa
 assert_contains "$(jq -r .checks.slots.reason <<< "$bad")" 'slot cap reached' 'slot seam reason retained'
 pass 'fit, room, quota, locks and missing evidence refuse bad placement'
 
+# Light-work allowance: light crews use their own cap; every other crew is heavy.
+cp "$CONFIG/crew-placement.json" "$TMP_ROOT/profile"
+cp "$DATA/task-one/placement.json" "$TMP_ROOT/work"
+jq '.workload="review"' "$TMP_ROOT/work" > "$DATA/task-one/placement.json"
+room=$(assess "$(jq '.crew_count=2|.light_crew_count=0' <<< "$base")")
+assert_equals fail "$(jq -r .checks.room.status <<< "$room")" 'without light config a review crew still counts against max_crew'
+assert_equals 'crew cap: count=2, cap=2' "$(jq -r .checks.room.reason <<< "$room")" 'without light config the heavy refusal is unchanged'
+room=$(assess "$base")
+assert_equals 'crew=1/2; free=50%; swap=0 MiB' "$(jq -r .checks.room.reason <<< "$room")" 'without light config the room reason is unchanged'
+jq '.workloads=["backend","review","replay","scout"]|.max_crew=4|.light_workloads=["review","replay","scout"]|.max_light_crew=4' "$TMP_ROOT/profile" > "$CONFIG/crew-placement.json"
+full='.crew_count=4|.light_crew_count=3'
+room=$(assess "$(jq "$full" <<< "$base")")
+assert_equals true "$(jq -r .admitted <<< "$room")" '4 heavy + 3 light live admits a light crew under max_light_crew 4'
+assert_equals 'crew=4/4; light=3/4; class=light; free=50%; swap=0 MiB' "$(jq -r .checks.room.reason <<< "$room")" 'light admission names both classes'
+cp "$TMP_ROOT/work" "$DATA/task-one/placement.json"
+room=$(assess "$(jq "$full" <<< "$base")")
+assert_equals fail "$(jq -r .checks.room.status <<< "$room")" '4 heavy + 3 light live refuses a heavy crew'
+assert_equals 'crew cap: count=4, cap=4' "$(jq -r .checks.room.reason <<< "$room")" 'heavy refusal names the heavy cap'
+room=$(assess "$(jq '.crew_count=3|.light_crew_count=4' <<< "$base")")
+assert_equals true "$(jq -r .admitted <<< "$room")" 'a full light cap never blocks a heavy crew'
+assert_equals 'crew=3/4; light=4/4; class=heavy; free=50%; swap=0 MiB' "$(jq -r .checks.room.reason <<< "$room")" 'heavy admission names both classes'
+jq '.workload="scout"' "$TMP_ROOT/work" > "$DATA/task-one/placement.json"
+room=$(assess "$(jq '.crew_count=0|.light_crew_count=4' <<< "$base")")
+assert_equals fail "$(jq -r .checks.room.status <<< "$room")" 'light cap reached refuses a light crew'
+assert_equals 'light crew cap: count=4, cap=4' "$(jq -r .checks.room.reason <<< "$room")" 'light refusal names the light cap'
+room=$(assess "$(jq '.crew_count=0|del(.light_crew_count)' <<< "$base")")
+assert_equals 'light crew cap: count=None, cap=4' "$(jq -r .checks.room.reason <<< "$room")" 'missing light count evidence refuses'
+for mutation in '.max_light_crew=9' '.max_light_crew=-1' '.max_light_crew="4"' '.max_light_crew=true' 'del(.max_light_crew)' \
+    '.light_workloads="review"' '.light_workloads=[]' '.light_workloads=[1]' '.light_workloads=["review","review"]' 'del(.light_workloads)'; do
+  jq '.light_workloads=["review","replay","scout"]|.max_light_crew=4' "$TMP_ROOT/profile" | jq "$mutation" > "$CONFIG/crew-placement.json"
+  room=$(assess "$(jq '.crew_count=0|.light_crew_count=0' <<< "$base")")
+  assert_equals fail "$(jq -r .checks.room.status <<< "$room")" "malformed light config $mutation refuses room"
+  assert_contains "$(jq -r .checks.room.reason <<< "$room")" 'light' "malformed light config $mutation names the light setting"
+done
+mv "$TMP_ROOT/profile" "$CONFIG/crew-placement.json"
+cp "$TMP_ROOT/work" "$DATA/task-one/placement.json"
+pass 'light workloads use their own cap, heavy keeps max_crew, malformed light config refuses'
+
 blocked=$(assess "$(jq '.crew_count=2' <<< "$base")")
 printf '%s\n' "$blocked" | python3 "$TOOL" record "$STATE" task-one spawn >/dev/null
 assert_equals '1:1' "$(jq -r '"\(.decisions|length):\(.waits|length)"' "$STATE/capacity.json")" 'one transaction publishes decision and wait'
@@ -205,6 +243,10 @@ assert_equals capacity "$(jq -r '.waits["task-one"].state' "$STATE/capacity.json
 assert_contains "$(jq -r '.decisions[-1].checks.quota.reason' "$STATE/capacity.json")" 'stale' 'refusal names stale quota evidence'
 effective=$(FM_HOME="$TMP_ROOT" FM_CONFIG_OVERRIDE="$CONFIG" bash "$ROOT/bin/fm-placement.sh" effective)
 assert_equals '1:15:40:900' "$(jq -r '"\(.placement.max_crew):\(.disk.threshold_gib):\(.claude.floor):\(.recheck_seconds)"' <<< "$effective")" 'effective limits expose configured cap and owner defaults'
+assert_equals 'null:null' "$(jq -r '"\(.placement.light_workloads):\(.placement.max_light_crew)"' <<< "$effective")" 'effective output shows an absent light allowance'
+jq '.light_workloads=["review","scout"]|.max_light_crew=4' "$CONFIG/crew-placement.json" > "$TMP_ROOT/light-config.json"
+effective=$(FM_HOME="$TMP_ROOT" FM_CONFIG_OVERRIDE="$TMP_ROOT/light-config-dir" bash -c 'mkdir -p "$FM_CONFIG_OVERRIDE" && cp "$1" "$FM_CONFIG_OVERRIDE/crew-placement.json" && bash "$2/bin/fm-placement.sh" effective' bash "$TMP_ROOT/light-config.json" "$ROOT")
+assert_equals '1:review,scout:4' "$(jq -r '"\(.placement.max_crew):\(.placement.light_workloads|join(",")):\(.placement.max_light_crew)"' <<< "$effective")" 'effective output shows the heavy cap and the light allowance'
 pass 'stale quota refuses and effective limits are inspectable'
 
 SUP_STATE="$TMP_ROOT/supervision-only/state"
@@ -417,29 +459,47 @@ pass 'rejected allocation returns only a clean, unrecorded freshly owned slot'
   fm_backend_agent_state() { fm_backend_source "$1" || { printf unverified; return 0; }; printf '%s' "${2#fixture:}"; }
   for verdict in missing dead gone ambiguous unverified; do
     printf 'kind=ship\nbackend=tmux\nwindow=fixture:%s\nspawn_gen=s1.0\n' "$verdict" > "$STATE/worker.meta"
-    assert_equals 0 "$(fm_placement_count)" "absent '$verdict' never consumes crew"
+    assert_equals '0 0' "$(fm_placement_count)" "absent '$verdict' never consumes crew"
     printf 'kind=ship\nbackend=tmux\nwindow=fixture:%s\nspawn_gen=s%s.0\n' "$verdict" "$(( $(date +%s) - 10 ))" > "$STATE/worker.meta"
-    assert_equals 1 "$(fm_placement_count)" "record launched 10 s ago counts despite '$verdict'"
+    assert_equals '1 0' "$(fm_placement_count)" "record launched 10 s ago counts despite '$verdict'"
   done
   printf 'kind=ship\nbackend=herdr\nwindow=fixture:unreadable\nspawn_gen=s1.0\n' > "$STATE/worker.meta"
   reason=$(fm_placement_count) && fail 'unreadable liveness must refuse'
   assert_equals 'crew liveness unreadable: herdr' "$reason" 'unreadable liveness names its backend'
   printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\nspawn_gen=s%s.0\n' "$(( $(date +%s) + 3600 ))" > "$STATE/worker.meta"
-  assert_equals 1 "$(fm_placement_count)" 'future timestamp falls through to liveness'
+  assert_equals '1 0' "$(fm_placement_count)" 'future timestamp falls through to liveness'
   printf 'kind=ship\nbackend=tmux\nwindow=fixture:missing\nspawn_gen=s%s.0\n' "$(( $(date +%s) + 3600 ))" > "$STATE/worker.meta"
-  assert_equals 0 "$(fm_placement_count)" 'future timestamp never reserves a slot'
+  assert_equals '0 0' "$(fm_placement_count)" 'future timestamp never reserves a slot'
   printf 'kind=ship\nbackend=tmux\nwindow=fixture:missing\nspawn_gen=s99999999999999999999.0\n' > "$STATE/worker.meta"
-  assert_equals 0 "$(fm_placement_count)" 'overlong timestamp never reserves a slot'
+  assert_equals '0 0' "$(fm_placement_count)" 'overlong timestamp never reserves a slot'
   for verdict in '' alive; do
     printf 'kind=ship\nbackend=unsupported\nwindow=fixture:%s\n' "$verdict" > "$STATE/worker.meta"
-    assert_equals 0 "$(fm_placement_count)" "unclassified backend '$verdict' neither counts nor refuses"
+    assert_equals '0 0' "$(fm_placement_count)" "unclassified backend '$verdict' neither counts nor refuses"
   done
   for backend in tmux herdr zellij orca cmux; do
     printf 'kind=ship\nbackend=%s\nwindow=fixture:alive\nstatus=paused\n' "$backend" > "$STATE/worker.meta"
-    assert_equals 1 "$(fm_placement_count)" "$backend positively alive counts even if status says paused"
+    assert_equals '1 0' "$(fm_placement_count)" "$backend positively alive counts even if status says paused"
   done
   cp "$STATE/worker.meta" "$STATE/candidate.meta"
   printf 'kind=secondmate\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/secondmate.meta"
-  assert_equals 1 "$(fm_placement_count)" 'candidate and secondmates excluded'
+  assert_equals '1 0' "$(fm_placement_count)" 'candidate and secondmates excluded'
+  rm "$STATE"/*.meta
+  # Per-class counts: a light workload counts light only when the profile names it.
+  CONFIG="$TMP_ROOT/count-config" DATA="$TMP_ROOT/count-data"
+  mkdir -p "$CONFIG" "$DATA/reviewer" "$DATA/fresh-scout" "$DATA/builder" "$DATA/broken"
+  printf '{"version":1,"workloads":["backend","review","scout"],"max_crew":4,"min_free_memory_percent":15,"max_swap_mib":512,"drive":null}\n' > "$CONFIG/crew-placement.json"
+  printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/legacy.meta"
+  printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/reviewer.meta"
+  printf 'kind=scout\nbackend=tmux\nwindow=fixture:gone\nspawn_gen=s%s.0\n' "$(( $(date +%s) - 10 ))" > "$STATE/fresh-scout.meta"
+  printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/builder.meta"
+  printf 'kind=ship\nbackend=tmux\nwindow=fixture:alive\n' > "$STATE/broken.meta"
+  printf '{"version":1,"workload":"review"}\n' > "$DATA/reviewer/placement.json"
+  printf '{"version":1,"workload":"scout"}\n' > "$DATA/fresh-scout/placement.json"
+  printf '{"version":1,"workload":"backend"}\n' > "$DATA/builder/placement.json"
+  printf 'not json\n' > "$DATA/broken/placement.json"
+  assert_equals '5 0' "$(fm_placement_count)" 'without light_workloads every live crew counts heavy'
+  jq '.light_workloads=["review","scout"]|.max_light_crew=4' "$CONFIG/crew-placement.json" > "$CONFIG/next"
+  mv "$CONFIG/next" "$CONFIG/crew-placement.json"
+  assert_equals '3 2' "$(fm_placement_count)" 'light crews count light; legacy, heavy and unreadable classifications count heavy'
 ) || exit 1
 pass 'crew count requires positive liveness or launch grace and refuses only unreadable liveness'

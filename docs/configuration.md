@@ -1268,8 +1268,10 @@ A heavy-machine example:
 ```json
 {
   "version": 1,
-  "workloads": ["heavy", "iphone", "website", "large-tests"],
+  "workloads": ["heavy", "iphone", "website", "large-tests", "review", "replay", "scout"],
   "max_crew": 4,
+  "light_workloads": ["review", "replay", "scout"],
+  "max_light_crew": 4,
   "min_free_memory_percent": 15,
   "max_swap_mib": 1024,
   "drive": "/Volumes/Kitchen",
@@ -1285,14 +1287,23 @@ A light-machine example:
   "version": 1,
   "workloads": ["review", "replay", "scout", "backend", "plane"],
   "max_crew": 2,
+  "light_workloads": ["review", "replay", "scout"],
+  "max_light_crew": 2,
   "min_free_memory_percent": 15,
   "max_swap_mib": 512,
   "drive": null
 }
 ```
 
-The light-machine cap may be raised to three after measuring its room; the heavy-machine cap cannot exceed four.
-The crew cap uses the same shared live-worker count: recorded endpoints positively classified alive by the existing backend liveness owner, plus any record launched within the last 60 seconds, excluding the launching task and persistent secondmates.
+The light machine's `max_crew` may be raised to three after measuring its room; the heavy machine's cannot exceed four.
+`max_crew` (1 to 4) is the heavy-work cap.
+The optional `light_workloads` list and `max_light_crew` (0 to 8) must be set together; together they form a separate light-work allowance, so light crews such as review boards waiting on a captain no longer use up heavy slots.
+A live crew whose `data/<task-id>/placement.json` workload is in `light_workloads` counts against `max_light_crew`; every other live crew, including a crew with no or an unreadable classification, counts against `max_crew`.
+A new launch is admitted against the cap of its own class only, and memory, swap and disk floors still apply to every launch.
+A light workload must also appear in `workloads` to fit the machine.
+Without `light_workloads`, every live crew counts against `max_crew`.
+A malformed light allowance refuses the room check with a named reason, and a full light cap refuses with `light crew cap: count=<n>, cap=<cap>`.
+Both caps use the same shared live-worker count: recorded endpoints positively classified alive by the existing backend liveness owner, plus any record launched within the last 60 seconds, excluding the launching task and persistent secondmates.
 Records whose backend answered that the endpoint is missing, dead, gone, ambiguous or unverified, such as retained paused or done records, do not consume crew capacity.
 If a backend cannot be read for an existing record, placement refuses its room check with `crew liveness unreadable: <backend>` instead of counting or admitting.
 Missing memory, disk or quota evidence also refuses placement through its named check; endpoint recovery and duplicate-launch guards keep their separate evidence requirements.
@@ -1312,7 +1323,7 @@ If safe return cannot be proved, the copy is preserved and the refusal reports i
 Relaunches never return their recorded copy.
 Memory evidence comes from `memory_pressure -Q` and `sysctl vm.swapusage` on macOS, or `MemAvailable` and swap usage in `/proc/meminfo` on Linux.
 Missing measurements refuse placement.
-`bin/fm-placement.sh effective` prints the effective placement limits, disk floor, Claude admission limits, quota freshness allowance, retry cadence, wait-age threshold, launch grace, and slot seam without starting work.
+`bin/fm-placement.sh effective` prints the effective placement limits (including any light allowance), disk floor, Claude admission limits, quota freshness allowance, retry cadence, wait-age threshold, launch grace, and slot seam without starting work.
 The existing disk-guard configuration and its default floor remain authoritative; placement uses its read-only `--check-room` entrypoint and never clears caches.
 
 Intake writes `data/<task-id>/placement.json` beside the brief:

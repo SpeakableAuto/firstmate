@@ -112,7 +112,9 @@ fm_placement_count
 '''
         result = subprocess.run(['bash', '-c', script, 'count', str(ROOT)], env=self.env_for(home), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        return int(result.stdout)
+        heavy, light = map(int, result.stdout.split())
+        self.assertEqual(light, 0, 'no light_workloads configured, so every crew counts heavy')
+        return heavy
 
     def test_live_only_crew_count(self):
         home = self.home('heavy', True)

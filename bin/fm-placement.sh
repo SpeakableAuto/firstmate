@@ -34,7 +34,7 @@ case "${1:-}" in
     enabled=false
     if [ -e "$CONFIG/crew-placement.json" ] || [ -L "$CONFIG/crew-placement.json" ]; then
       enabled=true
-      profile=$(jq '{version,workloads,max_crew,min_free_memory_percent,max_swap_mib,drive,required_drive_dirs,data_volume}' "$CONFIG/crew-placement.json") || exit 1
+      profile=$(jq '{version,workloads,max_crew,light_workloads,max_light_crew,min_free_memory_percent,max_swap_mib,drive,required_drive_dirs,data_volume}' "$CONFIG/crew-placement.json") || exit 1
     fi
     [ ! -e "$STATE/capacity.json" ] || enabled=true
     settings='{}'
