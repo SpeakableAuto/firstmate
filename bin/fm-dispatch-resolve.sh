@@ -7,14 +7,17 @@
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>]
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>] <brief-file> [--project <name>] ...
 #   fm-dispatch-resolve.sh --rule <rule_N|default> <brief-file> [--project <name>] ...
-#   fm-dispatch-resolve.sh --rule <rule_N|default> --check <harness> <model> <effort> [--override <reason>] <brief-file> [--project <name>]
+#   fm-dispatch-resolve.sh --rule <rule_N|default> --check <harness> <model> <effort> [--override <reason>] [--p0] [--no-charge] [--global-check] [--parent-placement <JSON>] <brief-file> [--project <name>]
 #
 # --rule names the matched rule instead of asking the model: no key, no network.
 # --check (with --rule and one brief) is the spawn-time quota balance check: it
 # prints one JSON result line whose check.verdict is balanced (the requested
 # profile is on the balanced pick's allowance), override (--override recorded,
 # only past a balance refusal, never past the reserve or an exhausted window),
-# or refused with check.reason; only a passing verdict charges the requested
+# --no-charge emits check.charge for later launch commit; --global-check checks
+# an inferred rule against the full pool. --p0 with an override uses a hard 5%
+# reserve. --parent-placement consumes the gate-validated remote transfer record.
+# A refusal carries check.reason; only a passing verdict charges the requested
 # profile. Empty model or effort are passed as ''.
 #
 # Quota balance is the default (docs/configuration.md "Quota balance";
@@ -164,6 +167,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-claude-admission-lib.sh"
 # shellcheck source=bin/fm-quota-pacing-lib.sh
 . "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
+# shellcheck source=bin/fm-quota-balance-lib.sh
+. "$SCRIPT_DIR/fm-quota-balance-lib.sh"
 
 CONFIDENCE_FLOOR=0.6
 TS_MODEL=jev-latest
@@ -198,7 +203,7 @@ usage() {
 
 BRIEFS=() PROJECTS=() LEAD_PROJECT='' RULES_PATH="$CONFIG/crew-dispatch.json" RULES=''
 NEVER_SEND_PATH="$CONFIG/dispatch-never-send"
-KNOWN_RULE='' CHECK_SET=0 CHECK_HARNESS='' CHECK_MODEL='' CHECK_EFFORT='' CHECK_OVERRIDE='' CHECK_GLOBAL=false
+KNOWN_RULE='' CHECK_SET=0 CHECK_HARNESS='' CHECK_MODEL='' CHECK_EFFORT='' CHECK_OVERRIDE='' CHECK_GLOBAL=false CHECK_CHARGE=true CHECK_P0=false CHECK_PARENT=null
 while [ $# -gt 0 ]; do
   case "$1" in
     --rule)
@@ -210,6 +215,11 @@ while [ $# -gt 0 ]; do
       CHECK_SET=1 CHECK_HARNESS=$2 CHECK_MODEL=$3 CHECK_EFFORT=$4
       [ -n "$CHECK_HARNESS" ] || die "--check needs a harness"
       shift 4 ;;
+    --parent-placement)
+      [ $# -ge 2 ] || die "--parent-placement needs JSON"
+      CHECK_PARENT=$2; shift 2 ;;
+    --p0) CHECK_P0=true; shift ;;
+    --no-charge) CHECK_CHARGE=false; shift ;;
     --global-check) CHECK_GLOBAL=true; shift ;;
     --override)
       [ $# -ge 2 ] && [ -n "$2" ] || die "--override needs a non-empty reason"
@@ -703,6 +713,7 @@ remote_home() { # <id> -> remote.<id>.json, read once per call
   [ ! -e "$out" ] || return 0
   if snap_err=$("$SCRIPT_DIR/fm-quota-snapshot.sh" --secondmate "$id" 2>&1 >"$snap"); then
     jq -c --arg id "$id" '{id: $id, eligible: true, snapshot: .,
+      machine:(.firstmatePlacement // {configured:false,available:true}), burn:(.firstmateBurn // {}),
       admission: (.firstmateClaudeAdmission // null),
       pacing: (.firstmatePacing // {schemaVersion:1,accounts:[]}),
       cache_age: (.firstmateRemoteCache.ageSeconds // null)}' "$snap" > "$out"
@@ -715,7 +726,7 @@ remote_home() { # <id> -> remote.<id>.json, read once per call
 }
 
 homes_for() { # <index> -> homes.<index>.json
-  local i=$1 project=${PROJECTS[$1]} ids id local_eligible=true local_reason=''
+  local i=$1 project=${PROJECTS[$1]} ids id local_eligible=true local_reason='' machine work='{}' workfile
   local -a files=()
   ids=
   ids=$(remote_ids "$project")
@@ -727,9 +738,12 @@ homes_for() { # <index> -> homes.<index>.json
     jq -nc --arg reason "$quota_failure" \
       '{id: "local", eligible: true, snapshot: null, reason: $reason}' > "$WORK/home.$i.local.json"
   else
-    jq -nc --argjson eligible "$local_eligible" --arg reason "$local_reason" \
+    machine=$(fm_quota_balance_machine_state "$CONFIG" "$STATE" "$(brief_key "$i")") || machine='{"available":false,"reason":"machine evidence failed"}'
+    jq -nc --arg exclude "$(brief_key "$i")" --argjson machine "$machine" --slurpfile burn "$WORK/burn.json" --argjson eligible "$local_eligible" --arg reason "$local_reason" \
       --slurpfile snapshot "$QUOTA" --slurpfile admission "$WORK/local-admission.json" --slurpfile pacing "$WORK/local-pacing.json" '
-      {id: "local", eligible: $eligible, snapshot: $snapshot[0], admission: $admission[0], pacing: $pacing[0]}
+      {id: "local", machine:$machine, burn:$burn[0], eligible: $eligible, snapshot: $snapshot[0],
+       admission: ($admission[0] | if (.counted // [] | index($exclude)) != null then .count -= 1 | .counted -= [$exclude] else . end),
+       pacing: ($pacing[0] | .accounts |= map(if (.countedTaskIds // [] | index($exclude)) != null then .liveCount -= 1 | .countedTaskIds -= [$exclude] else . end))}
       + (if $reason == "" then {} else {reason: $reason} end)' > "$WORK/home.$i.local.json"
   fi
   files+=("$WORK/home.$i.local.json")
@@ -738,7 +752,16 @@ homes_for() { # <index> -> homes.<index>.json
     remote_home "$id"
     files+=("$WORK/remote.$id.json")
   done <<<"$ids"
-  jq -s . "${files[@]}" > "$WORK/homes.$i.json"
+  workfile="$(dirname "${BRIEFS[$i]}")/placement.json"
+  [ ! -f "$workfile" ] || work=$(jq -c . "$workfile") || work='{}'
+  jq -s --argjson work "$work" '
+    map(if .machine.available == false then .eligible=false | .reason=.machine.reason
+        elif $work.requires_drive == true and (.machine.profile.drive // "") == "" then
+          .eligible=false | .reason="task requires an external drive this machine cannot provide"
+        elif $work.workload != null and .machine.configured == true
+          and ((.machine.profile.workloads // []) | index($work.workload) | not) then
+          .eligible=false | .reason="task workload is not allowed on this machine"
+        else . end)' "${files[@]}" > "$WORK/homes.$i.json"
 }
 
 # Candidate evaluation against one snapshot bound to $q, with $pmap in scope.
@@ -779,11 +802,18 @@ CANDIDATE_JQ='
     else ($rows | map(.pace.worstReservePercentPoints) | min | (. * 100 | round) / 100) end;
   # A new crew must leave the reserve intact after its own expected draw:
   # its measured draw, else the fixed placement charge.
-  def own_draw($p; $m):
-    ($burn.models["\($p):\(bare($m))"].draw // $burn.providers[$p].draw // draw_percent);
-  def below_reserve($rows; $draw):
-    [$rows[] | select(.status == "known" and (.effectivePercentRemaining | type) == "number"
-      and .effectivePercentRemaining - $draw < $balance.reserve_percent)] | first;
+  def own_draw($p; $m; $window):
+    ($burn.models["\($p):\(bare($m))"] // $burn.providers[$p] // {}) as $rate |
+    ($rate.windows[$window].draw // (if $rate.windows then draw_percent else ($rate.draw // draw_percent) end));
+  def below_reserve($rows; $p; $lane; $m):
+    [$rows[] as $r |
+      (if ($r.boundedBy // [] | length) > 0 then
+         prov($p; $lane).windows[] | select(.id as $w | $r.boundedBy | index($w)) |
+         {scope:$r.scope, status:$r.status, effectivePercentRemaining:.percentRemaining,
+          draw:own_draw($p; $m; .id), window:.id}
+       else $r + {draw:own_draw($p; $m; ($r.limitingWindowIds[0] // "legacy"))} end) |
+      select(.status == "known" and (.effectivePercentRemaining | type) == "number"
+        and .effectivePercentRemaining - .draw < reserve_limit)] | first;
   def evaluate($c):
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
@@ -802,10 +832,10 @@ CANDIDATE_JQ='
       elif any($rows[]; .status == "known" and (.effectivePercentRemaining | type) == "number" and .effectivePercentRemaining <= 0) then
         ($rows | map(select(.status == "known" and (.effectivePercentRemaining | type) == "number" and .effectivePercentRemaining <= 0)) | first) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: false, reason: "0% remaining at \($bad.scope)"}
-      elif below_reserve($rows; own_draw($p; ($c.model // ""))) != null then
-        (below_reserve($rows; own_draw($p; ($c.model // "")))) as $bad |
+      elif below_reserve($rows; $p; $lane; ($c.model // "")) != null then
+        (below_reserve($rows; $p; $lane; ($c.model // ""))) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, headroom: headroom($rows), eligible: false,
-         reason: "below the \($balance.reserve_percent)% reserve at \($bad.scope) after its own expected draw of \(own_draw($p; ($c.model // "")) | (. * 100 | round) / 100) points"}
+         reason: "below the \(reserve_limit)% reserve at \($bad.scope) after its own expected draw of \($bad.draw | (. * 100 | round) / 100) points"}
       elif $profile_floor_state == "below" then
         ([rows($p; $lane)[] | select(
           .scope == $c.floor.scope and
@@ -838,7 +868,7 @@ CANDIDATE_JQ='
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
       | . + {account: (prov($p; $lane).accountKey // ""), signature: signature(prov($p; $lane)), charged: ([$rows[].firstmateCharged // 0] | max // 0),
-             feed: (prov($p; $lane).firstmateFeed // null)}
+             burn: ($burn.models["\($p):\(bare($c.model // ""))"] // $burn.providers[$p] // null), feed: (prov($p; $lane).firstmateFeed // null)}
     end | . + {cache: (if $p == null then null else (prov($p; $lane).firstmateCache // null) end)};
 '
 
@@ -855,6 +885,7 @@ POOL_JQ='
   # quota-balanced near-tie band in spendPriority units; docs/configuration.md
   # "Candidate selection policy" owns the value and its rationale.
   def near_tie_band: 0.05;
+  def reserve_limit: if $check != null and $check.p0 and $check.override != "" then 5 else $balance.reserve_percent end;
   # The estimated draw one placed task takes from its account; the same
   # section owns these values and their rationale.
   def draw_percent: 5;
@@ -887,30 +918,43 @@ POOL_JQ='
   # A measured placement carries draw (points) and span (seconds) and is still
   # owed in proportion to its unexpired span; an unmeasured one owes the fixed
   # draw for the whole charge window.
-  def owed($e):
-    if ($e.draw | type) == "number" and ($e.span | type) == "number" and $e.span > 0 then
-      ($e.draw * (1 - (($now - $e.at) / $e.span))) | if . < 0 then 0 else . end
+  def owed($e; $window):
+    ($e.windows[$window] // (if $e.windows then {} else $e end)) as $rate |
+    if ($rate.draw | type) == "number" and ($rate.span | type) == "number" and $rate.span > 0 then
+      ($rate.draw * (1 - (($now - $e.at) / $rate.span))) | if . < 0 then 0 else . end
     else draw_percent end;
-  def charge_points($home; $provider; $account; $scope; $sig):
-    [charge_entries($home; $provider; $account; $scope; $sig)[] | owed(.)] | add // 0;
+  def charge_points($home; $provider; $account; $scope; $sig; $window):
+    [charge_entries($home; $provider; $account; $scope; $sig)[] | owed(.; $window)] | add // 0;
   def slots($home; $counted):
     [recent($home)[] | select(.claude) | .key as $k | select(($counted // []) | index($k) | not)] | length;
   def charged($snap; $home):
-    $snap | .providers |= map(. as $row |
-      if ((.quotaSemantics.effectiveAvailability | type) != "array") then .
-      else .quotaSemantics.effectiveAvailability |= map(
-        signature($row) as $sig |
-        (charge_entries($home; $row.provider; ($row.accountKey // ""); .scope; $sig) | length) as $n |
-        charge_points($home; $row.provider; ($row.accountKey // ""); .scope; $sig) as $points |
-        .firstmateCharged = $n |
-        if $n == 0 then . else
-          (if (.effectivePercentRemaining | type) == "number"
-           then .effectivePercentRemaining = ((.effectivePercentRemaining - $points) | round4) else . end)
-          | (if (.selection.spendPriority | type) == "number"
-             then .selection.spendPriority = ((.selection.spendPriority - draw_priority * $n) | round4) else . end)
-          | (if (.pace.worstReservePercentPoints | type) == "number"
-             then .pace.worstReservePercentPoints = ((.pace.worstReservePercentPoints - $points) | round4) else . end)
-        end)
+    $snap | .providers |= map(. as $row | signature($row) as $sig |
+      if ((.quotaSemantics.effectiveAvailability | type) != "array") then . else
+        .windows |= (if type == "array" then map(. as $w |
+          # Model windows only take charges from that model scope.
+          (if (.id | startswith("model:")) then .id else "all_models" end) as $scope |
+          charge_points($home; $row.provider; ($row.accountKey // ""); $scope; $sig; .id) as $points |
+          .percentRemaining -= $points |
+          if (.pace.reservePercentPoints | type) == "number" then .pace.reservePercentPoints -= $points else . end)
+          else . end) |
+        .windows as $windows |
+        .quotaSemantics.effectiveAvailability |= map(. as $scope |
+          (charge_entries($home; $row.provider; ($row.accountKey // ""); .scope; $sig) | length) as $n |
+          charge_points($home; $row.provider; ($row.accountKey // ""); .scope; $sig; (.limitingWindowIds[0] // "legacy")) as $points |
+          .firstmateCharged = $n |
+          (if (.boundedBy // [] | length) > 0 then
+             [$windows[] | select(.id as $w | $scope.boundedBy | index($w))] as $bounds |
+             .effectivePercentRemaining = ([$bounds[].percentRemaining | select(type=="number")] | min) |
+             if all($bounds[]; (.pace.reservePercentPoints | type)=="number") and ($bounds|length)>0 then
+               .pace.worstReservePercentPoints = ([$bounds[].pace.reservePercentPoints]|min)
+             elif (.pace.worstReservePercentPoints|type)=="number" then
+               .pace.worstReservePercentPoints -= charge_points($home; $row.provider; ($row.accountKey // ""); .scope; $sig; (.pace.worstReserveWindowId // .limitingWindowIds[0] // "legacy"))
+             else . end
+           else
+             (if (.effectivePercentRemaining|type)=="number" then .effectivePercentRemaining -= $points else . end) |
+             if (.pace.worstReservePercentPoints|type)=="number" then .pace.worstReservePercentPoints -= $points else . end
+           end) |
+          if $n > 0 and (.selection.spendPriority|type)=="number" then .selection.spendPriority = ((.selection.spendPriority - draw_priority * $n) | round4) else . end)
       end);
   def where($id): if $id == "local" then "this machine" else $id end;
   def pacing_for($c; $h):
@@ -972,7 +1016,7 @@ POOL_JQ='
          + (if ($a.counted | length) > 0 then " (live: \($a.counted | join(", ")))" else "" end)
          + (if $s > 0 then " (+\($s) recent placement(s))" else "" end)
        elif $a.session.unknown then "Claude session floor unverifiable on \(where($h.id)): \($a.session.unknown)"
-       elif ($a.session.pct - draw_percent * $s) < $a.floor then
+       elif ($a.session.pct - draw_percent * $s) < (if $check != null and $check.p0 and $check.override != "" then 5 else $a.floor end) then
          "Claude session \(($a.session.pct - draw_percent * $s) | round4)% below the \($a.floor)% floor on \(where($h.id))"
        else null end) as $refusal |
       if $refusal == null then $c
@@ -982,7 +1026,7 @@ POOL_JQ='
   def rank_key: [.order, -(.score // .spendPriority), .home, .profile.harness, (.profile.model // ""), (.profile.effort // "")];
   # Quota balance (docs/configuration.md "Quota balance") names each allowance
   # by machine, provider, and account, and prefers no provider.
-  def acct($c): if ($c.signature // null) != null then "sig:\($c.signature)" else "\($c.home)|\($c.provider)|\($c.account)" end;
+  def acct($c): if $c.provider == "codex" and ($c.signature // null) != null then "sig:\($c.signature)" else "\($c.home)|\($c.provider)|\($c.account)" end;
   def acct_label($a):
     (if $a.home == "local" then "" else "\($a.home) " end) + "\($a.provider)"
     + (if ($a.account // "") == "" or $a.account == "default" then "" else "/\($a.account)" end);
@@ -1092,7 +1136,7 @@ POOL_JQ='
   ($homes | length > 1) as $pooled |
   [$homes | to_entries[] | .key as $hi | .value as $h |
     if ($h.eligible | not) or $h.snapshot == null then $h + {index: $hi, candidates: [], unavailable: ($h.snapshot == null), slots: slots($h.id; $h.admission.counted)}
-    else charged($h.snapshot; $h.id) as $q |
+    else ($h.burn // $burn) as $burn | charged($h.snapshot; $h.id) as $q |
 '"$CANDIDATE_JQ"'
       (if $rule == null then {source: "default", use: profiles($cfg.default // null), note: "no rule matched", mode: $mode, rank: 1}
        else floor_state($rule.floor; $rule.floor.provider; "") as $state |
@@ -1199,12 +1243,15 @@ POOL_JQ='
     ([$cands[] | select(.home == "local" and .profile.harness == $check.harness
       and (.profile.model // "") == $check.model and (.profile.effort // "") == $check.effort)] | first) as $req |
     if $req == null then {verdict: "refused", reason: "requested profile is not a candidate of \($choice) on this machine"}
+    elif $check.parent != null and ($req.eligible or ($req.behind // false))
+      and $req.provider == $check.parent.provider and $req.account == $check.parent.account then
+      {verdict:"balanced",requested:$req,reason:"honoring parent pool placement",parent:$check.parent}
     elif $check.global and $check.override == "" and $global != null and $req.headroom != null
       and $result.status == "clear" and acct($result.chosen) == acct($req)
       and $global.top.headroom - $req.headroom > $balance.spread_points then
       {verdict:"refused", requested:$req, reason:"inferred rule cannot narrow the balance pool; requested allowance is behind \($global.top.label); record task classification or balance_override"}
     elif $result.status == "clear" and $req.eligible and acct($result.chosen) == acct($req) then
-      {verdict: "balanced", requested: $req}
+      {verdict: (if $check.p0 and $check.override != "" then "override" else "balanced" end), requested: $req, override: $check.override}
     elif $check.override != "" and ($req.eligible or ($req.behind // false)) then {verdict: "override", requested: $req, override: $check.override}
     elif $result.status == "clear" then
       {verdict: "refused", requested: $req, pick: $result.chosen,
@@ -1218,16 +1265,18 @@ POOL_JQ='
   ($result + (if $verdict != null then {check: $verdict} else {} end)) as $result |
   def entry($c):
     ((($c.profile.model // "") | split("/") | last) as $m |
-     ($burn.models["\($c.provider):\($m)"] // $burn.providers[$c.provider] // null)) as $measured |
+     ($c.burn // $burn.models["\($c.provider):\($m)"] // $burn.providers[$c.provider] // null)) as $measured |
     {at: $now, key: $key, home: $c.home, provider: $c.provider, account: $c.account,
      model: ($c.profile.model // ""), scopes: ([$c.bounds[]?.scope] | unique),
      claude: ($fmap[$c.profile.harness] == "claude")}
     + (if ($c.signature // null) != null then {signature: $c.signature} else {} end)
     + (if $measured != null and ($measured.draw | type) == "number" and ($measured.span | type) == "number"
-       then {draw: $measured.draw, span: $measured.span} else {} end);
-  {result: $result,
+       then {draw: $measured.draw, span: $measured.span} else {} end)
+    + (if $measured.windows then {windows:$measured.windows, span:([$measured.windows[].span]|max)} else {} end);
+  {result: ($result | if $verdict != null and ($verdict.verdict == "balanced" or $verdict.verdict == "override")
+     then .check.charge = entry($verdict.requested) else . end),
    ledger: (if $verdict != null then
-     (if $verdict.verdict == "balanced" or $verdict.verdict == "override" then
+     (if $check.charge and ($verdict.verdict == "balanced" or $verdict.verdict == "override") then
         $ledger | .entries = ([.entries[] | select(.key != $key)] + [entry($verdict.requested)])
       else $ledger end)
    elif $result.status == "clear" then
@@ -1244,7 +1293,7 @@ LEDGER_FILE="$STATE/dispatch-charges.jsonl"
 CHECK_JSON=null
 if [ "$CHECK_SET" = 1 ]; then
   CHECK_JSON=$(jq -nc --arg harness "$CHECK_HARNESS" --arg model "$CHECK_MODEL" --arg effort "$CHECK_EFFORT" \
-    --arg override "$CHECK_OVERRIDE" --argjson global "$CHECK_GLOBAL" '{harness: $harness, model: $model, effort: $effort, override: $override, global: $global}')
+    --arg override "$CHECK_OVERRIDE" --argjson parent "$CHECK_PARENT" --argjson p0 "$CHECK_P0" --argjson charge "$CHECK_CHARGE" --argjson global "$CHECK_GLOBAL" '{harness: $harness, model: $model, effort: $effort, override: $override, global: $global, charge: $charge, p0: $p0, parent:$parent}')
 fi
 if [ -f "$LEDGER_FILE" ] && [ ! -L "$LEDGER_FILE" ]; then
   jq -cs --argjson now "$NOW" --argjson window "$CHARGE_WINDOW" '
@@ -1283,7 +1332,13 @@ for i in "${!BRIEFS[@]}"; do
       --slurpfile answer "$WORK/answer.$i.json" --slurpfile rules "$RULES" \
       --slurpfile homes "$WORK/homes.$i.json" --slurpfile ledger "$WORK/ledger.json" \
       "$FM_QUOTA_ROW_JQ$POOL_JQ" > "$WORK/pool.$i.json" 2>/dev/null; then
-    jq -c .result "$WORK/pool.$i.json" > "$WORK/result.$i.json"
+    brief_hash=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "${BRIEFS[$i]}") || die "cannot bind placement to brief"
+    jq -c --arg hash "$brief_hash" --arg task "$(brief_key "$i")" --argjson now "$NOW" '.result |
+      if .status == "clear" and .chosen.home != "local" then
+        .parent_placement = {version:1,at:$now,task:$task,brief_sha256:$hash,
+          target:.chosen.home,provider:.chosen.provider,account:.chosen.account,profile:.chosen.profile,
+          reason:.placement.reason}
+      else . end' "$WORK/pool.$i.json" > "$WORK/result.$i.json"
     jq -c .ledger "$WORK/pool.$i.json" > "$WORK/ledger.next" && mv "$WORK/ledger.next" "$WORK/ledger.json"
   else
     brief_error "$i" "resolution failed"
@@ -1409,6 +1464,7 @@ RENDER_JQ='
     ((.global_spread // .spread) as $sp | if $sp != null and $sp.alarm then
        "  spread: \($sp.top.label | flat) is \($sp.points) points of headroom ahead of \($sp.bottom.label | flat) (alarm above \($sp.threshold))"
      else empty end),
+    (if .parent_placement then "  parent_placement: \(.parent_placement | tojson)" else empty end),
     (if .check then "  check: \(.check.verdict)" + (if .check.reason then ": \(.check.reason | flat)" elif .check.override then ": override recorded: \(.check.override | flat)" else "" end) else empty end),
     (if .exact_tie then "  exact cross-home tie: "
         + ([.exact_tie.candidates[] | "\(hm(.))=\(show(.spendPriority)) workers=\(.workers)"] | join(", "))
@@ -1470,24 +1526,29 @@ dispatch_wake_append() {
 }
 
 spread_alert() {
-  local file="$STATE/quota-spread.json" previous='{}' next notices line
+  local file="$STATE/quota-spread.json" history="$STATE/quota-spread-notified.json" previous='{}' notified='{}' next notices line
+  [ ! -f "$history" ] || notified=$(jq -c . "$history" 2>/dev/null) || notified='{}'
   [ ! -f "$file" ] || previous=$(jq -c '.conditions // {} | if type == "object" then . else {} end' "$file" 2>/dev/null) || previous='{}'
   next=$(for i in "${!BRIEFS[@]}"; do jq -c '.global_spread // empty' "$WORK/result.$i.json" 2>/dev/null; done |
-    jq -sc --argjson open "$previous" --argjson now "$NOW" '
-      reduce .[] as $g ({open: $open, notify: []};
+    jq -sc --argjson open "$previous" --argjson notified "$notified" --argjson now "$NOW" '
+      reduce .[] as $g ({open: $open, notified: $notified, notify: []};
         ([$g.behind[]? | "\($g.top.acct)>\(.)"]) as $current |
         # Close what this pool measured on both sides and no longer sees.
         .open |= with_entries(.key as $k | select(
           (($k | split(">") | all(. as $a | $g.accounts | index($a) != null))
-           and ($current | index($k) | not)) | not)) |
+           and ($current | index($k) | not)
+           and (($k | split(">")) as $pair | ($g.headrooms[$pair[0]] - $g.headrooms[$pair[1]]) <= ($g.threshold - 5))) | not)) |
         reduce ($g.behind[]? as $b |
           {key: "\($g.top.acct)>\($b)", top: $g.top.label, bottom: $g.labels[$b], threshold: $g.threshold,
            points: ((($g.top.headroom - $g.headrooms[$b]) * 100 | round) / 100)}) as $c (.;
           if .open[$c.key] then .open[$c.key].seen = $now
           else .open[$c.key] = {since: $now, seen: $now, top: $c.top, bottom: $c.bottom}
-            | .notify += [$c] end))
-      | .open |= with_entries(select($now - (.value.seen // 0) <= 86400))') || return 0
+            | if $now - (.notified[$c.key] // 0) >= 3600 then .notify += [$c] | .notified[$c.key] = $now else . end end))
+      | .open |= with_entries(select($now - (.value.seen // 0) <= 86400))
+      | .notified |= with_entries(select($now - .value <= 86400))') || return 0
   notices=$(jq -c '.notify[]' <<<"$next")
+  mkdir -p "$STATE" || return 0
+  jq -c .notified <<<"$next" > "$history.tmp" && mv -f "$history.tmp" "$history" || return 0
   mkdir -p "$STATE" || return 0
   if [ "$(jq '.open | length' <<<"$next")" = 0 ]; then
     rm -f "$file"

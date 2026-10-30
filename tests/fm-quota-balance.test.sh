@@ -118,6 +118,12 @@ assert_contains "$result" 'last known reading' 'the refusal names its evidence s
 assert_contains "$result" 'codex is 25 points behind claude' 'the refusal names the known spread'
 assert_absent "$GATE_HOME/state/quota-balance-unverifiable.open" 'the last-reading refusal closes the degraded episode'
 
+printf '%s\n' '{"balance_override":"P0 needs this mapped profile","impact":"P0"}' > "$GATE_HOME/data/t1/placement.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/claude-only.json" gate codex gpt-6-astra high)
+assert_equals 0 "${result%%|*}" 'an override is honored on the last-reading path'
+assert_equals codex "$(jq -r 'select(.key=="t1")|.provider' "$GATE_HOME/state/dispatch-charges.jsonl")" 'an unverifiable override still charges its mapped allowance'
+rm "$GATE_HOME/data/t1/placement.json"
+
 balance_rules "$GATE_HOME/config"
 result=$(gate claude opus high)
 assert_equals 0 "${result%%|*}" 'the balanced profile proceeds'
@@ -160,6 +166,47 @@ assert_equals 1 "$f1" 'an inferred specialist rule cannot drain an allowance beh
 assert_equals 1 "$f2rule" 'an invalid recorded rule is a structural refusal, not quota uncertainty'
 assert_equals 1 "${result%%|*}" 'a resolver shape error fails closed' 
 pass 'the spawn gate enforces the balanced pick, alerts degraded starts, uses fresh evidence, and honors recorded overrides'
+
+# Parent placement survives the child missing the parent's charge ledger.
+balance_rules "$GATE_HOME/config"
+write_quota -30 -5
+printf 'm0002\n' > "$GATE_HOME/.fm-secondmate-home"
+hash=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$GATE_HOME/data/t1/brief.md")
+jq -n --arg hash "$hash" --argjson at "$(date +%s)" '{dispatch_rule:0,parent_placement:{version:1,at:$at,task:"t1",brief_sha256:$hash,target:"m0002",provider:"claude",account:"",profile:{harness:"claude",model:"opus",effort:"high"}}}' > "$GATE_HOME/data/t1/placement.json"
+result=$(gate claude opus high)
+assert_equals 0 "${result%%|*}" 'the receiving home honors a current parent pool placement'
+jq '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining=12' "$QUOTA_FIXTURE" > "$TMP_ROOT/low-parent.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/low-parent.json" gate claude opus high)
+assert_equals 1 "${result%%|*}" 'a parent decision cannot pass the receiving allowance reserve'
+printf '%s\n' '{"dispatch_rule":0,"impact":"P0","balance_override":"restore failed booking system"}' > "$GATE_HOME/data/t1/placement.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/low-parent.json" gate claude opus high)
+assert_equals 0 "${result%%|*}" 'a recorded P0 can draw below 10 while leaving 5'
+QUOTA_FIXTURE="$TMP_ROOT/low-parent.json" gate claude opus high >/dev/null
+assert_equals 1 "$(grep -c 'check: quota-p0:' "$GATE_HOME/state/.wake-queue")" 'P0 reserve use alerts once per task'
+jq '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining=9' "$QUOTA_FIXTURE" > "$TMP_ROOT/too-low-parent.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/too-low-parent.json" gate claude opus high)
+assert_equals 1 "${result%%|*}" 'P0 cannot breach the hard 5% floor after its own draw'
+rm "$GATE_HOME/data/t1/placement.json"
+
+# Live Claude resets jitter across reads, including minute boundaries.
+balance_rules "$GATE_HOME/config"
+rm -f "$GATE_HOME/state/quota-spread.json" "$GATE_HOME/state/quota-spread-notified.json" "$GATE_HOME/state/.wake-queue"
+for stamp in 59.5 60.5 61.5 62.5; do
+  write_quota -5 -30
+  jq --arg stamp "$stamp" '.providers[0].windows[0].resetsAt=("2030-01-01T01:00:"+$stamp+"Z")' "$QUOTA_FIXTURE" > "$TMP_ROOT/jitter.json"
+  QUOTA_FIXTURE="$TMP_ROOT/jitter.json" gate claude opus high >/dev/null
+done
+alarm_wakes=$(grep -c 'check: quota-spread' "$GATE_HOME/state/.wake-queue")
+alarm_open=$(jq '.conditions|length' "$GATE_HOME/state/quota-spread.json")
+# Close and reopen immediately: do not page the supervisor again.
+write_quota -5 -10
+gate claude opus high >/dev/null
+write_quota -5 -30
+gate claude opus high >/dev/null
+printf '# jitter probes: wakes=%s open=%s reopen=%s (want 1/1/1)\n' "$alarm_wakes" "$alarm_open" "$(grep -c 'check: quota-spread' "$GATE_HOME/state/.wake-queue")"
+assert_equals 1 "$alarm_wakes" 'jitter does not repeat the spread alarm'
+assert_equals 1 "$alarm_open" 'jitter does not leave orphan conditions'
+assert_equals 1 "$(grep -c 'check: quota-spread' "$GATE_HOME/state/.wake-queue")" 'a reopened condition is rate limited'
 
 # --- measured draw --------------------------------------------------------------
 BURN="$TMP_ROOT/burn"
@@ -205,6 +252,31 @@ assert_equals '10000:1500' "$(jq -r '.models["codex:gpt-6-astra"] | "\(.points_p
   'a crew that started inside an interval is charged its share of that loss'
 assert_equals '2000:500' "$(jq -r '.models["codex:gpt-6-sol"] | "\(.points_per_hour * 500 | round):\(.crew_hours * 1000 | round)"' <<<"$rates")" \
   'a later model takes only its own share'
+# Observe two different window units through the real sample/rates interface.
+now=$(($(date +%s) - 7200))
+BURN3="$TMP_ROOT/burn3"
+mkdir -p "$BURN3"
+printf '%s\n' '[{"task":"a","provider":"claude","model":"opus"}]' > "$BURN3/crews.json"
+for offset in 0 3600 7200; do
+  jq -n --argjson step "$((offset / 3600))" '{providers:[{provider:"claude",windows:[
+    {id:"five_hour",percentRemaining:(90-40*$step),resetsAt:("2030-01-01T05:00:0"+($step|tostring)+".5Z")},
+    {id:"seven_day",percentRemaining:(90-2*$step),resetsAt:("2030-01-07T05:00:0"+($step|tostring)+".5Z")}],
+    quotaSemantics:{effectiveAvailability:[{scope:"all_models",status:"known",effectivePercentRemaining:(90-40*$step),limitingWindowIds:["five_hour"]}]}}]}' > "$BURN3/q.json"
+  python3 "$ROOT/bin/fm-quota-burn.py" sample "$BURN3" "$BURN3/q.json" "$BURN3/crews.json" $((now + offset))
+done
+rates=$(python3 "$ROOT/bin/fm-quota-burn.py" rates "$BURN3" $((now + 7200)))
+printf '# window burn probe: %s\n' "$rates"
+assert_equals '40:2' "$(jq -r '.models["claude:opus"].windows | "\(.five_hour.points_per_hour|round):\(.seven_day.points_per_hour|round)"' <<<"$rates")" 'jittered resets preserve separate session and weekly burn units'
+cp "$BURN3/quota-samples.jsonl" "$GATE_HOME/state/quota-samples.jsonl"
+write_quota -5 -30
+jq '.providers[0].windows=[
+    {id:"five_hour",kind:"session",percentRemaining:90,pace:{reservePercentPoints:5}},
+    {id:"seven_day",kind:"weekly",percentRemaining:45,pace:{reservePercentPoints:-5}}] |
+    .providers[0].quotaSemantics.effectiveAvailability[0] += {boundedBy:["five_hour","seven_day"],limitingWindowIds:["seven_day"],effectivePercentRemaining:45}' "$QUOTA_FIXTURE" > "$TMP_ROOT/window-units.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/window-units.json" gate claude opus high)
+assert_equals 0 "${result%%|*}" '40 session points do not become a 40-point weekly admission charge'
+assert_equals '40:2' "$(jq -r 'select(.key=="t1")|"\(.windows.five_hour.draw|round):\(.windows.seven_day.draw|round)"' "$GATE_HOME/state/dispatch-charges.jsonl")" 'the ledger keeps each window in its own units'
+rm -f "$GATE_HOME/state/quota-samples.jsonl"
 pass 'measured draw comes from sampled allowance loss per crew-hour and crew lifetimes'
 
 # --- one real spawn: refused off-balance, launched on-balance --------------------
@@ -226,6 +298,11 @@ expect_code 1 "$status" "an off-balance crew start is refused: $out"
 assert_contains "$out" 'error: quota balance: the balanced pick is claude:opus on claude (headroom -5)' 'spawn names the balanced pick'
 assert_absent "$home/state/$id.meta" 'the refusal happens before any metadata or worktree'
 write_quota -30 -5
+cp "$home/data/$id/brief.md" "$case_dir/brief.saved"
+printf '# Task\n' > "$home/data/$id/brief.md"
+out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" --scout --harness codex --model gpt-6-astra --effort high)
+assert_absent "$home/state/dispatch-charges.jsonl" 'a later brief refusal leaves no phantom quota charge'
+cp "$case_dir/brief.saved" "$home/data/$id/brief.md"
 out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" --scout --harness codex --model gpt-6-astra --effort high)
 status=$?
 expect_code 0 "$status" "the balanced crew start launches: $out"

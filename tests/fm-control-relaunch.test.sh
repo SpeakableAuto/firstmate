@@ -2575,6 +2575,28 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
   pass "relaunch heals an item that drifted out of In flight while the task stayed live"
 }
 
+test_balance_refusal_preserves_agent() {
+  local dir out rc
+  dir=$(new_case balance rl-balance)
+  add_ship_task "$dir" rl-balance codex
+  printf codex > "$dir/fake/command"
+  mkdir -p "$dir/home/config"
+  cat > "$dir/home/config/crew-dispatch.json" <<'JSON'
+{"default":[{"harness":"codex"},{"harness":"claude"}]}
+JSON
+  cat > "$dir/fakebin/quota-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"codex","state":{"stale":false},"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":50,"pace":{"worstReservePercentPoints":-40}}]}},{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","percentRemaining":70}],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":70,"pace":{"worstReservePercentPoints":-5}}]}}]}'
+SH
+  chmod +x "$dir/fakebin/quota-axi"
+  out=$(run_control "$dir" rl-balance relaunch --note 'preserve current agent'); rc=$?
+  expect_code 1 "$rc" 'a balance refusal stops relaunch'
+  assert_equals codex "$(cat "$dir/fake/command")" 'balance refusal must leave the old agent running'
+  assert_absent "$dir/home/state/dispatch-charges.jsonl" 'a refused relaunch makes no charge'
+  pass 'balance is checked before stopping the old agent'
+}
+test_balance_refusal_preserves_agent
+
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven

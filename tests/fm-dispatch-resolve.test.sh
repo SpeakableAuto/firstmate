@@ -409,7 +409,7 @@ expect_withheld() {  # <label> <stderr fragment> [<value that must not print>...
   assert_equals '' "$out" "$label prints nothing on stdout, so firstmate uses its existing intake"
   assert_contains "$err" "dispatch-resolve: off ($fragment" "$label names why on stderr"
   assert_contains "$err" 'nothing sent)' "$label says nothing was sent"
-  assert_equals '1' "$(grep -c . <<<"$err")" "$label prints one diagnostic line"
+  assert_equals '1' "$(grep -c . <<<"$err")" "$label prints one diagnostic line: $err"
   assert_absent "$LOG/argv" "$label never calls curl"
   assert_absent "$LOG/quota-axi.calls" "$label never reads quota"
   local value
@@ -856,7 +856,7 @@ jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAva
 ]' "$QUOTA" > "$BOUNDED"
 write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$BOUNDED" run code out err "$BRIEF"
-assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=79%  spendPriority=-0.4627' "the limiting provider-wide row drives ranking"
+assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=79%  spendPriority=-0.4627' "the limiting provider-wide row drives ranking; exit=$code stderr=$err"
 assert_contains "$out" 'bounds=all_models:79%/projected_exhaustion,model:sonnet:99%/through_reset' "all applicable quota bounds are disclosed"
 
 EXHAUSTED_WIDE="$TMP_ROOT/exhausted-wide.json"
@@ -1370,7 +1370,7 @@ assert_contains "$out" 'home: peer  claude-crew=0/3  session=79%' "the remote ma
 assert_equals peer-host "$(cat "$SSH_CALLS")" "the remote quota is read through the registered route"
 write_quota "$REMOTE_QUOTA" 0.7
 placement_case ok --project pager
-assert_contains "$out" 'placement: local (local cursor:cursor-grok-4.6-medium has the pool'"'"'s highest spendPriority 0.7597)' "a higher local candidate keeps the task local"
+assert_contains "$out" 'placement: local (local cursor:cursor-grok-4.6-medium has the pool'"'"'s highest spendPriority 0.7597)' "a higher local candidate keeps the task local; exit=$code stderr=$err"
 pass "the pool ranks every machine's candidates by spendPriority with no home-machine margin"
 
 PLACEMENT_RULE=rule_3 placement_case ok --project pager
@@ -1649,9 +1649,9 @@ assert_contains "$out" 'local:codex:gpt-5.6-sol=7' "this machine's Codex account
 assert_contains "$out" 'peer:codex:gpt-5.6-sol=7' "the other machine's Codex account shares the rest"
 assert_contains "$out" 'charged=' "later placements show the charge of earlier ones"
 assert_equals 1 "$(ssh_calls)" "a batch reads each remote machine once"
-first_block=$(awk '/^dispatch-resolve:$/ { n++ } n == 1' <<<"$out" | grep -v -e '^  brief: ' -e '^  project: ' -e '^  model: ')
+first_block=$(awk '/^dispatch-resolve:$/ { n++ } n == 1' <<<"$out" | grep -v -e '^  brief: ' -e '^  project: ' -e '^  model: ' -e '^  parent_placement: ')
 pool_case "$TMP_ROOT/brief-1.md" --project pager
-assert_equals "$first_block" "$(grep -v '^  model: ' <<<"$out")" "the same brief resolves identically alone and first in a batch"
+assert_equals "$first_block" "$(grep -v -e '^  model: ' -e '^  parent_placement: ' <<<"$out")" "the same brief resolves identically alone and first in a batch"
 pass "a batch of 20 charges each placement and spreads across accounts and machines"
 
 # Separate calls inside the charge window spread like one batch.
@@ -1839,7 +1839,7 @@ balance_run() {  # [args...]: known rule, no key, no network
 }
 cp "$BAL_RULES" "$RULES"
 mkdir -p "$HOME_DIR/state"
-rm -f "$HOME_DIR/state"/crew*.meta "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
+rm -f "$HOME_DIR/state"/crew*.meta "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
 
 # Quota balance is the default: without quota_balance the same ranking applies.
 jq 'del(.quota_balance)' "$BAL_RULES" > "$RULES"
@@ -1847,7 +1847,7 @@ write_balance_quota "$QUOTA" 70 -5 60 -30
 balance_run "$BRIEF" --rule rule_1
 assert_contains "$out" "profile: --harness 'claude' --model 'opus' --effort 'high'" 'pace headroom ranks without any quota_balance key'
 assert_contains "$out" 'spread: claude is 25 points of headroom ahead of codex (alarm above 20)' 'the default spread alarm is 20 points'
-rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue"
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue"
 cp "$BAL_RULES" "$RULES"
 
 # A known rule needs no key and sends nothing.
@@ -1945,7 +1945,7 @@ write_balance_quota "$QUOTA" 70 -10 60 -4
 balance_run "$BRIEF" --rule rule_1 --check codex gpt-6-astra high
 assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'Codex is the pick by pace'
 assert_equals '8571:3600' "$(jq -r '"\(.draw * 1000 | round):\(.span)"' "$HOME_DIR/state/dispatch-charges.jsonl")" 'the charge carries the measured draw and span'
-rm -f "$HOME_DIR/state/quota-samples.jsonl" "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue"
+rm -f "$HOME_DIR/state/quota-samples.jsonl" "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue"
 
 # Spread alarm across a batch: each distinct open gap is its own condition. One
 # pool sees the second machine, the other does not; neither clears the other.
@@ -1969,17 +1969,46 @@ assert_equals 3 "$(grep -c 'check: quota-spread' "$HOME_DIR/state/.wake-queue")"
 # A machine that may not take the project is outside the spread: remote-pager
 # is registered only on the second machine, so this machine's gap is not seen.
 rm -rf "$HOME_DIR/state/quota-remote"
-rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue"
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue"
 write_balance_quota "$QUOTA" 70 -5 60 -40
 write_balance_quota "$REMOTE_QUOTA" 90 -6 80 -8
 balance_run "$BRIEF" --project remote-pager --rule rule_1 --check claude opus high
 assert_equals '["peer|claude|","peer|codex|"]' "$(jq -c '.global_spread.accounts' <<<"$out")" 'the spread measures only machines in the project pool'
 assert_absent "$HOME_DIR/state/quota-spread.json" 'an excluded machine raises no alarm'
 rm -rf "$HOME_DIR/state/quota-remote"
-rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/quota-spread-notified.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
 cp "$BASE_RULES" "$RULES"
 write_quota "$QUOTA" 0.7597
 pass 'quota balance ranks by pace with no preferred provider, keeps a 10% reserve, alarms on spread, and checks spawns'
+
+# Same-account placement must not refuse a local start on a fresher remote reading.
+cp "$BAL_RULES" "$RULES"
+rm -rf "$HOME_DIR/state/quota-remote"
+write_balance_quota "$QUOTA" 70 -30 90 -5.02
+write_balance_quota "$REMOTE_QUOTA" 70 -30 90 -5
+for q in "$QUOTA" "$REMOTE_QUOTA"; do
+  jq '.providers[1].windows[0].resetsAt="2030-01-08T00:00:00Z"' "$q" > "$TMP_ROOT/shared.json"
+  mv "$TMP_ROOT/shared.json" "$q"
+done
+balance_run "$BRIEF" --project pager --rule rule_1 --check codex gpt-6-astra high
+assert_equals balanced "$(jq -r .check.verdict <<<"$out")" 'a shared Codex account is the same allowance on both machines'
+assert_equals local "$(jq -r .chosen.home <<<"$out")" 'one allowance prefers the local machine'
+# Machine fit and room exclude a remote candidate before ranking.
+write_balance_quota "$QUOTA" 70 -30 90 -40
+write_balance_quota "$REMOTE_QUOTA" 70 -5 90 -40
+jq '.firstmatePlacement={configured:true,available:true,profile:{workloads:["backend"],max_crew:2}}' "$REMOTE_QUOTA" > "$TMP_ROOT/room.json"
+mv "$TMP_ROOT/room.json" "$REMOTE_QUOTA"
+printf '%s\n' '{"workload":"iphone-build","requires_drive":false}' > "$TMP_ROOT/placement.json"
+rm -rf "$HOME_DIR/state/quota-remote"
+balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
+assert_equals local "$(jq -r .chosen.home <<<"$out")" 'an iPhone task is never sent to a backend-only machine'
+rm "$TMP_ROOT/placement.json"
+jq '.firstmatePlacement.available=false | .firstmatePlacement.reason="machine crew cap: 2/2"' "$REMOTE_QUOTA" > "$TMP_ROOT/room.json"
+mv "$TMP_ROOT/room.json" "$REMOTE_QUOTA"
+rm -rf "$HOME_DIR/state/quota-remote"
+balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
+assert_equals local "$(jq -r .chosen.home <<<"$out")" 'a full remote machine is not named as the pick'
+cp "$BASE_RULES" "$RULES"
 
 placement_s16
 printf '# all fm-dispatch-resolve tests passed\n'

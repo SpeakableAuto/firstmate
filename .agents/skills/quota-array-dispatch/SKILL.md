@@ -185,3 +185,4 @@ That charge is what spreads a burst across accounts and machines instead of send
 
 Placing a task on a second mate sends it through the ordinary secondmate routing path with the chosen profile; the second mate's own spawn admission still applies.
 The opt-in [typed resolver](../../../docs/configuration.md#typed-dispatch-resolution-env-typesafe_api_key) applies this rule in code, including a batch of several briefs, and prints `placement:` and `home:` lines; without it, apply the same rule by hand at intake.
+Carry a remote pick's `parent_placement` into the receiving task classification under the [spawn gate transfer contract](../../../bin/fm-quota-balance-lib.sh), so both machines enforce the same pool decision.
