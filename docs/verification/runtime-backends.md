@@ -2467,7 +2467,32 @@ ok - healthy ticks after rearming preserve the existing state file
 ```
 
 These portable fixtures exercise the classifier and state machine, not the live Claude renderer.
-The watchdog pins the operator-selected Claude version and refuses version drift; that pin is not a claim that the stub test verified Claude itself.
+The watchdog pins the operator-selected Claude version and degrades on version drift; that pin is not a claim that the stub test verified Claude itself.
+
+On 2026-10-30 AEST, on macOS with Herdr 0.9.3, the same transport test added a controlled stall: a hung stub that only ticks its spinner was not counted as progressing, was never typed into, was restarted in its own pane from the newest handoff while a neighbouring worker pane kept running, and raised one urgent alert when the restarted stub then made no progress:
+
+```text
+ok - real Herdr transport: a ticking spinner on a hung supervisor is not progress
+ok - real Herdr transport: a busy hung supervisor is never typed into
+ok - real Herdr transport: a stalled supervisor is restarted in its own pane from the latest handoff
+ok - real Herdr transport: the neighbouring worker pane is untouched
+ok - real Herdr transport: no progress after a restart raises one urgent alert
+```
+
+## Supervisor watchdog live Claude renderer
+
+`FM_LIVE_WATCHDOG_CLAUDE=1 bash bin/fm-test-run.sh tests/fm-supervisor-watchdog-claude-live-e2e.test.sh` refreshes this record and prints the pin to install; it spends no model tokens.
+Verified on 2026-10-30 AEST with Claude Code 2.1.295 and Herdr 0.9.3:
+
+```text
+ok - Claude 2.1.295 (Claude Code): idle empty prompt reads clear
+ok - Claude 2.1.295 (Claude Code): a typed draft reads pending
+ok - Claude 2.1.295 (Claude Code): the real network error reads error
+ok - Claude 2.1.295 (Claude Code): one guarded resume is typed, submitted and confirmed
+verification: 2.1.295 (Claude Code) on Herdr 0.9.3; pin FM_WATCHDOG_CLAUDE_VERSION=2.1.295\ \(Claude\ Code\)
+```
+
+Claude Code 2.1.295 rotates hints such as the update notice and the effort badge in the row below the prompt's closing rule, so the watchdog excludes that row from its screen comparison; before that exclusion the same run held the nudge as a screen change.
 
 
 ## Remote parent-route inbox alarm

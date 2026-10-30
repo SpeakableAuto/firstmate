@@ -28,9 +28,10 @@
 # sends one guarded nudge; after another STALL_SECS it stops only the target
 # pane's foreground processes, relaunches RESTART_COMMAND there with a prompt
 # naming the newest data/supervisor-handoff-*.md, and proves the new session
-# started. A visible draft holds the restart. An unproven restart, or no
-# progress for STALL_SECS after a proven one, sends one urgent supervisor-down
-# alert through fm_urgent_alert; progress of any kind rearms the timer.
+# started. A draft visible on a verified version holds the restart. An
+# unproven restart, no progress for STALL_SECS after a proven one, or a second
+# stall within six hours of a restart sends one urgent supervisor-down alert
+# through fm_urgent_alert; progress of any kind rearms the timer.
 # State: FM_HOME/state/supervisor-watchdog/{stall.json,version-alert}.
 # A stable viewport with a terminal network error, native Claude idle/done,
 # no busy footer, and a proven empty composer must survive two observations

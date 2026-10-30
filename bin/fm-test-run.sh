@@ -355,6 +355,7 @@ family_for_basename() {
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-bearings-board-lavish-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|\
+    fm-supervisor-watchdog-claude-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
@@ -1630,7 +1631,8 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-quota-choose.test.sh"
       ;;
     bin/fm-supervisor-watchdog.sh)
-      printf '%s\n' "__script__:fm-supervisor-watchdog.test.sh" "__script__:fm-supervisor-watchdog-herdr-e2e.test.sh"
+      printf '%s\n' "__script__:fm-supervisor-watchdog.test.sh" "__script__:fm-supervisor-watchdog-herdr-e2e.test.sh" \
+        "__script__:fm-supervisor-watchdog-claude-live-e2e.test.sh"
       ;;
     bin/fm-active-alert-lib.sh)
       printf '%s\n' "__script__:fm-daemon.test.sh" "__script__:fm-supervisor-watchdog.test.sh" "__script__:fm-active-alert.test.sh"
