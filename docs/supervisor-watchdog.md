@@ -25,6 +25,7 @@ While the home needs supervision, the watchdog treats a newer watcher beacon onl
 For the progress fingerprint, spinner rows, elapsed durations, token counters, Claude's rotating hint row below the prompt and a composer row containing only an unstyled `Try "..."` suggestion are normalized away, while other numbers remain semantic progress.
 That unstyled suggestion still reads as pending input under every typing guard, so its rotation cannot hide a stall and the watchdog does not type over it.
 A visible usage-limit notice counts as progress, because Claude resumes by itself and typing would cancel that.
+After the watchdog types a nudge or ring, or restarts the supervisor, a screen or transcript change no longer counts until an idle watcher beacon, an acknowledged wake or a usage-limit notice shows real progress, because a supervisor that fails every turn (for example after its login expires) changes the screen without recovering.
 After `FM_WATCHDOG_STALL_SECS` (1800 seconds by default) without progress it sends one guarded nudge, which is withheld when the supervisor is busy or its version is unverified.
 By default, a second quiet interval never stops the supervisor and sends one urgent alert that it did not recover after the nudge and needs restarting by hand.
 Set `FM_WATCHDOG_STALL_RESTART=1` to opt into automatic restart from the latest handoff after that second interval.
@@ -32,6 +33,7 @@ The opt-in restart reads a fresh frame and proceeds only when the installed vers
 A pending, unknown or unreadable composer, an unsupported harness, or version drift holds an enabled restart and sends one urgent alert that says unsent input may be in the box.
 An enabled restart records a durable `restarting` receipt before it stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a real Claude agent process started in that pane.
 If a tick ends during that restart, the next tick accepts an already proven Claude agent or retries the restart once under the same verified-empty-composer guard, while a second interruption or unproven retry sends the urgent supervisor-down alert.
+If automatic restart has since been turned off, a leftover restart record never stops or relaunches anything: a running Claude resumes normal watching, and a pane without one sends the urgent alert.
 An unproven restart or no progress for another interval after a proven one sends one urgent supervisor-down alert through the [urgent captain alert path](wedge-alarm.md#urgent-captain-alerts).
 The same incident retries delivery through the alert limiter until Hermes sends it or reports the incident as a duplicate.
 

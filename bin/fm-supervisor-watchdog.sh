@@ -24,6 +24,9 @@
 # Stall: while the home needs supervision, progress is a newer watcher beacon
 # while Claude is natively idle or done, a change of the oldest main-owned wake
 # row (an acknowledgement), a newer transcript file, or a semantic pane change.
+# After the watchdog types (nudge or ring) or restarts, only a beacon while
+# idle, a changed oldest row or a usage-limit notice counts until one occurs,
+# because the turn it caused may just fail and change the screen.
 # Spinner rows, elapsed durations, token counters, Claude's rotating footer
 # hints, and a composer row containing only an unstyled `Try "..."` suggestion
 # are ignored, while other numbers remain semantic progress. The unstyled
@@ -35,14 +38,16 @@
 # it needs restarting by hand. FM_WATCHDOG_STALL_RESTART=1
 # opts into restart from the latest handoff only when a fresh verified frame
 # proves the composer is empty. Otherwise it holds the restart and sends one
-# urgent alert because unsent input may be in the box. A permitted restart
+# urgent alert because unsent input may be in the box. With restart off, a
+# leftover `restarting` record never stops anything: a running Claude resumes
+# watching and an empty pane sends the urgent alert. A permitted restart
 # stops only the target pane's foreground processes, relaunches RESTART_COMMAND
 # there, and proves the new session started as a real Claude agent process. It
 # records the restart before stopping Claude and retries one interrupted attempt.
 # An unproven restart or no progress for STALL_SECS after a proven one sends one
 # urgent supervisor-down alert through fm_urgent_alert.
 # Progress of any kind rearms the timer.
-# State: FM_HOME/state/supervisor-watchdog/{stall.json,version-alert}.
+# State: FM_HOME/state/supervisor-watchdog/{stall.json,typed,version-alert}.
 # A stable viewport with a terminal network error, native Claude idle/done,
 # no busy footer, and a proven empty composer must survive two observations
 # at least IDLE_SECS apart (minimum 10 seconds), with no semantic screen change.
@@ -329,7 +334,7 @@ watchdog_queue_recover() {
   QUEUE_ACTED=1
   watchdog_queue_update --argjson now "$NOW" '.last=$now | .since=0'
   watchdog_log action-claimed queue-nudge
-  watchdog_send "$payload" || { watchdog_queue_hold send-failed; return; }
+  watchdog_type "$payload" || { watchdog_queue_hold send-failed; return; }
   sleep 0.2
   after=$(watchdog_read) || { watchdog_queue_hold capture-failed; return; }
   case "$(watchdog_screen "$after")" in usage-limit|busy) watchdog_queue_hold unsafe-before-submit; return ;; esac
@@ -348,6 +353,9 @@ watchdog_is_payload() {
   [ "$(printf '%s' "$1" | tr -d '[:space:]')" = "$(printf '%s' "$2" | tr -d '[:space:]')" ]
 }
 watchdog_send() { fm_backend_herdr_cli "$SESSION" pane send-text "$PANE_ID" "$1" >/dev/null; }
+# Every watchdog keystroke goes through here so the stall check knows the next
+# screen change may be the watchdog's own doing (see watchdog_stall).
+watchdog_type() { : > "$DIR/typed"; watchdog_send "$1"; }
 watchdog_enter() { fm_backend_herdr_cli "$SESSION" pane send-keys "$PANE_ID" enter >/dev/null; }
 watchdog_confirm() {
   local payload=$1 attempt styled plain identity composer
@@ -445,7 +453,7 @@ watchdog_submit() {  # <payload>
   local payload=$1 before=$HASH after content
   watchdog_observe
   [ "$VERDICT" = clear ] && [ "$HASH" = "$before" ] || { FAIL_REASON='changed-before-action'; return 1; }
-  watchdog_send "$payload" || { FAIL_REASON='send-failed'; return 1; }
+  watchdog_type "$payload" || { FAIL_REASON='send-failed'; return 1; }
   sleep 0.2
   after=$(watchdog_read) || { FAIL_REASON='capture-failed'; return 1; }
   case "$(watchdog_screen "$after")" in usage-limit|busy) FAIL_REASON='unsafe-before-submit'; return 1 ;; esac
@@ -550,6 +558,7 @@ watchdog_restart_baseline() {
   beacon=$(fm_sup_stat_mtime "$STATE/.last-watcher-beat") || beacon=
   oldest=$(watchdog_oldest_row) || oldest=
   watchdog_transcript_baseline || true
+  : > "$DIR/typed"
   watchdog_stall_update --arg b "$beacon" --arg o "$oldest" --argjson now "$NOW" \
     '.beacon=$b | .oldest=$o | .pane="unreadable" | .progress=$now
     | .stage="restarted" | .stage_at=$now | .restart_tries=0'
@@ -619,9 +628,9 @@ watchdog_reconcile_restart() {
 
 # Stall detection and recovery; see the header for the progress contract.
 watchdog_stall() {
-  local beacon oldest pane progressed=0 stage stage_at quiet prev
+  local beacon oldest pane progressed=0 moved=0 stage stage_at quiet prev
   STALL_ACTED=0
-  if ! watchdog_under_way; then rm -f "$DIR/stall.json"; return 0; fi
+  if ! watchdog_under_way; then rm -f "$DIR/stall.json" "$DIR/typed"; return 0; fi
   beacon=$(fm_sup_stat_mtime "$STATE/.last-watcher-beat") || beacon=
   oldest=$(watchdog_oldest_row) || return 1
   pane=$(watchdog_progress_hash)
@@ -649,7 +658,18 @@ watchdog_stall() {
     | if .stage == "down" and .down_reason == "" then .down_reason="automatic recovery did not bring it back" else . end'
   stage=$(printf '%s' "$SREC" | jq -r .stage)
   if [ "$stage" = restarting ]; then
-    watchdog_reconcile_restart
+    if [ "$STALL_RESTART" = 1 ]; then watchdog_reconcile_restart; return 0; fi
+    # A restart interrupted while it was enabled: with restart off, never
+    # stop or relaunch; a running Claude resumes watching, none is down.
+    STALL_ACTED=1
+    if watchdog_restart_proven; then
+      watchdog_log rearmed stall-restarting-restart-off
+      watchdog_stall_update --argjson now "$NOW" \
+        '.progress=$now | .stage="watching" | .stage_at=$now | .restart_tries=0 | .down_reason="" | .alerted=false'
+    else
+      watchdog_log held stall-restarting-restart-off
+      watchdog_enter_down "an earlier automatic restart was interrupted and automatic restart is now off, so it needs restarting by hand"
+    fi
     return 0
   fi
   prev=$(printf '%s' "$SREC" | jq -r .beacon)
@@ -658,12 +678,20 @@ watchdog_stall() {
   esac
   prev=$(printf '%s' "$SREC" | jq -r .oldest)
   [ -z "$prev" ] || [ "$oldest" = "$prev" ] || progressed=1
+  [ "$VERDICT" != usage-limit ] || progressed=1
   prev=$(printf '%s' "$SREC" | jq -r .pane)
   if [ "$pane" != unreadable ]; then
-    [ "$prev" = unreadable ] || [ "$pane" = "$prev" ] || progressed=1
+    [ "$prev" = unreadable ] || [ "$pane" = "$prev" ] || moved=1
   fi
-  ! watchdog_transcript_moved || progressed=1
-  [ "$VERDICT" != usage-limit ] || progressed=1
+  ! watchdog_transcript_moved || moved=1
+  # After the watchdog typed or restarted, a screen or transcript change may
+  # be only the turn it caused (a failing turn prints a new error and goes
+  # idle), so only the signals above clear the stall until they occur.
+  if [ "$progressed" = 1 ]; then
+    rm -f "$DIR/typed"
+  elif [ "$moved" = 1 ] && [ ! -e "$DIR/typed" ]; then
+    progressed=1
+  fi
   watchdog_stall_update --arg b "$beacon" --arg o "$oldest" --arg p "$pane" '.beacon=$b | .oldest=$o | .pane=$p'
   if [ "$progressed" = 1 ]; then
     [ "$stage" = watching ] || watchdog_log rearmed "stall-$stage"
@@ -797,7 +825,7 @@ watchdog_tick() {
   payload='Resume the interrupted work.'
   watchdog_observe
   [ "$VERDICT" = error ] && [ "$HASH" = "$oldhash" ] || { watchdog_hold changed-after-claim; return; }
-  watchdog_send "$payload" || { watchdog_hold send-failed; return; }
+  watchdog_type "$payload" || { watchdog_hold send-failed; return; }
   sleep 0.2
   after=$(watchdog_read) || { watchdog_hold capture-failed; return; }
   case "$(watchdog_screen "$after")" in usage-limit|busy) watchdog_hold unsafe-before-submit; return ;; esac

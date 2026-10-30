@@ -447,7 +447,7 @@ watchdog_send() {
 }
 stall_case() {
   reset_case
-  rm -f "$DIR/stall.json" "$DIR/transcript-mark" "$DIR/urgent" "$DIR/launches" "$FM_WAKE_QUEUE" "$DIR/queue-alert" "$DIR/queue-nudge.json"
+  rm -f "$DIR/stall.json" "$DIR/typed" "$DIR/transcript-mark" "$DIR/urgent" "$DIR/launches" "$FM_WAKE_QUEUE" "$DIR/queue-alert" "$DIR/queue-nudge.json"
   UNDER_WAY=1 BEACON=500 PANE=$CLEAR CONFIRM_NATIVE=1 STOPPED=0 STOP_OK=1 LAUNCH_OK=1
   PROC_STATE=agent AFTER_LAUNCH_STATE=agent LAST_SENT='' URGENT_RESULT=sent
   FM_WATCHDOG_TRANSCRIPT_DIR='' RESTART_WRITES_TRANSCRIPT=0
@@ -466,14 +466,50 @@ TICK=2800; watchdog_tick
 check "$SENT" 1 'thirty quiet minutes send one stall nudge'
 case "$LAST_SENT" in 'Watchdog: no supervision progress for 30 minutes; run bin/fm-wake-drain.sh'*) pass 'stall nudge names the drain' ;; *) fail "unexpected stall payload: $LAST_SENT" ;; esac
 check "$(stage)" nudged 'nudge moves the stall to its restart window'
-# The confirmed nudge turn changed the screen: that is progress.
+# The screen left by the watchdog's own nudge is not progress; an idle
+# watcher beacon after it is.
 IDENTITY=$'claude\tidle'; PANE=$'● Draining now\n────────────────────\n❯ \n────────────────────'; TICK=2815; watchdog_tick
-check "$(stage)" watching 'screen progress after the nudge rearms the timer'
+check "$(stage)" nudged 'the screen left by the nudged turn is not progress'
+BEACON=501; TICK=2830; watchdog_tick
+check "$(stage)" watching 'an idle watcher beacon after the nudge rearms the timer'
+PANE=$'● Later output\n────────────────────\n❯ \n────────────────────'; TICK=2845; watchdog_tick
+check "$(stage)" watching 'screen progress counts again once real progress cleared the nudge'
 
-stall_case
-watchdog_tick; TICK=2800; watchdog_tick
-TICK=2801; watchdog_tick
-check "$(stage)" watching 'the screen left by the nudged turn is progress'
+# A supervisor whose every turn fails (an expired login) prints a new error
+# row and returns to idle after each nudge; that is not progress.
+# Only typing starts a turn here, so the screen moves only after the watchdog types.
+failing_turn() {
+  [ "$SENT" -gt "$ANSWERED" ] || return 0
+  ANSWERED=$SENT; FAILS=$((FAILS + 1)); IDENTITY=$'claude\tidle'
+  PANE=$'❯ Watchdog: no supervision progress\n⎿ API Error: 401 unauthorized (attempt '"$FAILS"$')\n────────────────────\n❯ \n────────────────────'
+  [ -z "$FM_WATCHDOG_TRANSCRIPT_DIR" ] || printf '{"n":%s}\n' "$FAILS" > "$FM_WATCHDOG_TRANSCRIPT_DIR/turn.jsonl"
+}
+stall_case; FAILS=0 ANSWERED=0
+FM_WATCHDOG_TRANSCRIPT_DIR=$TMP/failing-transcripts
+rm -rf "$FM_WATCHDOG_TRANSCRIPT_DIR"; mkdir -p "$FM_WATCHDOG_TRANSCRIPT_DIR"
+watchdog_tick
+for t in $(seq 1300 300 44200); do
+  failing_turn; TICK=$t; watchdog_tick
+done
+check "$SENT" 1 'a supervisor failing every turn is nudged once, not every half hour'
+check "$(stage)" down 'a supervisor failing every turn reaches the down stage'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'a supervisor failing every turn sends one urgent alert'
+check "$(jq -r 'select(.event=="alerted") | .at' "$DIR/events.jsonl" | head -1)" 4600 'the failing-loop alert fires one stall interval after the nudge'
+
+# The aged-queue ring is also the watchdog's own typing: a ring answered by
+# a failing turn cannot keep resetting the stall timer.
+stall_case; FAILS=0 ANSWERED=0
+printf '300\t31\tcheck\tmail\tpending\n' > "$FM_WAKE_QUEUE"
+watchdog_tick
+for t in $(seq 1300 300 8200); do
+  failing_turn; TICK=$t; watchdog_tick
+  TICK=$((t + 15)); watchdog_tick
+done
+[ "$SENT" -ge 2 ] || fail "the queue ring case never rang (sent $SENT)"
+pass 'the stuck queue is rung while the supervisor fails'
+check "$(stage)" down 'rings answered by failing turns reach the down stage'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'rings answered by failing turns send one urgent alert'
+rm -f "$FM_WAKE_QUEUE"
 
 hung_case
 PANE=$'❯ run it\n● Processed 1/100 records\n────────────────────\n❯ \n────────────────────'
@@ -662,6 +698,29 @@ TICK=1001; watchdog_tick
 check "$STOPPED" 1 'an interrupted restart retries once'
 check "$(stage)" restarted 'the interrupted restart retry is proven'
 check "$(jq -r .restart_tries "$DIR/stall.json")" 0 'a proven retry clears its restart receipt'
+
+# A leftover restarting record never stops anything once restart is off.
+for proc in shell agent; do
+  hung_case
+  watchdog_tick
+  jq '.stage="restarting" | .stage_at=1000 | .restart_tries=1' "$DIR/stall.json" > "$DIR/stall.json.tmp"
+  mv "$DIR/stall.json.tmp" "$DIR/stall.json"
+  PROC_STATE=$proc PANE=$CLEAR IDENTITY=$'claude\tidle'
+  TICK=1001; watchdog_tick
+  check "$STOPPED" 0 "a leftover restart record with restart off never stops the supervisor ($proc)"
+  [ ! -e "$DIR/launches" ] || fail "a leftover restart record with restart off launched a supervisor ($proc)"
+  pass "a leftover restart record with restart off never launches a supervisor ($proc)"
+done
+check "$(stage)" watching 'a running supervisor after a leftover restart record resumes watching'
+[ ! -e "$DIR/urgent" ] || fail 'a running supervisor after a leftover restart record alerted the captain'
+pass 'a running supervisor after a leftover restart record does not alert'
+hung_case
+watchdog_tick
+jq '.stage="restarting" | .stage_at=1000 | .restart_tries=1' "$DIR/stall.json" > "$DIR/stall.json.tmp"
+mv "$DIR/stall.json.tmp" "$DIR/stall.json"
+PROC_STATE=shell; TICK=1001; watchdog_tick
+check "$(stage)" down 'no supervisor in the pane after a leftover restart record is a down incident'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'no supervisor after a leftover restart record sends one urgent alert'
 
 restart_hung_case
 watchdog_tick

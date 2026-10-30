@@ -252,9 +252,16 @@ wedge_alarm_notify() {  # <summary> <marker>
 #     rolling 24 hours, across all conditions;
 #   - a failed delivery may retry the same condition after
 #     FM_URGENT_ALERT_RETRY_SECS (default 900).
+# A timeout or a reply without a message id may still have reached the phone:
+# it reports failed, is logged as `unconfirmed`, and counts as delivered for
+# every limit above, so a lost reply cannot repeat the message each retry.
+# The message id comes from the whole reply as JSON, else from its last JSON
+# line, so a text banner before the JSON does not hide it.
 # Every attempt appends one JSON line to state/urgent-alert/sent.jsonl with its
 # time, condition, key, result, reason, message hash and, when delivered, the
 # platform message id. Message text and platform chat ids are never logged.
+# Limits are read line by line, so an unreadable (torn) line is ignored rather
+# than muting every later alert, and a new record never joins a torn line.
 
 fm_urgent_alert_condition_ok() {  # <condition>
   case "$1" in supervisor-down|carve-out-blocked|machine-down|test) return 0 ;; esac
@@ -266,6 +273,7 @@ fm_urgent_alert_int() {  # <value> <default>
 }
 
 fm_urgent_alert_record() {  # <log> <now> <condition> <key> <result> <reason> <sha> [message-id]
+  if [ -s "$1" ] && [ "$(tail -c 1 "$1" | od -An -c | tr -d ' ')" != '\n' ]; then printf '\n' >> "$1"; fi
   jq -cn --argjson at "$2" --arg condition "$3" --arg key "$4" --arg result "$5" \
     --arg reason "$6" --arg sha "$7" --arg id "${8:-}" \
     '{at:$at,condition:$condition,key:$key,result:$result,reason:$reason,message_sha:$sha}
@@ -334,13 +342,14 @@ fm_urgent_alert() {
   fi
   [ -f "$log" ] || : > "$log"
   reason=
-  verdict=$(jq -rs --argjson now "$now" --arg c "$condition" --arg k "$key" \
+  verdict=$(jq -rRn --argjson now "$now" --arg c "$condition" --arg k "$key" \
     --argjson cs "$cond_secs" --argjson ds "$dedupe_secs" --argjson rs "$retry_secs" '
-      [ .[] | select(type == "object") ] as $r
-      | if any($r[]; .result == "sent" and .condition == $c and .key == $k and $now - .at < $ds) then "duplicate"
-        elif any($r[]; .result == "sent" and .condition == $c and $now - .at < $cs) then "condition-rate-limit"
+      [ inputs | fromjson? | select(type == "object" and (.at | type) == "number") ] as $r
+      | [ $r[] | select(.result == "sent" or .result == "unconfirmed") ] as $d
+      | if any($d[]; .condition == $c and .key == $k and $now - .at < $ds) then "duplicate"
+        elif any($d[]; .condition == $c and $now - .at < $cs) then "condition-rate-limit"
         elif any($r[]; .result == "failed" and .condition == $c and $now - .at < $rs) then "retry-backoff"
-        else [$r[] | select(.result == "sent" and $now - .at < 86400)] | length | tostring end' "$log" 2>/dev/null) \
+        else [$d[] | select($now - .at < 86400)] | length | tostring end' "$log" 2>/dev/null) \
     || verdict=corrupt-log
   case "$verdict" in
     duplicate|condition-rate-limit|retry-backoff|corrupt-log) reason=$verdict ;;
@@ -355,8 +364,11 @@ fm_urgent_alert() {
   fi
   ( umask 077; printf '%s\n' "$message" > "$lock/message" )
   if out=$(fm_urgent_alert_deliver "$lock/message" 2>/dev/null); then rc=0; else rc=$?; fi
-  id=$(printf '%s' "$out" | jq -r 'select(type == "object" and .success == true and .error == null)
-    | .message_id // empty | tostring' 2>/dev/null) || id=
+  id=$(printf '%s' "$out" | jq -rRs '
+    (try fromjson catch null) as $whole
+    | (if $whole != null then [$whole] else [split("\n")[] | fromjson?] end)
+    | map(select(type == "object" and .success == true and .error == null and .message_id != null))
+    | last | .message_id // empty | tostring' 2>/dev/null) || id=
   if [ "$rc" -eq 0 ] && [ -n "$id" ]; then
     fm_urgent_alert_record "$log" "$now" "$condition" "$key" sent '' "$sha" "$id"
     rm -rf "$lock"
@@ -365,13 +377,14 @@ fm_urgent_alert() {
     fm_urgent_alert_result 'sent'
     return 0
   fi
+  verdict=failed
   case "$rc" in
-    0) reason='no-message-id' ;;
-    124) reason='delivery-timeout' ;;
+    0) reason='no-message-id'; verdict=unconfirmed ;;
+    124) reason='delivery-timeout'; verdict=unconfirmed ;;
     127) reason='hermes-not-found' ;;
     *) reason='delivery-failed' ;;
   esac
-  fm_urgent_alert_record "$log" "$now" "$condition" "$key" failed "$reason" "$sha"
+  fm_urgent_alert_record "$log" "$now" "$condition" "$key" "$verdict" "$reason" "$sha"
   rm -rf "$lock"
   fm_urgent_alert_result "failed:$reason"
   return 1

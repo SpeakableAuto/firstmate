@@ -23,6 +23,8 @@ case "${SENDER_MODE:-ok}" in
   ok) printf '{"success": true, "platform": "telegram", "chat_id": "999", "message_id": "%s"}\n' "$((4000 + n))" ;;
   error) printf '{"error": "Telegram send failed"}\n'; exit 1 ;;
   noid) printf '{"success": true}\n' ;;
+  banner) printf 'Sending to telegram...\n{"success": true, "message_id": "%s"}\n' "$((4000 + n))" ;;
+  pretty) printf '{\n  "success": true,\n  "message_id": "%s"\n}\n' "$((4000 + n))" ;;
   hang) sleep 30 ;;
 esac
 SENDER
@@ -105,6 +107,50 @@ check "$OUT" failed:no-message-id 'a reply without a message id is not proof of 
 rm -rf "$FM_HOME/state/urgent-alert"
 SENDER_MODE=hang FM_WEDGE_ALARM_TIMEOUT_SECS=1 run send supervisor-down sup 'Firstmate: supervisor stopped.'
 check "$OUT" failed:delivery-timeout 'a hung sender is bounded'
+
+# An ambiguous delivery may have reached the phone, so it counts against the
+# condition limit and the daily cap instead of retrying every retry window.
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+at 210000
+SENDER_MODE=noid run send supervisor-down sup-a 'Firstmate: supervisor stopped.'
+check "$OUT" failed:no-message-id 'an id-less reply is still not proof of delivery'
+check "$(tail -1 "$LOG" | jq -r .result)" unconfirmed 'an id-less reply is logged as unconfirmed'
+at 211000
+run send supervisor-down sup-b 'Firstmate: supervisor still stopped.'
+check "$OUT" skipped:condition-rate-limit 'an unconfirmed delivery holds its condition like a sent one'
+SENDER_MODE=hang FM_WEDGE_ALARM_TIMEOUT_SECS=1 run send machine-down m0002 'Firstmate: 0002 unreachable.'
+check "$OUT" failed:delivery-timeout 'a timed-out delivery is still not proof'
+check "$(tail -1 "$LOG" | jq -r .result)" unconfirmed 'a timed-out delivery is logged as unconfirmed'
+FM_URGENT_ALERT_DAILY_CAP=2 run send carve-out-blocked pr-1 'Firstmate: waiting on your decision.'
+check "$OUT" skipped:daily-cap 'unconfirmed deliveries count toward the daily cap'
+check "$(sent_count)" 2 'only the two ambiguous attempts reached the sender'
+for t in 1 2 3 4 5 6 7 8; do
+  at $((211000 + t * 3600))
+  SENDER_MODE=noid run send supervisor-down "sup-$t" 'Firstmate: supervisor stopped.'
+done
+check "$(sent_count)" 3 'id-less replies reach the phone at most once per condition window'
+
+# A text line before the JSON, or pretty-printed JSON, still yields the id.
+for mode in banner pretty; do
+  rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+  SENDER_MODE=$mode run send supervisor-down "sup-$mode" 'Firstmate: supervisor stopped.'
+  check "$OUT" sent "a $mode Hermes reply is parsed"
+  check "$(tail -1 "$LOG" | jq -r .message_id)" 4001 "a $mode Hermes reply records its message id"
+done
+
+# One torn log line never silences later alerts or loses the intact limits.
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+at 220000
+run send supervisor-down s1 'Firstmate: supervisor stopped.'
+check "$OUT" sent 'first alert before the torn line is delivered'
+printf '{"at":220001,"condition":"machi' >> "$LOG"
+at 220100
+run send supervisor-down s2 'Firstmate: supervisor still stopped.'
+check "$OUT" skipped:condition-rate-limit 'intact records still enforce limits past a torn line'
+run send machine-down m0002 'Firstmate: 0002 unreachable.'
+check "$OUT" sent 'a torn line does not silence a new alert'
+check "$(tail -1 "$LOG" | jq -r .result)" sent 'the record after a torn line starts on its own line'
+check "$(jq -R 'fromjson? | .result' "$LOG" | wc -l | tr -d ' ')" 3 'only the torn line is unreadable'
 
 run log
 check "$RC" 2 'the unrelated log subcommand is not exposed'

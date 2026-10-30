@@ -38,6 +38,7 @@ It always sends to Hermes' Telegram home channel.
 Hermes keeps the platform login; firstmate only hands it the plain message.
 Delivery is rate limited to one message per condition per six hours, the same condition and key once per day, and four messages in any 24 hours.
 Every attempt is logged in `state/urgent-alert/sent.jsonl`, delivered attempts include the platform message id, and message text and Telegram chat ids are never logged.
+A timeout or a reply without a message id may still have reached the phone, so it is reported as failed but counts toward those limits, and an unreadable log line is skipped rather than muting later alerts.
 `fm_urgent_alert` in [`bin/fm-active-alert-lib.sh`](../bin/fm-active-alert-lib.sh) owns those limits and the log format, and the script header owns the commands, including the scheduled `check-machine` probe.
 `tests/fm-active-alert.test.sh` covers the allow-list, fixed Telegram hand-off, rate limits, retry, message-id log and machine probe with a recording sender.
 
