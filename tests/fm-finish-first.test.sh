@@ -20,7 +20,7 @@ check() {
   assert_contains "$out" "$needle" "admission diagnostic"
 }
 bash "$ROOT/bin/fm-tasks-axi.sh" hold urgent --reason 'outside answer' --kind external >/dev/null
-check 1 oldest candidate
+check 1 carried candidate
 bash "$ROOT/bin/fm-tasks-axi.sh" unhold urgent >/dev/null
 check 0 'allowed' urgent
 bash "$ROOT/bin/fm-tasks-axi.sh" hold urgent --reason 'outside answer' --kind external >/dev/null
@@ -34,30 +34,44 @@ bash "$ROOT/bin/fm-tasks-axi.sh" hold current --reason 'outside answer' --kind e
 check 0 allowed candidate
 # WIP counts backlog rows, including holds, and never parked metadata.
 bash "$ROOT/bin/fm-tasks-axi.sh" unhold urgent >/dev/null
-printf '1\n' > "$FM_HOME/config/crew-slot-cap"
+printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
 check 1 'WIP' urgent
 bash "$ROOT/bin/fm-tasks-axi.sh" unhold current >/dev/null
 check 0 resume current
-printf '2\n' > "$FM_HOME/config/crew-slot-cap"
+printf '{"version":1,"max_crew":2}\n' > "$FM_HOME/config/crew-placement.json"
 check 0 allowed urgent
-printf 'oops\n' > "$FM_HOME/config/crew-slot-cap"
-check 2 'crew-slot-cap' urgent
-rm "$FM_HOME/config/crew-slot-cap"
+printf '{"version":1,"max_crew":true}\n' > "$FM_HOME/config/crew-placement.json"
+check 2 'max_crew' urgent
+rm "$FM_HOME/config/crew-placement.json"
 mkdir -p "$FM_HOME/state"
 printf 'kind=ship\n' > "$FM_HOME/state/parked.meta"
 check 0 allowed urgent
 check 2 'missing' absent
-pass 'finish-first orders real backlog rows and bounds WIP without task-record counts'
+pass 'finish-first prioritizes carried work and bounds WIP from placement'
 
-# Existing placement crew limits supply the WIP default.
-printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
-check 1 WIP urgent
-printf '2\n' > "$FM_HOME/config/crew-slot-cap"
+# Two prior AEST days with more starts than finishes activate the stop signal.
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PY'
+import datetime as dt, json, sys
+aest = dt.timezone(dt.timedelta(hours=10))
+today = dt.datetime.now(dt.timezone.utc).astimezone(aest).date()
+rows = [{'type':'coverage','version':1,
+         'timestamp':dt.datetime.combine(today-dt.timedelta(days=3), dt.time(), aest).astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}]
+for offset in (2, 1):
+    day = today-dt.timedelta(days=offset)
+    for number in (1, 2):
+        token = f'{day}-{number}'
+        stamp = dt.datetime.combine(day, dt.time(12), aest).astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        base = {'token':token,'task_id':token,'priority':2,'landing':'none','timestamp':stamp}
+        rows.append(dict(base, type='attempt'))
+        rows.append(dict(base, type='transition', action='start', result=0))
+with open(sys.argv[1], 'w') as stream:
+    for row in rows:
+        stream.write(json.dumps(row)+'\n')
+PY
+check 1 'two-day stop' candidate
 check 0 allowed urgent
-rm "$FM_HOME/config/crew-slot-cap"
-printf '{"version":1,"max_crew":true}\n' > "$FM_HOME/config/crew-placement.json"
-check 2 'max_crew' urgent
-pass 'WIP reuses placement crew limits with an explicit override'
+pass 'two-day stop blocks the same level while higher priority jumps'
+
 # The placement decision must retain the finish-first refusal and queue it.
 printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
 CONFIG="$FM_HOME/config" DATA="$FM_HOME/data" STATE="$FM_HOME/state"
@@ -77,7 +91,7 @@ rc=0
 fm_placement_publish "$decision" >/dev/null 2>&1 || rc=$?
 expect_code 1 "$rc" 'placement refuses work above WIP'
 assert_equals '["finish-first"]' "$(jq -c '.waits.urgent.failed' "$STATE/capacity.json")" 'refusal enters existing queue'
-printf '2\n' > "$CONFIG/crew-slot-cap"
+printf '{"version":1,"max_crew":2}\n' > "$CONFIG/crew-placement.json"
 FM_PLACEMENT_MODE=recheck
 decision=$(fm_placement_finish_first "$seed")
 fm_placement_publish "$decision" >/dev/null

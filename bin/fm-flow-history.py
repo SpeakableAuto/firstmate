@@ -23,9 +23,9 @@ import stat
 import sys
 import time
 import uuid
-from zoneinfo import ZoneInfo
 
 LIMIT = 16 * 1024 * 1024
+AEST = dt.timezone(dt.timedelta(hours=10), 'AEST')
 
 
 def now():
@@ -67,15 +67,17 @@ def append(stream, row):
     os.fsync(stream.fileno())
 
 
-def begin(path, task_id, priority):
+def begin(path, task_id, priority, landing):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', task_id):
         raise ValueError('invalid task id')
+    if landing not in ('none', 'merge', 'local'):
+        raise ValueError('invalid landing evidence')
     with journal(path, True) as stream:
         if os.fstat(stream.fileno()).st_size == 0:
             append(stream, {'type': 'coverage', 'version': 1, 'timestamp': now()})
         token = uuid.uuid4().hex
         append(stream, dict(type='attempt', token=token, task_id=task_id,
-                            priority=priority, timestamp=now()))
+                            priority=priority, landing=landing, timestamp=now()))
     print(token)
 
 
@@ -105,10 +107,10 @@ def finish(path, token, action, task_id, result, output):
             raise ValueError('journal attempt already completed')
         append(stream, dict(type='transition' if changed else 'complete', token=token,
                             action=action, task_id=task_id, priority=attempt['priority'],
-                            timestamp=now(), result=result))
+                            landing=attempt.get('landing', 'none'), timestamp=now(), result=result))
 
 
-def read_history(path, timezone=None):
+def read_history(path):
     with journal(path) as stream:
         rows = [json.loads(line) for line in stream]
     if any(not isinstance(row, dict) for row in rows):
@@ -121,7 +123,7 @@ def read_history(path, timezone=None):
     for row in rows:
         stamp = dt.datetime.strptime(row['timestamp'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc)
         row['stamp'] = stamp
-        row['day'] = stamp.astimezone(timezone).date()
+        row['day'] = stamp.astimezone(AEST).date()
         if stamp < rows[0].get('stamp', stamp):
             raise ValueError('journal row precedes coverage')
         if row['type'] == 'coverage':
@@ -134,6 +136,8 @@ def read_history(path, timezone=None):
         if row['type'] == 'attempt':
             if token in attempts:
                 raise ValueError('duplicate attempt')
+            if row.get('landing', 'none') not in ('none', 'merge', 'local'):
+                raise ValueError('invalid landing evidence')
             attempts[token] = row
         elif row['type'] in ('transition', 'complete'):
             if token not in attempts or token in completed:
@@ -145,6 +149,12 @@ def read_history(path, timezone=None):
                 raise ValueError('journal receipt identity mismatch')
             if row['action'] not in ('start', 'done', 'reopen'):
                 raise ValueError('invalid journal action')
+            landing = row.get('landing', attempt.get('landing', 'none'))
+            if landing != attempt.get('landing', 'none'):
+                raise ValueError('journal receipt landing mismatch')
+            if row['action'] != 'done' and landing != 'none':
+                raise ValueError('landing evidence belongs only to completion')
+            row['landing'] = landing
             completed.add(token)
             if row['type'] == 'transition':
                 if row['result'] != 0:
@@ -157,44 +167,44 @@ def read_history(path, timezone=None):
     return rows[0]['day'] + dt.timedelta(days=1), events
 
 
-def report(path, since, until, timezone=None):
+def report(path, day):
     try:
-        coverage, events = read_history(path, timezone)
+        coverage, events = read_history(path)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f'flow_history: unknown ({exc})')
         print('stop_starting: unknown')
         return
-    print(f'flow_history: {timezone or "system local time"}; complete coverage from {coverage}; wrapper/lifecycle transitions only')
+    print(f'flow_history: AEST; complete coverage from {coverage}; wrapper/lifecycle transitions only')
     daily = {}
     for row in events:
-        day = daily.setdefault(row['day'], {'start': set(), 'done': set(), 'reopen': set()})
-        day[row['action']].add(row['task_id'])
-    def counts(day):
-        return daily.get(day, {'start': set(), 'done': set(), 'reopen': set()})
-    today = dt.datetime.now(dt.timezone.utc).astimezone(timezone).date()
-    day = since
-    while day <= until:
-        if day < coverage or day >= today:
-            print(f'{day} unknown (outside complete journal coverage)')
+        items = daily.setdefault(row['day'], {
+            'start': set(), 'finished': set(), 'closed-not-landed': set(), 'reopen': set()
+        })
+        if row['action'] == 'done':
+            key = 'finished' if row['landing'] in ('merge', 'local') else 'closed-not-landed'
+            items[key].add(row['task_id'])
         else:
-            items = counts(day)
-            print(f"{day} finished={len(items['done'])} started={len(items['start'])} reopened={len(items['reopen'])}")
-            for key, label in (('done', 'finished'), ('start', 'started'), ('reopen', 'reopened')):
-                print(f"  {label}: {', '.join(sorted(items[key])) or '-'}")
-        day += dt.timedelta(days=1)
-    previous = until - dt.timedelta(days=1)
-    if previous < coverage or until >= today:
+            items[row['action']].add(row['task_id'])
+    empty = {'start': set(), 'finished': set(), 'closed-not-landed': set(), 'reopen': set()}
+    def counts(value):
+        return daily.get(value, empty)
+    today = dt.datetime.now(dt.timezone.utc).astimezone(AEST).date()
+    if day < coverage or day >= today:
+        print(f'{day} unknown (outside complete journal coverage)')
+    else:
+        items = counts(day)
+        print(f"{day} finished={len(items['finished'])} closed-not-landed={len(items['closed-not-landed'])} "
+              f"started={len(items['start'])} reopened={len(items['reopen'])}")
+        for key, label in (('finished', 'finished'), ('closed-not-landed', 'closed-not-landed'),
+                           ('start', 'started'), ('reopen', 'reopened')):
+            print(f"  {label}: {', '.join(sorted(items[key])) or '-'}")
+    previous = day - dt.timedelta(days=1)
+    if previous < coverage or day >= today:
         signal = 'unknown'
     else:
-        signal = 'yes' if all(len(counts(d)['start']) > len(counts(d)['done']) for d in (previous, until)) else 'no'
+        signal = 'yes' if all(len(counts(d)['start']) > len(counts(d)['finished'])
+                              for d in (previous, day)) else 'no'
     print(f'stop_starting: {signal}')
-
-
-def calendar_zone(value):
-    try:
-        return ZoneInfo(value)
-    except (KeyError, ValueError) as exc:
-        raise argparse.ArgumentTypeError(f'unknown calendar timezone: {value}') from exc
 
 
 def main():
@@ -204,28 +214,25 @@ def main():
     start = commands.add_parser('begin')
     start.add_argument('task_id')
     start.add_argument('priority', type=int)
+    start.add_argument('landing', choices=['none', 'merge', 'local'])
     end = commands.add_parser('finish')
     end.add_argument('token')
     end.add_argument('action', choices=['start', 'done', 'reopen'])
     end.add_argument('task_id')
     end.add_argument('result', type=int)
     show = commands.add_parser('report')
-    show.add_argument('--since', required=True, type=dt.date.fromisoformat)
-    show.add_argument('--until', type=dt.date.fromisoformat)
-    show.add_argument('--timezone', type=calendar_zone, help='IANA calendar zone; default system local time')
+    show.add_argument('--date', type=dt.date.fromisoformat,
+                      help='completed AEST date; default yesterday')
     args = parser.parse_args()
     path = args.data / 'flow-history.jsonl'
     try:
         if args.command == 'begin':
-            begin(path, args.task_id, args.priority)
+            begin(path, args.task_id, args.priority, args.landing)
         elif args.command == 'finish':
             finish(path, args.token, args.action, args.task_id, args.result, sys.stdin.read())
         else:
-            if args.until is None:
-                args.until = dt.datetime.now(dt.timezone.utc).astimezone(args.timezone).date() - dt.timedelta(days=1)
-            if args.until < args.since or (args.until - args.since).days > 3660:
-                raise ValueError('report range must be ordered and at most 3661 days')
-            report(path, args.since, args.until, args.timezone)
+            day = args.date or dt.datetime.now(dt.timezone.utc).astimezone(AEST).date() - dt.timedelta(days=1)
+            report(path, day)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f'flow-history: {exc}', file=sys.stderr)
         return 2

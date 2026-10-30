@@ -66,26 +66,18 @@ def read_rows(text):
     return rows
 
 
-def admit(rows, task_id, cap_file):
+def admit(rows, task_id, config_dir, stop_starting):
     cap = None
-    if cap_file.is_symlink():
-        raise ValueError('crew-slot-cap must be a regular file')
-    if cap_file.exists():
-        if not cap_file.is_file():
-            raise ValueError('crew-slot-cap must be a regular file')
-        raw = cap_file.read_text()
-        if not re.fullmatch(r'[1-9][0-9]{0,8}\n?', raw):
-            raise ValueError('crew-slot-cap must be a positive decimal integer')
-        cap = int(raw)
-    else:
-        placement = cap_file.with_name('crew-placement.json')
-        if placement.exists() or placement.is_symlink():
-            if placement.is_symlink() or not placement.is_file():
-                raise ValueError('crew-placement.json must be a regular file')
-            profile = json.loads(placement.read_text())
-            cap = profile.get('max_crew') if isinstance(profile, dict) else None
-            if type(cap) is not int or cap <= 0:
-                raise ValueError('crew-placement.json max_crew must be a positive integer')
+    if stop_starting not in ('yes', 'no', 'unknown'):
+        raise ValueError('invalid stop-starting signal')
+    placement = config_dir / 'crew-placement.json'
+    if placement.exists() or placement.is_symlink():
+        if placement.is_symlink() or not placement.is_file():
+            raise ValueError('crew-placement.json must be a regular file')
+        profile = json.loads(placement.read_text())
+        cap = profile.get('max_crew') if isinstance(profile, dict) else None
+        if type(cap) is not int or cap <= 0:
+            raise ValueError('crew-placement.json max_crew must be a positive integer')
     target = next((row for row in rows if row['id'] == task_id), None)
     if target is None:
         raise ValueError(f'backlog item {task_id} missing')
@@ -103,13 +95,21 @@ def admit(rows, task_id, cap_file):
         oldest = min(inflight, key=lambda r: (r['priority'], r['order']))
         print(f"finish-first: WIP {len(inflight)}/{2 * cap}; finish {oldest['id']} first")
         return 1
+    finishable = [r for r in inflight if r['held'] == 'no' and r['blocked'] == 'no']
+    if stop_starting == 'yes' and finishable:
+        first = min(finishable, key=lambda r: (r['priority'], r['order']))
+        if target['priority'] >= first['priority']:
+            print(f"finish-first: two-day stop; finish {first['id']} first "
+                  f"(priority {first['priority']}, in_flight)")
+            return 1
     older = [r for r in work if r['id'] != task_id
              and r['state'] in ('queued', 'in_flight')
              and r['held'] == 'no' and r['blocked'] == 'no'
              and (r['priority'] < target['priority']
-                  or (r['priority'] == target['priority'] and r['order'] < target['order']))]
+                  or (r['priority'] == target['priority']
+                      and (r['state'] == 'in_flight' or r['order'] < target['order'])))]
     if older:
-        first = min(older, key=lambda r: (r['priority'], r['order']))
+        first = min(older, key=lambda r: (r['priority'], r['state'] != 'in_flight', r['order']))
         print(f"finish-first: finish {first['id']} first (priority {first['priority']}, {first['state']})")
         return 1
     print(f'finish-first: start allowed for {task_id}')
@@ -118,7 +118,7 @@ def admit(rows, task_id, cap_file):
 
 if __name__ == '__main__':
     try:
-        sys.exit(admit(read_rows(sys.stdin.read()), sys.argv[1], pathlib.Path(sys.argv[2])))
+        sys.exit(admit(read_rows(sys.stdin.read()), sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3]))
     except (ValueError, OSError) as exc:
         print(f'finish-first: {exc}', file=sys.stderr)
         sys.exit(2)

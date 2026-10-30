@@ -3,15 +3,25 @@
 # Call begin before the mutation and finish with its unchanged output/status.
 # Requires fm-backlog-transition-lib.sh for the bounded priority read.
 FM_FLOW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-fm_flow_begin() {  # <data> <verb> <id>; sets FM_FLOW_TOKEN
-  local data=$1 verb=$2 id=$3 detail priority
+fm_flow_begin() {  # <data> <verb> <id> [mutation-flag...]; sets FM_FLOW_TOKEN
+  local data=$1 verb=$2 id=$3 detail priority landing=none previous=
+  shift 3
   FM_FLOW_TOKEN=
   case "$verb" in start|done|close|reopen) ;; *) return 0 ;; esac
+  if [ "$verb" = done ] || [ "$verb" = close ]; then
+    for arg in "$@"; do
+      case "$previous:$arg" in
+        --pr:*) landing=merge ;;
+        --note:local\ main) landing=local ;;
+      esac
+      previous=$arg
+    done
+  fi
   detail=$(fm_backlog_row_show "$data" "$id") || return 1
   priority=$(printf '%s\n' "$detail" | sed -n 's/^  priority: *//p' | head -1)
   case "$priority" in '-'|'"-"') priority=3 ;; esac
   case "$priority" in ''|*[!0-9]*) echo 'flow-history: cannot read task priority' >&2; return 1 ;; esac
-  FM_FLOW_TOKEN=$(python3 "$FM_FLOW_SCRIPT_DIR/fm-flow-history.py" --data "$data" begin "$id" "$priority")
+  FM_FLOW_TOKEN=$(python3 "$FM_FLOW_SCRIPT_DIR/fm-flow-history.py" --data "$data" begin "$id" "$priority" "$landing")
 }
 fm_flow_finish() {  # <data> <token> <verb> <id> <status> <output>
   local action=$3
