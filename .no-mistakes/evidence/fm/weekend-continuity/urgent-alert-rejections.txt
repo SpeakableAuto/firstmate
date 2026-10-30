@@ -1,0 +1,6 @@
+failed:unknown-condition
+routine_exit=2
+failed:unknown-condition
+joined_exit=2
+fm-urgent-alert: use the test subcommand for the setup message
+send_test_exit=2

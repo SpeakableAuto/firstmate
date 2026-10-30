@@ -1,0 +1,9 @@
+pass: new Claude version raised an active version-change alert
+pass: rotating unverified renderer content did not count as progress
+pass: version drift typed nothing into the supervisor pane
+pass: stall protection continued to down and one supervisor-down escalation
+["drift","claude-version-changed:new-unverified-renderer"]
+["withheld","stall-nudge-unverified"]
+["action-claimed","supervisor-down"]
+["alerted","supervisor-down"]
+verification: Herdr 0.9.3; session fm-lab-watchdog-drift-84522-20885 was non-default and teardown-owned
