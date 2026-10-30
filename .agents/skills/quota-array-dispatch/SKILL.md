@@ -120,6 +120,8 @@ When `quota_pacing.accounts` is configured, use the current snapshot's per-windo
 Apply its concurrency allowance as an eligibility gate, then prefer the passing paced account with the soonest reset; the selected policy ranks candidates within that window.
 Unknown pacing evidence cannot authorize a paced placement.
 
+When `quota_balance` is configured, the [quota balance policy](../../../docs/configuration.md#quota-balance) replaces `spendPriority` with pace headroom, prefers no provider, keeps a uniform reserve instead of percentage floors, and holds work off any allowance past the spread alarm; `fm-spawn.sh` refuses any start that is not on the balanced pick's allowance, so choose the profile its check accepts or record `balance_override` with the task-class reason.
+
 Decide the selection policy once per intake under the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson): use the matched rule's `select`, else the file's `select`, else `quota-balanced`.
 A per-machine rule-floor shortfall changes only the profiles that machine contributes and never changes the intake's selection policy.
 For `candidate-order`, walk the candidates in configured order after the three gates, declared floors, applicable Claude admission guard, optional pacing preference, and rankability checks under the uncertainty rules below.
@@ -139,7 +141,7 @@ Never resolve that terminal uncertainty by treating unknown as healthy or by cho
 Show the scalar or the literal `unknown` in the rationale; do not hide it in a score.
 
 Do not compare headroom against runway by hand.
-Do not use pace or signed reserve as a later tie-break layer.
+Outside quota balance, do not use pace or signed reserve as a later tie-break layer.
 Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWindowIds`, or other window-id lists to reconstruct what `spendPriority` already computed.
 
 Near-ties within `quota-balanced`, exact ties included: select the earliest near-tied candidate in configured order and report every near-tied candidate with its scalar.
@@ -175,7 +177,7 @@ When candidates on different machines tie exactly on configured position and sca
 Unknown runway beside a known healthy percentage is disclosed uncertainty that keeps a candidate eligible, never a block.
 An unreachable machine or unknown remote quota is disclosed uncertainty about that machine only; it never blocks, delays, or downgrades the other machines.
 
-Charge every placement against its account before placing the next task, in one batch or across separate intakes: one more Claude crew slot on that machine, and the fixed estimated draw on that account's quota, for the charge window the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns.
+Charge every placement against its account before placing the next task, in one batch or across separate intakes: one more Claude crew slot on that machine, and the estimated draw on that account's quota (measured per model under quota balance), for the charge window the [configuration schema](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns.
 That charge is what spreads a burst across accounts and machines instead of sending every task to the first candidate.
 
 Placing a task on a second mate sends it through the ordinary secondmate routing path with the chosen profile; the second mate's own spawn admission still applies.
