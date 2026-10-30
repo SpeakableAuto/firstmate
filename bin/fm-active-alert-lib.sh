@@ -256,10 +256,8 @@ wedge_alarm_notify() {  # <summary> <marker>
 # time, condition, key, result, reason, message hash and, when delivered, the
 # platform message id. Message text and platform chat ids are never logged.
 
-URGENT_ALERT_CONDITIONS='supervisor-down carve-out-blocked machine-down test'
-
 fm_urgent_alert_condition_ok() {  # <condition>
-  case " $URGENT_ALERT_CONDITIONS " in *" $1 "*) return 0 ;; esac
+  case "$1" in supervisor-down|carve-out-blocked|machine-down|test) return 0 ;; esac
   return 1
 }
 

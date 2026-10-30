@@ -47,6 +47,9 @@ run() { FULL=$("$CLI" "$@" 2>/dev/null) && RC=0 || RC=$?; OUT=${FULL%%$'\n'*}; }
 run send routine-update k 'All shipshape.'
 check "$RC" 2 'a routine update is not an urgent condition'
 check "$(sent_count)" 0 'unknown condition never reaches the sender'
+run send 'supervisor-down carve-out-blocked' joined 'Firstmate: combined condition.'
+check "$RC" 2 'joined urgent conditions are rejected'
+check "$(sent_count)" 0 'joined conditions cannot bypass the sender allow-list'
 run send test setup 'Firstmate weekend alerts are set up'
 check "$RC" 2 'the test condition is only reachable through the test subcommand'
 

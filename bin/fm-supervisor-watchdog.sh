@@ -394,11 +394,12 @@ watchdog_under_way() {
 }
 
 # Semantic pane fingerprint for stall progress, read from the latest
-# observation: the dim suggestion, ANSI styling, spinner rows, elapsed durations
-# and token counters are dropped while other numbers remain semantic progress.
+# observation: dim and unstyled Claude suggestions, ANSI styling, spinner rows,
+# elapsed durations and token counters are dropped while other numbers remain semantic progress.
 watchdog_progress_hash() {
   case "${VERDICT:-}" in unreadable|unsupported-harness|'') printf 'unreadable'; return ;; esac
   printf '%s\n' "$STYLED" | fm_composer_strip_ghost | fm_composer_strip_ansi | watchdog_above_footer \
+    | LC_ALL=C sed -E 's/^([[:space:]]*❯([[:space:]]| )*)Try "[^"]+"([[:space:]]| )*$/❯/' \
     | LC_ALL=C awk '!/^[[:space:]]*(✻|✽|✢|✳|✶|✺|·|\*)/' \
     | LC_ALL=C sed -E 's/[0-9]+(h|m|s)([[:space:]]+[0-9]+(h|m|s))*/#/g; s/[0-9]+([.][0-9]+)?[kKmM]?[[:space:]]+tokens/# tokens/g; s/[[:space:]]+/ /g' \
     | shasum -a 256 | awk '{print $1}'
@@ -712,7 +713,7 @@ watchdog_tick() {
       || { watchdog_log refused corrupt-state; return 1; }
   fi
   watchdog_observe
-  watchdog_version_alert || return 1
+  watchdog_version_alert || true
   watchdog_queue_alert || return 1
   watchdog_queue_recover || return 1
   [ "$QUEUE_ACTED" -eq 0 ] || return 0

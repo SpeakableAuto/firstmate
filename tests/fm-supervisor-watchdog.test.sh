@@ -535,6 +535,37 @@ check "$(stage)" down 'a busy rendered stall reaches the down stage despite fres
 [ ! -e "$DIR/launches" ] || fail 'a busy rendered stall launched a replacement supervisor'
 check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'a busy rendered stall sends one urgent alert'
 
+stall_case
+IDENTITY=$'claude\tidle'
+PANE=$'● Done\n────────────────────\n❯\302\240Try "review this?"\n────────────────────'
+watchdog_tick
+check "$VERDICT" composer-pending 'an unstyled Try hint remains unsafe for typing'
+for hint in 'explain this code' 'write a test' 'review the changes'; do
+  PANE=$'● Done\n────────────────────\n❯\302\240Try "'"$hint"$'"\n────────────────────'
+  TICK=$((TICK + 600)); watchdog_tick
+done
+check "$(stage)" nudged 'rotating unstyled Try hints do not hide a stall'
+PANE=$'● Done\n────────────────────\n❯\302\240Try "summarize the work"\n────────────────────'
+TICK=4600; watchdog_tick
+check "$STOPPED" 0 'rotating unstyled Try hints never trigger a default restart'
+check "$(stage)" down 'rotating unstyled Try hints reach the down stage'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'rotating unstyled Try hints send one urgent alert'
+
+real_fm_wake_append=$(declare -f fm_wake_append)
+stall_case
+PANE=$HUNG
+IDENTITY=$'claude\tworking'
+DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)' FM_WATCHDOG_CLAUDE_VERSION='2.1.295 (Claude Code)'
+WAKE_ATTEMPTS=0
+fm_wake_append() { WAKE_ATTEMPTS=$((WAKE_ATTEMPTS + 1)); return 1; }
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+check "$WAKE_ATTEMPTS" 3 'a failed drift wake is retried on every tick'
+check "$STOPPED" 0 'failed drift wakes do not enable a restart'
+check "$(stage)" down 'failed drift wakes do not block stall protection'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'failed drift wakes still reach the urgent stall alert'
+eval "$real_fm_wake_append"
+DRIFT=0
+
 hung_case; URGENT_RESULT=failed:delivery-failed
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$(jq -r .alerted "$DIR/stall.json")" false 'failed default urgent delivery leaves the incident open'
