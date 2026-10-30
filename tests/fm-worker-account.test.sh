@@ -451,13 +451,13 @@ SH
       assert_contains "$out" 'quota floor is unverifiable' 'old quota cannot establish the floor'
     fi
   done
-  quota_fixture 39
+  quota_fixture 9
   jq '.providers[].state = {status:"fresh",stale:false,reused:true,
     refreshedAt:((now-300)|floor|todateiso8601)}' "$FM_TEST_QUOTA" > "$FM_TEST_CACHED_QUOTA"
   cp "$CASE/rate-limited.json" "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "recent cached quota below floor refuses: $out"
-  assert_contains "$out" 'five_hour remaining 39% below 40%' 'cached reading preserves the fixed floor'
+  assert_contains "$out" 'five_hour remaining 9% below 10%' 'cached reading preserves the fixed floor'
   for stamp in 'bad timestamp' '2039-01-01T00:00:00Z' ''; do
     jq --arg stamp "$stamp" '.providers[].state.refreshedAt = $stamp' \
     "$FM_TEST_CACHED_QUOTA" > "$CASE/invalid-age.json"
@@ -479,12 +479,12 @@ SH
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "other failures cannot admit from a recent cache: $out"
   assert_contains "$out" 'quota floor is unverifiable' 'authentication failure stays unknown'
-  quota_fixture 39
+  quota_fixture 9
   out=$(check_admission); rc=$?
-  expect_code 1 "$rc" "a 39% session refuses: $out"
-  assert_contains "$out" 'five_hour remaining 39% below 40%' 'session floor is independent of weekly availability'
+  expect_code 1 "$rc" "a 9% session refuses: $out"
+  assert_contains "$out" 'five_hour remaining 9% below 10%' 'session floor is independent of weekly availability'
   assert_contains "$out" 'choose Codex' 'refusal gives an alternative'
-  quota_fixture 40
+  quota_fixture 10
   out=$(check_admission); rc=$?
   expect_code 0 "$rc" "the exact floor admits: $out"
   cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
@@ -727,12 +727,12 @@ test_spawn_enforces_claude_admission() {
   new_case admission-spawn claude
   cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","percentRemaining":39}],"quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}'
+printf '%s\n' '{"schemaVersion":5,"providers":[{"provider":"claude","state":{"stale":false},"windows":[{"id":"five_hour","percentRemaining":9}],"quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}'
 SH
   chmod +x "$FAKEBIN/quota-axi"
   out=$(spawn_ship guarded --harness claude); rc=$?
   expect_code 1 "$rc" "real spawn refuses a depleted session: $out"
-  assert_refused_before_launch guarded "$out" 'five_hour remaining 39% below 40%'
+  assert_refused_before_launch guarded "$out" 'five_hour remaining 9% below 10%'
   assert_absent "$HOME_DIR/state/.claude-admission.lock" 'refusal releases admission lock'
   cat > "$FAKEBIN/claude-wrapper" <<'SH'
 #!/usr/bin/env bash

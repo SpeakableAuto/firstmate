@@ -79,7 +79,10 @@ pass 'replaying the recorded provider choices reproduces Codex running dry first
 balanced=$(replay balanced) || fail 'balanced replay failed'
 printf '# balanced: %s\n' "$balanced"
 assert_equals true "$(jq '.lowest_percent.codex >= 10' <<<"$balanced")" 'Codex keeps its reserve under the balanced pick'
-assert_equals true "$(jq '.final_spread <= 20' <<<"$balanced")" 'the allowances end within the 20-point spread'
+# The alarm holds new work past 20 points; time alone can open the gap by up
+# to one crew's measured draw before the next start is judged.
+assert_equals true "$(jq --argjson draw "$(jq '.draw.codex.points_per_start' "$FIXTURE")" '.final_spread <= 20 + $draw' <<<"$balanced")" \
+  'the allowances end within the 20-point spread plus one crew'\''s draw'
 assert_equals 0 "$(jq '.behind_placements' <<<"$balanced")" 'no start lands on an allowance more than 20 points behind'
 assert_equals 0 "$(jq '.unplaced' <<<"$balanced")" 'every recorded start is placed within the window'
 assert_equals true "$(jq '.historical_codex_starts_refused > 0' <<<"$balanced")" 'the spawn check refuses recorded Codex starts that were off balance'

@@ -1953,6 +1953,15 @@ balance_run "$BRIEF_B" --project other --rule rule_1
 assert_equals '["peer|claude|>local|codex|","peer|claude|>peer|codex|"]' "$(jq -c '.conditions | keys' "$HOME_DIR/state/quota-spread.json")" \
   'a pool that never saw the second machine closes only its own gap'
 assert_equals 3 "$(grep -c 'check: quota-spread' "$HOME_DIR/state/.wake-queue")" 'closing a gap announces nothing new'
+# A machine that may not take the project is outside the spread: remote-pager
+# is registered only on the second machine, so this machine's gap is not seen.
+rm -rf "$HOME_DIR/state/quota-remote"
+rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue"
+write_balance_quota "$QUOTA" 70 -5 60 -40
+write_balance_quota "$REMOTE_QUOTA" 90 -6 80 -8
+balance_run "$BRIEF" --project remote-pager --rule rule_1 --check claude opus high
+assert_equals '["peer|claude|","peer|codex|"]' "$(jq -c '.global_spread.accounts' <<<"$out")" 'the spread measures only machines in the project pool'
+assert_absent "$HOME_DIR/state/quota-spread.json" 'an excluded machine raises no alarm'
 rm -rf "$HOME_DIR/state/quota-remote"
 rm -f "$HOME_DIR/state/quota-spread.json" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/quota-samples.jsonl"
 cp "$BASE_RULES" "$RULES"
