@@ -1,0 +1,85 @@
+## Scenario A: real clock, CLEAR report 3h old, but PR head pushed Thu Oct 29 23:55:56 UTC 2026 minus ~20min -> expect silent
+$ bash bin/fm-clear-unmerged-check.sh check
+[exit=0]
+## Scenario B: same PR, clock advanced 3h (FM_CLEAR_UNMERGED_NOW) -> expect alert
+$ env FM_CLEAR_UNMERGED_NOW=1793328957 bash bin/fm-clear-unmerged-check.sh check
+[exit=0]
+## Scenario C: poll again, same head -> expect silent (alert once per PR/head)
+$ env FM_CLEAR_UNMERGED_NOW=1793328957 bash bin/fm-clear-unmerged-check.sh check
+[exit=0]
+## state/.clear-unmerged.json
+{
+    "schema": 1,
+    "alerted": [],
+    "error": "",
+    "clamped": {},
+    "heads": {
+        "https://github.com/SpeakableAuto/firstmate/pull/42": {
+            "sha": "90cfdcaef44f3749d86f78776ccde876cc024d5a",
+            "changed_at": 1793317790.0
+        }
+    }
+}
+## Note: scenario B silent because fm-pr-lint carve_out_signals(PR 42 body+paths) = {'payments'} -> carve-out skip (verified separately)
+## Scenario D (real clock, no override): hexyl#298 CLEAR at current head 3h ago -> expect ONE alert; #297 stale SHA, #296 later BLOCKED review, #294 CLEAR 1h ago, #293 30min-old report quoting at=epoch, firstmate#42 payments carve-out -> none of those alert
+$ bash bin/fm-clear-unmerged-check.sh check
+CLEAR unmerged: https://github.com/sharkdp/hexyl/pull/298 head=91f124e799b13849a31af3cd74f42b0deda5a1a6 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.myLV2n/data/rv298/report.md age=10800s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+[exit=0]
+$ bash bin/fm-clear-unmerged-check.sh check
+[exit=0]
+$ bash bin/fm-clear-unmerged-check.sh check
+[exit=0]
+alerted: ['https://github.com/sharkdp/hexyl/pull/298@91f124e799b13849a31af3cd74f42b0deda5a1a6']
+heads tracked: 22
+## Scenario E: Michael-style repo exclusion: config/clear-unmerged-skip-repos lists sharkdp/hexyl; history reset -> expect silent
+$ bash bin/fm-clear-unmerged-check.sh check
+[exit=0]
+## Scenario F: captain hold via real producers (fm-tasks-axi add + fm-captain-hold hold, state/ship.meta pr=#298); skip list removed; history reset -> expect silent
+$ bash bin/fm-tasks-axi.sh add ship Wait for decision --repo hexyl
+ok: added ship (repo hexyl) -> Queued
+task:
+  id: ship
+  title: Wait for decision
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: task
+  repo: hexyl
+  priority: "-"
+  created: 2026-10-30
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+help[2]:
+  - Run `tasks-axi start ship` to move it to in flight
+  - Run `tasks-axi block ship --by <other>` to record a dependency
+[exit=0]
+$ bash bin/fm-captain-hold.sh hold ship --reason Await captain decision
+ship
+[exit=0]
+$ bash bin/fm-clear-unmerged-check.sh check
+[exit=0]
+## Scenario F2: hold released (meta removed) -> alert returns
+$ bash bin/fm-clear-unmerged-check.sh check
+CLEAR unmerged: https://github.com/sharkdp/hexyl/pull/298 head=91f124e799b13849a31af3cd74f42b0deda5a1a6 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.myLV2n/data/rv298/report.md age=10827s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+[exit=0]
+## Scenario G: arm registers the watcher shim; shim runs the check; disarm unregisters and keeps history
+$ bash bin/fm-clear-unmerged-check.sh arm
+armed: state/clear-unmerged.check.sh
+[exit=0]
+-rw-r--r--@ 1 mac-mini-0002  staff    0 Oct 30 09:55 .clear-unmerged.lock
+-rw-------@ 1 mac-mini-0002  staff   84 Oct 30 09:57 clear-unmerged.check-trust
+-rwx------@ 1 mac-mini-0002  staff  232 Oct 30 09:57 clear-unmerged.check.sh
+$ bash /var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T//fm-lab.myLV2n/state/clear-unmerged.check.sh
+CLEAR unmerged: https://github.com/sharkdp/hexyl/pull/298 head=91f124e799b13849a31af3cd74f42b0deda5a1a6 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.myLV2n/data/rv298/report.md age=10831s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+[exit=0]
+$ bash bin/fm-clear-unmerged-check.sh disarm
+unregistered: state/clear-unmerged.check.sh
+[exit=0]
+-rw-------@ 1 mac-mini-0002  staff  2932 Oct 30 09:57 .clear-unmerged.json
+-rw-r--r--@ 1 mac-mini-0002  staff     0 Oct 30 09:55 .clear-unmerged.lock
