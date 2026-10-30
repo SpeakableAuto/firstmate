@@ -177,7 +177,8 @@ pass 'the spawn gate enforces the balanced pick, alerts degraded starts, uses fr
 # share windows, and an unlabelled window). They must not stop plain or P0 starts.
 balance_rules "$GATE_HOME/config"
 write_quota -5 -30
-for window in '{"id":"extra_usage","kind":"extra_usage","enabled":true}' '{"id":"shared","shareOf":"five_hour"}' '{}'; do
+jq -cn --argjson at "$(date +%s)" '{at:$at,key:"previous",home:"local",provider:"claude",account:"",scopes:["all_models"],windows:{five_hour:{draw:1,span:900}}}' >> "$GATE_HOME/state/dispatch-charges.jsonl"
+for window in '{"id":"extra_usage","kind":"extra_usage","enabled":true}' '{"id":"shared","shareOf":"five_hour"}' '{}' '{"percentRemaining":70}'; do
   jq --argjson window "$window" '.providers[0].windows += [$window]' "$QUOTA_FIXTURE" > "$TMP_ROOT/optional-window.json"
   for mode in plain p0; do
     if [ "$mode" = p0 ]; then
@@ -191,7 +192,9 @@ for window in '{"id":"extra_usage","kind":"extra_usage","enabled":true}' '{"id":
 done
 rm "$GATE_HOME/data/t1/placement.json"
 rm -f "$GATE_HOME/state/quota-p0-t1.open" "$GATE_HOME/state/.wake-queue"
-pass 'optional quota windows do not block crew admission'
+jq 'select(.key != "previous")' "$GATE_HOME/state/dispatch-charges.jsonl" > "$TMP_ROOT/without-previous.jsonl"
+mv "$TMP_ROOT/without-previous.jsonl" "$GATE_HOME/state/dispatch-charges.jsonl"
+pass 'optional quota windows do not block crew admission with outstanding measured charges'
 
 # Parent placement survives the child missing the parent's charge ledger.
 balance_rules "$GATE_HOME/config"
