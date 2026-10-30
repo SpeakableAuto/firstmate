@@ -22,8 +22,9 @@ initial alert; subsequent unrelated PR activity does not keep resetting it.
 A changed SHA without a matching CLEAR cannot alert. Exactly two hours is not
 more than two hours. This is an alert, not a grant of merge authority.
 
-Carve-out declarations are honored; absent declarations use fm-pr-lint.py's
-classifier on body and paths. Malformed declarations refuse. All non-Done
+Carve-out declarations are honored and never override fm-pr-lint.py's classifier
+on body, paths and added code. Eligible overdue PRs require a complete bounded
+gh-axi diff plus a head recheck; missing evidence refuses. Malformed declarations refuse. All non-Done
 captain holds are read through fm-tasks-axi.sh, including URL-linked backlog
 rows and tasks bound by state/*.meta pr= or a matching review task id.
 
@@ -126,11 +127,11 @@ class Poll:
             if not row.startswith('- '):
                 continue
             name = re.split(r' \[| - ', row[2:], maxsplit=1)[0].strip()
-            if not name or name in ('.', '..') or '/' in name:
-                raise Unavailable('invalid project registry name')
-            if re.search(r'\bMichael\b', row, re.I):
-                continue
             try:
+                if not name or name in ('.', '..') or '/' in name:
+                    raise Unavailable('invalid project registry name')
+                if re.search(r'\bMichael\b', row, re.I):
+                    continue
                 mode = self.run([BIN/'fm-project-mode.sh', name]).strip()
                 forge = self.run([BIN/'fm-project-mode.sh', '--forge', name]).strip()
                 if mode.split()[0] == 'local-only' or forge == 'gerrit':
@@ -214,7 +215,7 @@ class Poll:
         query = '''query { repository(owner:%s,name:%s) {
           pullRequests(states:OPEN,first:100,orderBy:{field:CREATED_AT,direction:ASC}) {
             pageInfo { hasNextPage } nodes {
-              url headRefOid body createdAt updatedAt
+              url headRefOid body createdAt updatedAt additions
               files(first:100) { pageInfo { hasNextPage } nodes { path } }
               commits(last:1) { nodes { commit { oid pushedDate } } }
               timelineItems(last:1,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]) {
@@ -288,19 +289,40 @@ class Poll:
                 return None
             else:
                 raise Unavailable(f'{url} has invalid Carve-outs declaration')
-        else:
-            files = pr['files']
-            if files['pageInfo']['hasNextPage'] is not False:
-                raise Unavailable(f'incomplete changed paths for {url}; carve-out classification unavailable')
-            paths = [node['path'] for node in files['nodes']]
-            if LINT.carve_out_signals(body, paths):
-                return None
+        files = pr['files']
+        if files['pageInfo']['hasNextPage'] is not False:
+            raise Unavailable(f'incomplete changed paths for {url}; carve-out classification unavailable')
+        paths = [node['path'] for node in files['nodes']]
+        if LINT.carve_out_signals(body, paths):
+            return None
         age = int(self.now - max(clear_time, head_time))
         if age <= 7200:
+            return None
+        changes = self.added_lines(pr)
+        if LINT.carve_out_signals(body, paths, changes):
             return None
         identity = url+'@'+sha
         note = f'CLEAR unmerged: {url} head={sha} report={path} age={age}s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards'
         return identity, note
+
+    def added_lines(self, pr):
+        """Use the shared forge scalar contract, bound reads, and recheck the head."""
+        url = pr['url']
+        host, owner, repo, _, number = url.removeprefix('https://').split('/')
+        diff = LINT.toon_scalar(self.run(['gh-axi', 'pr', 'diff', number,
+                               '-R', owner+'/'+repo, '--hostname', host, '--full']), 'diff', 2)
+        head = LINT.toon_scalar(self.run(['gh-axi', 'api', f'/repos/{owner}/{repo}/pulls/{number}',
+                               '--hostname', host, '--jq', '.head.sha']), 'body', 2)
+        if head != pr['headRefOid']:
+            raise Unavailable(f'head changed while reading diff for {url}; retry')
+        # Count additions against the list response so a shortened patch cannot
+        # silently pass classification. Binary changes cannot be classified.
+        added = [line[1:] for line in diff.splitlines()
+                 if line.startswith('+') and not line.startswith('+++ ')]
+        if (type(pr['additions']) is not int or len(added) != pr['additions']
+                or re.search(r'^(?:Binary files |GIT binary patch)', diff, re.M)):
+            raise Unavailable(f'incomplete added-code evidence for {url}; carve-out classification unavailable')
+        return '\n'.join(added)
 
 
 def toon_row(line):

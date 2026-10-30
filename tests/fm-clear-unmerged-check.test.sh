@@ -44,7 +44,13 @@ with (h/'calls').open('a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
 if (h/'forge-error').exists():
     print('error: forbidden'); sys.exit(1)
 if (h/'forge-sleep').exists(): time.sleep(10)
-print((h/'forge').read_text())
+if sys.argv[1:3] == ['pr', 'diff']:
+    if (h/'diff-error').exists(): print('error: missing diff'); sys.exit(1)
+    print('pull_request:\\n  diff: '+json.dumps((h/'diff').read_text()))
+elif sys.argv[1] == 'api' and '/pulls/' in sys.argv[2]:
+    print('response:\\n  body: '+json.dumps((h/'head').read_text()))
+else:
+    print((h/'forge').read_text())
 ''')
         (self.home/'fakebin/tasks-axi').write_text('''#!/usr/bin/env python3
 import os, pathlib
@@ -53,11 +59,13 @@ print((h/'tasks').read_text())
 ''')
         for p in (self.home/'fakebin').iterdir(): p.chmod(0o755)
         (self.home/'tasks').write_text('count: 0\ntasks: 0 tasks in this backlog\n')
-        self.pr = dict(url=URL, headRefOid=SHA, body='Goal: improve monitoring.\nCarve-outs: none',
+        self.pr = dict(additions=1, url=URL, headRefOid=SHA, body='Goal: improve monitoring.\nCarve-outs: none',
                        createdAt=iso(NOW-20000), updatedAt=iso(NOW-10000),
                        files=dict(pageInfo=dict(hasNextPage=False), nodes=[dict(path='bin/monitor.sh')]),
                        commits=dict(nodes=[dict(commit=dict(oid=SHA, pushedDate=iso(NOW-10000)))]),
                        timelineItems=dict(nodes=[]))
+        (self.home/'diff').write_text('diff --git a/bin/monitor.sh b/bin/monitor.sh\n--- a/bin/monitor.sh\n+++ b/bin/monitor.sh\n@@ -0,0 +1 @@\n+print(1)\n')
+        (self.home/'head').write_text(SHA)
         self.report('# CLEAR\n\n'+URL+' at `'+SHA+'`.\n', NOW-7260)
         self.forge()
 
@@ -83,7 +91,8 @@ print((h/'tasks').read_text())
             self.assertIn(text, out)
         self.assertNotIn('ask Zac', out)
         self.assertEqual(self.run_check(), '')
-        self.assertEqual(len((self.home/'calls').read_text().splitlines()), 2)
+        calls = [json.loads(line) for line in (self.home/'calls').read_text().splitlines()]
+        self.assertEqual(sum(call[:3] == ['api', 'POST', 'graphql'] for call in calls), 2)
 
     def test_not_due_at_119_minutes_or_exactly_two_hours(self):
         for age in (7140,7200):
@@ -108,6 +117,34 @@ print((h/'tasks').read_text())
             self.pr['files']['nodes'] = [dict(path=path)]
             self.forge()
             self.assertEqual(self.run_check(), '')
+
+    def test_none_declaration_cannot_override_carveout_paths(self):
+        self.pr['files']['nodes'] = [dict(path='src/payments/checkout.py')]
+        self.forge()
+        self.assertEqual(self.run_check(), '')
+
+    def test_diff_only_carveout_suppresses_alert(self):
+        self.pr['body'] = 'Improve service'
+        (self.home/'diff').write_text('diff --git a/src/client.py b/src/client.py\n--- a/src/client.py\n+++ b/src/client.py\n@@ -0,0 +1 @@\n+stripe.PaymentIntent.create()\n')
+        self.forge()
+        self.assertEqual(self.run_check(), '')
+
+    def test_diff_unavailable_incomplete_or_head_moved_refuses(self):
+        (self.home/'diff-error').touch()
+        self.assertIn('unavailable', self.run_check())
+        (self.home/'diff-error').unlink()
+        (self.home/'diff').write_text('')
+        self.assertIn('incomplete', self.run_check())
+        (self.home/'diff').write_text('+print(1)\n')
+        (self.home/'head').write_text('b'*40)
+        self.assertIn('head changed', self.run_check())
+        self.assertEqual(json.loads((self.home/'state/.clear-unmerged.json').read_text())['alerted'], [])
+
+    def test_malformed_registry_row_does_not_silence_healthy_repo(self):
+        (self.home/'data/projects.md').write_text('- . [no-mistakes] - malformed\n- demo [no-mistakes] - demo\n')
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertIn('.: invalid project registry name', out)
 
     def test_michael_repo_config_and_registry(self):
         (self.home/'config/clear-unmerged-skip-repos').write_text('# Michael repositories\nexample/demo\n')
