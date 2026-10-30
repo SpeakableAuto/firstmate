@@ -69,7 +69,7 @@ def append(stream, row):
     os.fsync(stream.fileno())
 
 
-def begin(path, task_id, priority, landing, kind, serves):
+def begin(path, task_id, priority, landing, kind, serves, action):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', task_id):
         raise ValueError('invalid task id')
     if landing not in ('none', 'merge', 'local', 'report'):
@@ -77,6 +77,12 @@ def begin(path, task_id, priority, landing, kind, serves):
     with journal(path, True) as stream:
         if os.fstat(stream.fileno()).st_size == 0:
             append(stream, {'type': 'coverage', 'version': 1, 'timestamp': now()})
+        if action in ('done', 'close'):
+            stream.seek(0)
+            _, events, _ = read_history_stream(stream)
+            starts = [r for r in events if r['task_id'] == task_id and r['action'] == 'start']
+            if starts:
+                serves = starts[-1].get('serves', '')
         token = uuid.uuid4().hex
         append(stream, dict(type='attempt', token=token, task_id=task_id,
                             priority=priority, kind=kind, serves=serves, landing=landing, timestamp=now()))
@@ -122,7 +128,11 @@ def finish(path, token, action, task_id, result, output):
 
 def read_history(path, grace=0):
     with journal(path) as stream:
-        lines = list(stream)
+        return read_history_stream(stream, grace)
+
+
+def read_history_stream(stream, grace=0):
+    lines = list(stream)
     rows = []
     for line in lines:
         try:
@@ -195,6 +205,9 @@ def report(path, day):
     if unknown:
         print('history_warning: unknown days ' + f'{min(unknown)}..{max(unknown)} ({len(unknown)} days)')
     daily = {}
+    linked = sorted({f"{r['task_id']}->{r['serves']}" for r in events
+                     if r.get('serves') and r['day'] <= day})
+    print('recorded support: ' + (', '.join(linked) or '-'))
     for row in events:
         if row.get('serves'):
             continue
@@ -244,6 +257,7 @@ def main():
     start.add_argument('landing', choices=['none', 'merge', 'local', 'report'])
     start.add_argument('--kind', default='task')
     start.add_argument('--serves', default='')
+    start.add_argument('--action', choices=['start', 'done', 'close', 'reopen'], default='start')
     end = commands.add_parser('finish')
     end.add_argument('token')
     end.add_argument('action', choices=['start', 'done', 'reopen'])
@@ -257,7 +271,7 @@ def main():
     path = args.data / 'flow-history.jsonl'
     try:
         if args.command == 'begin':
-            begin(path, args.task_id, args.priority, args.landing, args.kind, args.serves)
+            begin(path, args.task_id, args.priority, args.landing, args.kind, args.serves, args.action)
         elif args.command == 'finish':
             finish(path, args.token, args.action, args.task_id, args.result, sys.stdin.read())
         elif args.command == 'health':

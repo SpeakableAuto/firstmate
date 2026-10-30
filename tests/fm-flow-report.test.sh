@@ -265,7 +265,7 @@ pass 'bare closes, non-worker starts and bounded torn rows retain report semanti
 # Journal a real linked review start, then prove its identity survives later parent closure.
 cat >> "$FM_HOME/data/backlog.md" <<'SERVES'
 ## Queued
-- [ ] helper - Independent review (kind: scout) (serves: current)
+- [ ] helper - Independent review (kind: scout) (serves: current) (support: review)
 SERVES
 bash "$wrapper" start helper >/dev/null
 python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYSERVES'
@@ -286,3 +286,29 @@ out=$(bash "$report" --date 2020-10-29)
 assert_contains "$out" 'finished=0 closed-not-landed=0 started=0' 'support work is not a new job'
 assert_contains "$out" 'stop_starting: no' 'recorded support work cannot activate the stop'
 pass 'linked review receipts preserve finishing-work identity'
+
+# Closing a helper after its parent still cannot count as a separate delivery.
+FM_HOME="$FM_HOME" bash -c '
+  . "$1/bin/fm-tasks-axi-lib.sh"
+  . "$1/bin/fm-backlog-transition-lib.sh"
+  set -e
+  FM_BACKLOG_FLOW_LANDING=report
+  fm_backlog_close_marker_write "$FM_HOME/state" helper "$FM_HOME/data" support-report --report data/helper/report.md
+  FM_BACKLOG_FLOW_LANDING=none
+  fm_backlog_close_marker_replay "$FM_HOME/state" "$FM_HOME/state/helper.backlog-close" "$FM_HOME/data"
+' _ "$ROOT"
+python3 - "$FM_HOME/data/flow-history.jsonl" <<'PYCLOSE'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+closed=[r for r in rows if r.get('task_id')=='helper' and r.get('action')=='done']
+assert len(closed)==1 and closed[0]['serves']=='current', closed
+for row in rows:
+    if row.get('task_id')=='helper' and row.get('landing')=='report':
+        row['timestamp']='2020-10-29T13:00:00Z'
+with open(sys.argv[1],'w') as f:
+    for row in rows: f.write(json.dumps(row)+'\n')
+PYCLOSE
+out=$(bash "$report" --date 2020-10-29)
+assert_contains "$out" 'finished=0 closed-not-landed=0 started=0' 'late support closure never inflates delivery totals'
+assert_contains "$out" 'recorded support: helper->current' 'historical support remains named after closure'
+pass 'support closure retains its start relation after parent closure'

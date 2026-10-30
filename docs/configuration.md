@@ -402,12 +402,13 @@ When `config/crew-placement.json` exists, its positive `max_crew` value sets the
 Only unheld, unblocked In-flight worker rows with activity in the preceding 72 hours count: a stamped status event, a positively live worker, or a pull request update.
 A parked record, an old status, or a future timestamp is not recent activity.
 Provider reads are bounded; unavailable activity is warned and listed separately without charging an unproved row to WIP.
-`config/finish-first-wip-mode` accepts `warn` or `enforce`; absence defaults to `warn` so installing into an already overloaded home cannot freeze ordinary dispatch.
+`config/finish-first-wip-mode` accepts `warn` or `enforce`; absence defaults to `enforce` in every home.
 At the bound, warn mode allows admission with one warning naming the count and oldest active jobs; enforce mode refuses it.
-Switch to enforce only after Zac has triaged the backlog below the cap.
+Warn mode loosens Zac's rule 20 cap and may be enabled for a home only with his explicit approval.
 Held, blocked, and stale records never consume WIP, and the report lists stale jobs for triage without closing them.
-A row with `(serves: <task-id>)` naming another In-flight item is finishing that item, so it bypasses both start bounds and does not consume another WIP item.
-Record this relation explicitly in the backlog row (in a native backend, its title); a review-like task name alone grants no exemption, and holds or blockers on the support row still apply.
+A worker row with `(serves: <task-id>)` and `(support: review|replay|fix|recheck)` naming an unheld, unblocked In-flight worker is finishing that item, so it bypasses both start bounds and does not consume another WIP item.
+The parent must have no support role or serves link: self-links, chains and cycles never qualify.
+Record the relation and one of those four support roles explicitly in the backlog row (in a native backend, its title); a review-like task name alone grants no exemption, and holds or blockers on the support row still apply.
 P0 bypasses the WIP check and the two-day stop; linked finishing work remains exempt in both modes.
 Homes without `crew-placement.json` remain uncapped; malformed placement configuration refuses ordinary admission.
 This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
@@ -426,10 +427,11 @@ Manual edits and direct calls to `tasks-axi` are outside this journal, so this i
 When recorded worker starts exceed finished deliveries on both reported AEST days, the report emits `stop_starting: yes`.
 Fresh admission then refuses work at the same or a lower priority than active, unheld In-flight work, while a higher priority still jumps the queue; warn mode does not disable this two-day rule.
 Current holds and blockers do not retroactively change the recorded signal, while non-worker starts remain excluded.
-Receipts snapshot the validated `serves` relation; those support transitions contribute neither new starts nor extra deliveries to the daily totals.
+Receipts snapshot the validated `serves` relation at start and preserve it at closure even after the parent closes; those support transitions contribute neither new starts nor extra deliveries to the daily totals.
 Malformed history affects only its bounded date interval; recording failures raise a deduplicated wake and never prevent a backlog mutation.
 Preserve damaged journals for diagnosis; after repairing a storage limit, archive the journal outside `flow-history.jsonl` and let the next transition begin new coverage rather than fabricating historical receipts.
-A separate current-state appendix reports WIP mode, count, oldest active jobs and `stale, for Zac's triage`; an overloaded home prints `WIP over cap (N of M)` every morning.
+Historical linked support is named from its first recorded day, and the current appendix names every claimed link, including invalid links and newly queued support.
+A separate current-state appendix reports WIP mode, count, the oldest five active jobs and `stale, for Zac's triage`; an overloaded home prints `WIP over cap (N of M)` every morning.
 This current snapshot never rewrites the historical start/finish counts or automatically closes a job.
 The pstack job 03 morning scoreboard is the intended consumer of these counts.
 
