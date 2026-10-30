@@ -1378,6 +1378,42 @@ assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=curso
 assert_contains "$out" 'candidate: home=peer cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=0.8  runway=through_reset  -> eligible' "the remote candidates are listed beside them"
 assert_contains "$out" 'home: peer  claude-crew=0/3  session=79%' "the remote machine's Claude guard evidence is shown"
 assert_equals peer-host "$(cat "$SSH_CALLS")" "the remote quota is read through the registered route"
+# Transfer an actual resolver verdict to a receiving home with different brief
+# bytes and a different local task id. The route identity crosses that boundary.
+parent=$(sed -n 's/^  parent_placement: //p' <<<"$out")
+mkdir -p "$REMOTE_HOME/config" "$REMOTE_HOME/data/child-task"
+cp "$RULES" "$REMOTE_HOME/config/crew-dispatch.json"
+printf 'peer\n' > "$REMOTE_HOME/.fm-secondmate-home"
+printf '# Locally rewritten brief\nPaths belong to the receiving home.\n' > "$REMOTE_HOME/data/child-task/brief.md"
+jq -n --argjson parent "$parent" '{dispatch_rule:3,route:{task:$parent.task,correlation:$parent.correlation},parent_placement:$parent}' > "$REMOTE_HOME/data/child-task/placement.json"
+jq '(.providers[] | select(.provider=="claude") | .quotaSemantics.effectiveAvailability[]) |= (.selection.spendPriority=2 | .runway.status="through_reset")' "$REMOTE_QUOTA" > "$TMP_ROOT/child-quota.json"
+child_gate() {
+  ( export PATH="$FAKEBIN:$BASE_PATH" QUOTA_AXI_FIXTURE="$TMP_ROOT/child-quota.json"
+    # shellcheck disable=SC2034
+    SCRIPT_DIR="$ROOT/bin" FM_HOME="$REMOTE_HOME" CONFIG="$REMOTE_HOME/config" DATA="$REMOTE_HOME/data" STATE="$REMOTE_HOME/state"
+    # shellcheck source=bin/fm-quota-balance-lib.sh
+    . "$ROOT/bin/fm-quota-balance-lib.sh"
+    rc=0
+    fm_quota_balance_gate child-task cursor cursor-grok-4.6-medium '' "$REMOTE_HOME/projects/pager" preflight || rc=$?
+    printf '%s|%s\n' "$rc" "$FM_QUOTA_BALANCE_RECORD"
+  )
+}
+child_result=$(child_gate)
+assert_equals 0 "${child_result%%|*}" 'the routed decision survives rewritten brief and local task id'
+assert_contains "$child_result" 'honoring parent pool placement' 'the receiving gate uses the transferred pool verdict'
+jq 'del(.parent_placement)' "$REMOTE_HOME/data/child-task/placement.json" > "$TMP_ROOT/child-placement.json"
+cp "$REMOTE_HOME/data/child-task/placement.json" "$TMP_ROOT/valid-parent.json"
+cp "$TMP_ROOT/child-placement.json" "$REMOTE_HOME/data/child-task/placement.json"
+child_result=$(child_gate)
+assert_equals 1 "${child_result%%|*}" 'without the parent verdict the receiving ledger picks another allowance'
+for change in '.route.correlation="different"' '.route.task="other-task"' '.parent_placement.target="other-home"' '.parent_placement.at-=901' '.parent_placement.profile.model="other-model"' '.parent_placement.version=1' 'del(.route)'; do
+  jq "$change" "$TMP_ROOT/valid-parent.json" > "$REMOTE_HOME/data/child-task/placement.json"
+  child_result=$(child_gate)
+  assert_equals 1 "${child_result%%|*}" "a mismatched transfer refuses: $change"
+done
+rm "$REMOTE_HOME/data/child-task/placement.json" "$REMOTE_HOME/config/crew-dispatch.json"
+pass 'a real pooled decision crosses the route boundary and rejects mismatched route identities'
+
 write_quota "$REMOTE_QUOTA" 0.7
 placement_case ok --project pager
 assert_contains "$out" 'placement: local (local cursor:cursor-grok-4.6-medium has the pool'"'"'s highest spendPriority 0.7597)' "a higher local candidate keeps the task local; exit=$code stderr=$err"

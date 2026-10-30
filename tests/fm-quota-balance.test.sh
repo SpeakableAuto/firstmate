@@ -173,14 +173,33 @@ assert_equals 1 "$f2rule" 'an invalid recorded rule is a structural refusal, not
 assert_equals 1 "${result%%|*}" 'a resolver shape error fails closed' 
 pass 'the spawn gate enforces the balanced pick, alerts degraded starts, uses fresh evidence, and honors recorded overrides'
 
+# Optional quota-axi windows impose no percentage limit (unlimited extra usage,
+# share windows, and an unlabelled window). They must not stop plain or P0 starts.
+balance_rules "$GATE_HOME/config"
+write_quota -5 -30
+for window in '{"id":"extra_usage","kind":"extra_usage","enabled":true}' '{"id":"shared","shareOf":"five_hour"}' '{}'; do
+  jq --argjson window "$window" '.providers[0].windows += [$window]' "$QUOTA_FIXTURE" > "$TMP_ROOT/optional-window.json"
+  for mode in plain p0; do
+    if [ "$mode" = p0 ]; then
+      printf '%s\n' '{"dispatch_rule":0,"impact":"P0","balance_override":"restore service"}' > "$GATE_HOME/data/t1/placement.json"
+    else
+      printf '%s\n' '{"dispatch_rule":0}' > "$GATE_HOME/data/t1/placement.json"
+    fi
+    result=$(QUOTA_FIXTURE="$TMP_ROOT/optional-window.json" gate claude opus high)
+    assert_equals 0 "${result%%|*}" "$mode accepts a quota window without a percentage: $window"
+  done
+done
+rm "$GATE_HOME/data/t1/placement.json"
+rm -f "$GATE_HOME/state/quota-p0-t1.open" "$GATE_HOME/state/.wake-queue"
+pass 'optional quota windows do not block crew admission'
+
 # Parent placement survives the child missing the parent's charge ledger.
 balance_rules "$GATE_HOME/config"
 write_quota -30 -5
 printf 'm0002\n' > "$GATE_HOME/.fm-secondmate-home"
-hash=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$GATE_HOME/data/t1/brief.md")
-jq -n --arg hash "$hash" --argjson at "$(date +%s)" '{dispatch_rule:0,parent_placement:{version:1,at:$at,task:"t1",brief_sha256:$hash,target:"m0002",provider:"claude",account:"",profile:{harness:"claude",model:"opus",effort:"high"}}}' > "$GATE_HOME/data/t1/placement.json"
+jq -n --argjson at "$(date +%s)" '{dispatch_rule:0,route:{task:"parent-task",correlation:"route-123"},parent_placement:{version:2,at:$at,task:"parent-task",correlation:"route-123",target:"m0002",provider:"claude",account:"",profile:{harness:"claude",model:"opus",effort:"high"}}}' > "$GATE_HOME/data/t1/placement.json"
 result=$(gate claude opus high)
-assert_equals 0 "${result%%|*}" 'the receiving home honors a current parent pool placement'
+assert_equals 0 "${result%%|*}" 'the receiving home honors a routed parent placement with its own task id and brief'
 jq '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining=12' "$QUOTA_FIXTURE" > "$TMP_ROOT/low-parent.json"
 result=$(QUOTA_FIXTURE="$TMP_ROOT/low-parent.json" gate claude opus high)
 assert_equals 1 "${result%%|*}" 'a parent decision cannot pass the receiving allowance reserve'
@@ -191,7 +210,14 @@ QUOTA_FIXTURE="$TMP_ROOT/low-parent.json" gate claude opus high >/dev/null
 assert_equals 1 "$(grep -c 'check: quota-p0:' "$GATE_HOME/state/.wake-queue")" 'P0 reserve use alerts once per task'
 jq '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining=9' "$QUOTA_FIXTURE" > "$TMP_ROOT/too-low-parent.json"
 result=$(QUOTA_FIXTURE="$TMP_ROOT/too-low-parent.json" gate claude opus high)
-assert_equals 1 "${result%%|*}" 'P0 cannot breach the hard 5% floor after its own draw'
+assert_equals 0 "${result%%|*}" 'P0 can start above 5% before its own expected draw'
+for remaining in 5.01 5 4; do
+  jq --argjson pct "$remaining" '.providers[0].quotaSemantics.effectiveAvailability[0].effectivePercentRemaining=$pct' "$QUOTA_FIXTURE" > "$TMP_ROOT/p0-boundary.json"
+  result=$(QUOTA_FIXTURE="$TMP_ROOT/p0-boundary.json" gate claude opus high)
+  expected=1
+  [ "$remaining" != 5.01 ] || expected=0
+  assert_equals "$expected" "${result%%|*}" "P0 requires a reading strictly above 5%: $remaining"
+done
 rm "$GATE_HOME/data/t1/placement.json"
 
 # Live Claude resets jitter across reads, including minute boundaries.

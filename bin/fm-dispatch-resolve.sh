@@ -16,7 +16,8 @@
 # only past a balance refusal, never past the reserve or an exhausted window),
 # --no-charge emits check.charge for later launch commit; --global-check checks
 # an inferred rule against the full pool. --p0 with an override uses a hard 5%
-# reserve. --parent-placement consumes the gate-validated remote transfer record.
+# admission threshold before its own draw. --parent-placement consumes the
+# gate-validated remote transfer record.
 # A refusal carries check.reason; only a passing verdict charges the requested
 # profile. Empty model or effort are passed as ''.
 #
@@ -796,8 +797,8 @@ CANDIDATE_JQ='
   def headroom($rows):
     if ($rows | length) == 0 or any($rows[]; (.pace.worstReservePercentPoints | type) != "number") then null
     else ($rows | map(.pace.worstReservePercentPoints) | min | (. * 100 | round) / 100) end;
-  # A new crew must leave the reserve intact after its own expected draw:
-  # its measured draw, else the fixed placement charge.
+  # Ordinary crews leave the reserve intact after their expected draw;
+  # P0 admission checks the current reading before that draw.
   def own_draw($p; $m; $window):
     ($burn.models["\($p):\(bare($m))"] // $burn.providers[$p] // {}) as $rate |
     ($rate.windows[$window].draw // (if $rate.windows then draw_percent else ($rate.draw // draw_percent) end));
@@ -809,7 +810,8 @@ CANDIDATE_JQ='
           draw:own_draw($p; $m; .id), window:.id}
        else $r + {draw:own_draw($p; $m; ($r.limitingWindowIds[0] // "legacy"))} end) |
       select(.status == "known" and (.effectivePercentRemaining | type) == "number"
-        and .effectivePercentRemaining - .draw < reserve_limit)] | first;
+        and (if p0_admission then .effectivePercentRemaining <= reserve_limit
+             else .effectivePercentRemaining - .draw < reserve_limit end))] | first;
   def evaluate($c):
     (provider_of($c)) as $p | (lane_of($c)) as $lane |
     if $p == null then {profile: $c, eligible: false, reason: "no provider family for harness \($c.harness); declare provider on the profile"}
@@ -831,7 +833,8 @@ CANDIDATE_JQ='
       elif below_reserve($rows; $p; $lane; ($c.model // "")) != null then
         (below_reserve($rows; $p; $lane; ($c.model // ""))) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, headroom: headroom($rows), eligible: false,
-         reason: "below the \(reserve_limit)% reserve at \($bad.scope) after its own expected draw of \($bad.draw | (. * 100 | round) / 100) points"}
+         reason: (if p0_admission then "P0 requires more than 5% remaining at \($bad.scope) before its own draw"
+           else "below the \(reserve_limit)% reserve at \($bad.scope) after its own expected draw of \($bad.draw | (. * 100 | round) / 100) points" end)}
       elif $profile_floor_state == "below" then
         ([rows($p; $lane)[] | select(
           .scope == $c.floor.scope and
@@ -881,7 +884,8 @@ POOL_JQ='
   # quota-balanced near-tie band in spendPriority units; docs/configuration.md
   # "Candidate selection policy" owns the value and its rationale.
   def near_tie_band: 0.05;
-  def reserve_limit: if $check != null and $check.p0 and $check.override != "" then 5 else $balance.reserve_percent end;
+  def p0_admission: $check != null and $check.p0 and $check.override != "";
+  def reserve_limit: if p0_admission then 5 else $balance.reserve_percent end;
   # The estimated draw one placed task takes from its account; the same
   # section owns these values and their rationale.
   def draw_percent: 5;
@@ -928,9 +932,9 @@ POOL_JQ='
       if ((.quotaSemantics.effectiveAvailability | type) != "array") then . else
         .windows |= (if type == "array" then map(. as $w |
           # Model windows only take charges from that model scope.
-          (if (.id | startswith("model:")) then .id else "all_models" end) as $scope |
+          (if ((.id // "") | startswith("model:")) then .id else "all_models" end) as $scope |
           charge_points($home; $row.provider; ($row.accountKey // ""); $scope; $sig; .id) as $points |
-          .percentRemaining -= $points |
+          (if (.percentRemaining | type) == "number" then .percentRemaining -= $points else . end) |
           if (.pace.reservePercentPoints | type) == "number" then .pace.reservePercentPoints -= $points else . end)
           else . end) |
         .windows as $windows |
@@ -1328,10 +1332,10 @@ for i in "${!BRIEFS[@]}"; do
       --slurpfile answer "$WORK/answer.$i.json" --slurpfile rules "$RULES" \
       --slurpfile homes "$WORK/homes.$i.json" --slurpfile ledger "$WORK/ledger.json" \
       "$FM_QUOTA_ROW_JQ$POOL_JQ" > "$WORK/pool.$i.json" 2>/dev/null; then
-    brief_hash=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "${BRIEFS[$i]}") || die "cannot bind placement to brief"
-    jq -c --arg hash "$brief_hash" --arg task "$(brief_key "$i")" --argjson now "$NOW" '.result |
+    route_correlation=$(python3 -c 'import uuid; print(uuid.uuid4())') || die "cannot identify placement route"
+    jq -c --arg correlation "$route_correlation" --arg task "$(brief_key "$i")" --argjson now "$NOW" '.result |
       if .status == "clear" and .chosen.home != "local" then
-        .parent_placement = {version:1,at:$now,task:$task,brief_sha256:$hash,
+        .parent_placement = {version:2,at:$now,task:$task,correlation:$correlation,
           target:.chosen.home,provider:.chosen.provider,account:.chosen.account,profile:.chosen.profile,
           reason:.placement.reason}
       else . end' "$WORK/pool.$i.json" > "$WORK/result.$i.json"
