@@ -16,6 +16,8 @@ fm_flow_begin() {  # <data> <verb> <id> <none|merge|local>; sets FM_FLOW_TOKEN
   priority=$(printf '%s\n' "$detail" | sed -n 's/^  priority: *//p' | head -1)
   case "$priority" in '-'|'"-"') priority=3 ;; esac
   case "$priority" in ''|*[!0-9]*) echo 'flow-history: cannot read task priority' >&2; return 1 ;; esac
+  # The sourcing caller reads this output variable after the function returns.
+  # shellcheck disable=SC2034
   FM_FLOW_TOKEN=$(python3 "$FM_FLOW_SCRIPT_DIR/fm-flow-history.py" --data "$data" begin "$id" "$priority" "$landing")
 }
 fm_flow_finish() {  # <data> <token> <verb> <id> <status> <output>
