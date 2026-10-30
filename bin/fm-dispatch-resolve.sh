@@ -25,8 +25,9 @@
 #   would fall under the reserve after
 #   its own draw is not eligible; an allowance past the spread alarm is passed
 #   over (spread: line) or the task is held; each call samples burn through
-#   fm-quota-burn.py and charges the measured draw; and each new spread
-#   condition appends one "check: quota-spread:" wake (state/quota-spread.json).
+#   fm-quota-burn.py and charges the measured draw when evidence exists; and
+#   each new spread condition appends one "check: quota-spread:" wake
+#   (state/quota-spread.json).
 #
 # Each --project names the project of the brief just before it; one given
 # before the first brief names that first brief's project. Several briefs are
@@ -89,10 +90,12 @@
 #     fallback: <runner-up rule taken when the picked rule missed its own floor>
 #     reason: <why the status is not clear>
 #     selection: quota-balanced | candidate-order
-#     candidate: [home=<id>] <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. [feed=..s old] [charged=<n> recent placement(s)] -> eligible | eligible, runway unknown: disclosed uncertainty | eligible, unranked: <reason> | not eligible: <reason>
+#     candidate: [home=<id>] <harness>:<model> provider=.. scope=.. remaining=..% spendPriority=.. runway=.. [headroom=..] [feed=..s old] [charged=<n> recent placement(s)] -> eligible | eligible, runway unknown: disclosed uncertainty | eligible, unranked: <reason> | not eligible: <reason>
 #       Opted-in candidates also show pacing=<state> slots=<n> next=<reset>.
 #     passed over: [home=<id>] <harness>:<model>: projected to run out before reset; <later eligible candidate | another eligible candidate in the pool> has runway through_reset
-#     near-tie broken by configured order: [home=<id>] <harness>:<model>=<spendPriority>, ... (within <band>)   (quota-balanced only)
+#     near-tie broken by configured order: [home=<id>] <harness>:<model>=<spendPriority>, ... (within <band>)   (quota-balanced spendPriority fallback only)
+#     near-tie broken by <load rule>: <candidates with headroom and worker counts> (within 1 point)   (quota-balanced headroom ranking only)
+#     spread: <fuller allowance> is <points> points of headroom ahead of <behind allowance> (alarm above <threshold>)
 #     exact cross-home tie: <candidates and worker counts> -> <winner> by <fewer live workers | stable task-key hash>
 #     profile: --harness <h> [--model <m>] [--effort <e>] [--profile-floor-scope <scope> --profile-floor-min-percent <percent>]     (status clear only)
 #     placement: local | secondmate <id> (<machine> <harness>:<model> <why>)   (pooled only)
@@ -1227,10 +1230,11 @@ POOL_JQ='
      $ledger | .entries = ([.entries[] | select(.key != $key)] + [entry($result.chosen)])
    else $ledger end)}
 '
-# Placements are charged for CHARGE_WINDOW seconds, the longest a reused quota
-# reading can be, so separate calls in a burst spread like one batch. A task is
-# keyed by its data/<id>/ directory when its brief is data/<id>/brief.md, else
-# by the brief path, so resolving the same task again replaces its charge.
+# Unmeasured placements are charged for CHARGE_WINDOW seconds, the longest a
+# reused quota reading can be; measured placements keep their recorded span.
+# Separate calls in a burst therefore spread like one batch. A task is keyed by
+# its data/<id>/ directory when its brief is data/<id>/brief.md, else by the
+# brief path, so resolving the same task again replaces its charge.
 CHARGE_WINDOW=900
 LEDGER_FILE="$STATE/dispatch-charges.jsonl"
 CHECK_JSON=null
