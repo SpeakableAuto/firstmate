@@ -111,6 +111,9 @@ print((h/'tasks').read_text())
         return [json.loads(line) for line in path.read_text().splitlines()
                 if json.loads(line)[:3] == ['api', 'POST', 'graphql']] if path.exists() else []
 
+    def record(self):
+        return json.loads((self.home/'state/.clear-unmerged.json').read_text())
+
     def two_reports(self):
         other = json.loads(json.dumps(self.pr))
         other['url'] = 'https://github.com/example/other/pull/8'
@@ -141,6 +144,55 @@ print((h/'tasks').read_text())
         calls = (self.home/'calls').read_text().splitlines()
         self.assertEqual(len(calls), 4)  # two metadata reads, eligible diff and head recheck
 
+    def test_merged_clear_prs_are_not_reread_and_overdue_pr_checked_each_tick(self):
+        prs, words = [], []
+        for number in range(1, 41):
+            pr = json.loads(json.dumps(self.pr))
+            pr['url'] = 'https://github.com/example/demo/pull/'+str(number)
+            if number <= 38:
+                pr['state'] = 'MERGED'
+            prs.append(pr)
+            words.append(pr['url'])
+        self.forge(prs=prs)
+        self.report('# CLEAR\n'+' '.join(words)+' '+SHA, NOW-3600)
+        for _ in range(4):
+            out = self.run_check()
+            if 'deferred' not in out and not self.record()['deferred']:
+                break
+        self.assertFalse(self.record()['deferred'])
+        self.assertNotIn('CLEAR unmerged: ', out)
+        self.assertEqual(len(self.record()['finished']), 38)
+        (self.home/'calls').unlink()
+        self.env['FM_CLEAR_UNMERGED_NOW'] = str(NOW+3700)
+        out = self.run_check()
+        self.assertEqual(len(self.metadata_calls()), 2)
+        self.assertRegex(out, r'CLEAR unmerged: https://github.com/example/demo/pull/(39|40) ')
+        self.assertNotIn('diagnostics', out)
+
+    def test_deferral_note_is_stable_across_ticks(self):
+        other = self.two_reports()
+        self.pr['isDraft'] = True
+        self.forge(prs=[self.pr, other])
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '1'
+        self.assertIn('read 1, deferred 1, finished-skipped 0', self.run_check())
+        self.assertEqual(self.run_check(), '')
+        self.assertEqual(len(self.metadata_calls()), 2)
+
+    def test_closed_pr_with_newer_clear_report_is_reread(self):
+        self.pr['state'] = 'CLOSED'
+        self.forge()
+        self.run_check()
+        self.assertEqual(self.record()['finished'][URL]['state'], 'CLOSED')
+        self.run_check()
+        self.assertEqual(len(self.metadata_calls()), 1)
+        self.pr['state'] = 'OPEN'
+        self.forge()
+        self.env['FM_CLEAR_UNMERGED_NOW'] = str(NOW+600)
+        self.report('# CLEAR\n\n'+URL+' at `'+SHA+'`.\n', NOW+300)
+        self.run_check()
+        self.assertEqual(len(self.metadata_calls()), 2)
+        self.assertNotIn(URL, self.record()['finished'])
+
     def test_call_budget_defers_and_resumes_next_candidate(self):
         other = self.two_reports()
         # Neither candidate needs a diff, so one call must advance one candidate.
@@ -148,8 +200,8 @@ print((h/'tasks').read_text())
         self.forge(prs=[self.pr, other])
         self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '1'
         out = self.run_check()
-        self.assertIn('deferred', out)
-        self.assertIn(other['url'], out)
+        self.assertIn('read 1, deferred 1', out)
+        self.assertEqual(self.record()['deferred'], [other['url']])
         self.assertNotIn('check unavailable', out)
         self.assertEqual(len(self.metadata_calls()), 1)
         self.run_check()
@@ -174,7 +226,8 @@ print((h/'tasks').read_text())
         self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '3'
         first = self.run_check()
         self.assertNotIn('CLEAR unmerged: ', first)
-        self.assertIn('deferred: '+other['url'], first)
+        self.assertIn('deferred 1', first)
+        self.assertEqual(self.record()['deferred'], [other['url']])
         second = self.run_check()
         self.assertIn('CLEAR unmerged: '+other['url'], second)
         self.assertNotIn('check unavailable', second)
@@ -197,7 +250,8 @@ print((h/'tasks').read_text())
         self.env['FM_CHECK_TIMEOUT'] = '4'
         first = self.run_check()
         self.assertIn(URL+': skipped:', first)
-        self.assertIn('deferred: '+other['url'], first)
+        self.assertIn('deferred 1', first)
+        self.assertEqual(self.record()['deferred'], [other['url']])
         self.assertNotIn('check unavailable', first)
         second = self.run_check()
         self.assertIn('CLEAR unmerged: '+other['url'], second)
@@ -209,6 +263,7 @@ print((h/'tasks').read_text())
             pr = dict(self.pr, **changes)
             self.forge(prs=[pr])
             (self.home/'calls').unlink(missing_ok=True)
+            (self.home/'state/.clear-unmerged.json').unlink(missing_ok=True)
             self.assertEqual(self.run_check(), '')
             self.assertEqual(len((self.home/'calls').read_text().splitlines()), 1)
 

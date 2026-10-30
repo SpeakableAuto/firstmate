@@ -37,7 +37,11 @@ rows and tasks bound by state/*.meta pr= or a matching review task id.
 
 state/.clear-unmerged.json stores schema=1, alerted PR+head identities, observed
 head clocks (removed when a candidate is closed or absent), a next-candidate
-cursor for budget continuation, clamped future
+cursor and the deferred URLs for budget continuation, and a finished map of
+PR URL -> {state, head, seen_at} for PRs read as MERGED or CLOSED. MERGED URLs
+are never read again; CLOSED URLs are reread only after a newer CLEAR report
+names them. Entries leave the map when no CLEAR report names the URL, CLOSED
+entries after 30 days, and the oldest beyond 5000. Clamped future
 report times, and the last error and report-skip diagnostics for repeat
 suppression. A nonblocking flock serializes checks.
 A failed project, repository or PR read is reported and skipped; the remaining
@@ -47,8 +51,8 @@ advance through the remaining candidates. Disarming retains this history.
 The entire scan is bounded to min(20, FM_CHECK_TIMEOUT-2) seconds, with a 10s
 per-command cap. FM_CLEAR_UNMERGED_MAX_CALLS bounds forge calls per tick
 (default 12); an overdue eligible candidate needs three calls including metadata,
-diff and head recheck. Unreached candidates are named as deferred and resumed
-first next tick. Item failures are named as skipped, not whole-check unavailable.
+diff and head recheck. Unreached candidates are counted as deferred (URLs in
+the state record) and resumed first next tick. Item failures are named as skipped, not whole-check unavailable.
 Budget/forge/registry/hold failures never mark a PR alerted. A test-only FM_CLEAR_UNMERGED_NOW freezes age
 calculation, never the real-time budget. No credentials or shell code are read.
 """
@@ -76,6 +80,8 @@ spec.loader.exec_module(LINT)
 SLUG = r'[A-Za-z0-9_.-]+'
 URL = re.compile(r'https://[A-Za-z0-9.-]+/'+SLUG+'/'+SLUG+r'/pull/[1-9][0-9]*(?![A-Za-z0-9_/?#=-])')
 REPORT_PREFIX_BYTES = 64 * 1024
+FINISHED_CLOSED_SECONDS = 30*24*3600
+FINISHED_LIMIT = 5000
 SHA = re.compile(r'(?<![a-fA-F0-9])[a-fA-F0-9]{40}(?![a-fA-F0-9])')
 
 
@@ -429,6 +435,17 @@ def check():
         try:
             reports = poll.reports(record, diagnostics)
             urls = sorted({url for _, urls, _, _, clear in reports if clear for url in urls})
+            finished = {url: entry for url, entry in record.get('finished', {}).items() if url in urls
+                        and (entry['state'] == 'MERGED' or entry['seen_at'] > poll.now-FINISHED_CLOSED_SECONDS)}
+            finished = dict(sorted(finished.items(), key=lambda item: item[1]['seen_at'])[-FINISHED_LIMIT:])
+            record['finished'] = finished
+            reviewed = {}
+            for _, report_urls, _, stamp, clear in reports:
+                for url in report_urls if clear else ():
+                    reviewed[url] = max(stamp, reviewed.get(url, stamp))
+            skipped_finished = [url for url in urls if url in finished and (finished[url]['state'] == 'MERGED'
+                                or reviewed[url] <= finished[url]['seen_at'])]
+            urls = [url for url in urls if url not in skipped_finished]
             if urls and shutil.which('gh-axi') is None:
                 global_failure = True
                 raise Unavailable('gh-axi missing; install gh-axi')
@@ -443,15 +460,19 @@ def check():
                 index = urls.index(cursor)
                 urls = urls[index:] + urls[:index]
             heads = record.setdefault('heads', {})
-            deferred = []
+            deferred, read = [], 0
             for index, url in enumerate(urls):
                 try:
                     poll.remaining()
                     if poll.calls_left == 0:
                         raise Deferred('forge call budget exhausted')
+                    read += 1
                     pr = poll.pr(url)
+                    finished.pop(url, None)
                     if pr is None or pr['state'] in ('CLOSED', 'MERGED'):
                         heads.pop(url, None)
+                        if pr is not None:
+                            finished[url] = {'state': pr['state'], 'head': pr['headRefOid'], 'seen_at': poll.now}
                         continue
                     if pr['url'] != url:
                         raise Unavailable('forge returned a different PR identity')
@@ -472,14 +493,17 @@ def check():
                             record['alerted'].append(candidate[0])
                 except Deferred as error:
                     deferred = urls[index:]
-                    errors.append(f'{error}; deferred: '+', '.join(deferred))
+                    errors.append(f'{error}; read {read}, deferred {len(deferred)}, '
+                                  f'finished-skipped {len(skipped_finished)}')
                     break
                 except ITEM_ERRORS as error:
                     errors.append(f'{url}: skipped: {error}')
             record['cursor'] = deferred[0] if deferred else None
+            record['deferred'] = deferred
         except Deferred as error:
             record['cursor'] = urls[0] if urls else record.get('cursor')
-            errors.append(f'{error}; deferred: '+', '.join(urls))
+            record['deferred'] = urls
+            errors.append(f'{error}; read 0, deferred {len(urls)}')
         except ITEM_ERRORS as error:
             errors.append(str(error))
         note = ''
