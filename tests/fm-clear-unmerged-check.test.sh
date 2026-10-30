@@ -67,6 +67,9 @@ else:
             for row in rows: row['files']['pageInfo']['hasNextPage'] = True
         pr = next((p for p in rows if p['url'].endswith('/'+number)), None)
         response = dict(data=dict(repository=dict(pullRequest=pr)))
+        if pr is None and (h/'not-found-errors').exists():
+            response['errors'] = [dict(type='NOT_FOUND', path=['repository', 'pullRequest'],
+                                       message='Could not resolve to a PullRequest')]
         encoded = base64.b64encode(json.dumps(response).encode()).decode()
         chunks = [encoded[i:i+1000] for i in range(0,len(encoded),1000)]
         print('chunks['+str(len(chunks))+']{part}:\\n'+''.join('  '+c+'\\n' for c in chunks), end='')
@@ -114,6 +117,24 @@ print((h/'tasks').read_text())
     def record(self):
         return json.loads((self.home/'state/.clear-unmerged.json').read_text())
 
+    def drafts(self, count):
+        prs = []
+        for number in range(1, count+1):
+            pr = json.loads(json.dumps(self.pr))
+            pr['url'] = 'https://github.com/example/demo/pull/'+str(number)
+            pr['isDraft'] = True
+            prs.append(pr)
+        self.forge(prs=prs)
+        self.report('# CLEAR\n'+' '.join(pr['url'] for pr in prs)+' '+SHA, NOW-7260)
+        return prs
+
+    def project(self, name, origin=None, tags='no-mistakes'):
+        subprocess.run(['git', 'init', '-q', str(self.home/'projects'/name)], check=True)
+        if origin:
+            subprocess.run(['git', '-C', str(self.home/'projects'/name), 'remote', 'add', 'origin', origin], check=True)
+        with (self.home/'data/projects.md').open('a') as registry:
+            registry.write('- '+name+' ['+tags+'] - '+name+'\n')
+
     def two_reports(self):
         other = json.loads(json.dumps(self.pr))
         other['url'] = 'https://github.com/example/other/pull/8'
@@ -144,6 +165,82 @@ print((h/'tasks').read_text())
         calls = (self.home/'calls').read_text().splitlines()
         self.assertEqual(len(calls), 4)  # two metadata reads, eligible diff and head recheck
 
+    def test_origin_spelled_in_other_case_still_alerts(self):
+        subprocess.run(['git', '-C', str(self.home/'projects/demo'), 'remote', 'set-url', 'origin',
+                        'https://github.com/Example/Demo.git'], check=True)
+        canonical = 'https://github.com/Example/Demo/pull/7'
+        self.pr['url'] = canonical
+        self.forge()
+        out = self.run_check()
+        self.assertEqual(out.splitlines()[0].split(' head=')[0], 'CLEAR unmerged: '+canonical)
+        self.assertNotIn('diagnostics', out)
+        self.assertEqual(self.record()['alerted'], [canonical+'@'+SHA])
+        self.assertEqual(self.run_check(), '')
+
+    def test_clear_url_without_registered_origin_is_named(self):
+        subprocess.run(['git', '-C', str(self.home/'projects/demo'), 'remote', 'set-url', 'origin',
+                        'https://github.com/example/old-demo.git'], check=True)
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged scan diagnostics: ', out)
+        self.assertIn(URL+': skipped: no registered project has this repository as origin', out)
+        self.assertNotIn('check unavailable', out)
+        self.assertFalse((self.home/'calls').exists())
+        self.assertEqual(self.run_check(), '')
+
+    def test_local_only_and_gerrit_projects_stay_quiet(self):
+        self.project('scratch', tags='local-only')
+        self.project('gr', 'ssh://me@review.example:29418/gr', 'no-mistakes forge=gerrit')
+        out = self.run_check()
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertIn('CLEAR unmerged: '+URL, out)
+
+    def test_whole_check_failures_say_unavailable(self):
+        (self.home/'tasks').write_text('error: backend unavailable\n')
+        self.assertIn('CLEAR unmerged check unavailable: captain hold', self.run_check())
+        (self.home/'tasks').write_text('count: 0\ntasks: 0 tasks in this backlog\n')
+        (self.home/'data/projects.md').unlink()
+        self.assertIn('CLEAR unmerged check unavailable: ', self.run_check())
+
+    def test_call_budget_too_small_for_one_alert_is_refused(self):
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '2'
+        out = self.run_check()
+        self.assertIn('check unavailable: FM_CLEAR_UNMERGED_MAX_CALLS must be at least 3', out)
+        self.assertFalse((self.home/'calls').exists())
+
+    def test_missing_pr_is_not_reread_every_tick(self):
+        for errors in (False, True):
+            (self.home/'state/.clear-unmerged.json').unlink(missing_ok=True)
+            (self.home/'calls').unlink(missing_ok=True)
+            if errors:
+                (self.home/'not-found-errors').touch()
+            self.forge(prs=[dict(self.pr, url='https://github.com/example/demo/pull/9')])
+            self.assertEqual(self.run_check(), '')
+            self.assertEqual(self.record()['finished'][URL]['state'], 'MISSING')
+            self.assertEqual(self.run_check(), '')
+            self.assertEqual(len(self.metadata_calls()), 1)
+
+    def test_time_budget_in_registry_keeps_rotation_cursor(self):
+        self.two_reports()
+        real = subprocess.run(['/bin/sh', '-c', 'command -v git'], capture_output=True, text=True, check=True).stdout.strip()
+        (self.home/'fakebin/git').write_text('#!/bin/sh\nsleep 10\nexec '+real+' "$@"\n')
+        (self.home/'fakebin/git').chmod(0o755)
+        cursor = 'https://github.com/example/other/pull/8'
+        (self.home/'state/.clear-unmerged.json').write_text(json.dumps(
+            dict(schema=1, alerted=[], error='', cursor=cursor)))
+        self.env['FM_CHECK_TIMEOUT'] = '3'
+        out = self.run_check()
+        self.assertIn('deferred 2', out)
+        self.assertNotIn('check unavailable', out)
+        self.assertEqual(self.record()['cursor'], cursor)
+
+    def test_head_clock_pruned_when_clear_report_is_gone(self):
+        self.env['FM_CLEAR_UNMERGED_NOW'] = str(NOW-3600)
+        self.run_check()
+        self.assertIn(URL, self.record()['heads'])
+        (self.home/'data/review/report.md').unlink()
+        self.run_check()
+        self.assertEqual(self.record()['heads'], {})
+
     def test_merged_clear_prs_are_not_reread_and_overdue_pr_checked_each_tick(self):
         prs, words = [], []
         for number in range(1, 41):
@@ -170,13 +267,11 @@ print((h/'tasks').read_text())
         self.assertNotIn('diagnostics', out)
 
     def test_deferral_note_is_stable_across_ticks(self):
-        other = self.two_reports()
-        self.pr['isDraft'] = True
-        self.forge(prs=[self.pr, other])
-        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '1'
-        self.assertIn('read 1, deferred 1, finished-skipped 0', self.run_check())
+        self.drafts(4)
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '3'
+        self.assertIn('read 3, deferred 1, finished-skipped 0', self.run_check())
         self.assertEqual(self.run_check(), '')
-        self.assertEqual(len(self.metadata_calls()), 2)
+        self.assertEqual(len(self.metadata_calls()), 6)
 
     def test_closed_pr_with_newer_clear_report_is_reread(self):
         self.pr['state'] = 'CLOSED'
@@ -194,20 +289,18 @@ print((h/'tasks').read_text())
         self.assertNotIn(URL, self.record()['finished'])
 
     def test_call_budget_defers_and_resumes_next_candidate(self):
-        other = self.two_reports()
-        # Neither candidate needs a diff, so one call must advance one candidate.
-        self.pr['isDraft'] = True
-        self.forge(prs=[self.pr, other])
-        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '1'
+        # No candidate needs a diff, so each call must advance one candidate.
+        prs = self.drafts(4)
+        self.env['FM_CLEAR_UNMERGED_MAX_CALLS'] = '3'
         out = self.run_check()
-        self.assertIn('read 1, deferred 1', out)
-        self.assertEqual(self.record()['deferred'], [other['url']])
+        self.assertIn('read 3, deferred 1', out)
+        self.assertEqual(self.record()['deferred'], [prs[3]['url']])
         self.assertNotIn('check unavailable', out)
-        self.assertEqual(len(self.metadata_calls()), 1)
+        self.assertEqual(len(self.metadata_calls()), 3)
         self.run_check()
         calls = self.metadata_calls()
-        self.assertEqual(len(calls), 2)
-        self.assertIn('pullRequest(number:8)', ' '.join(calls[-1]))
+        self.assertEqual(len(calls), 6)
+        self.assertIn('pullRequest(number:4)', ' '.join(calls[3]))
 
     def test_one_candidate_failure_does_not_hide_other_alert(self):
         other = self.two_reports()
