@@ -26,6 +26,10 @@ cat > "$FAKEBIN/xcrun" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$HOME/xcrun-args"
 SH
+cat > "$FAKEBIN/launchctl" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/launchctl-calls"
+SH
 chmod +x "$FAKEBIN"/*
 
 TARGETS="Build/DerivedData Build/Tmp Caches/npm Caches/Playwright SimulatorDevices"
@@ -51,6 +55,10 @@ EOF
 make_drive() {
   local rel
   for rel in $TARGETS; do mkdir -p "$drive/$rel"; done
+}
+write_placement() {
+  jq -n --arg d "$drive" --arg t "$TARGETS" \
+    '{drive:$d,required_drive_dirs:($t|split(" "))}' > "$fm/config/crew-placement.json"
 }
 # FM_WORK_DRIVE_TEST_MOUNT stands in for a real mount; unset it to test refusal.
 wd() {
@@ -122,22 +130,49 @@ wd simctl list devices
 assert_equals "simctl --set $drive/SimulatorDevices list devices" "$(cat "$user/xcrun-args")" 'simctl uses the drive device set'
 pass 'exec and simctl run on the drive and clean up'
 
-new_case install
+new_case placement_absent
 make_drive
 set +e; out=$(wd verify 2>&1); rc=$?; set -e
 assert_equals 3 "$rc" 'verify refuses before install'
 assert_contains "$out" 'refused fresh-shell PLAYWRIGHT_BROWSERS_PATH' 'missing shell export is named'
+assert_contains "$out" 'refused placement:' 'absent placement profile refuses verification'
+set +e; out=$(wd install --dry-run 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'install refuses without placement admission'
+assert_contains "$out" 'refused placement:' 'install names its missing placement admission'
+pass 'verify and install fail closed until placement admission is active'
+
+new_case install
+mkdir -p "$drive"
+write_placement
 chmod 0600 "$user/.bash_profile"
 cp "$user/.bash_profile" "$case_dir/profile-before"
 out=$(wd install --dry-run)
 assert_contains "$out" "export PLAYWRIGHT_BROWSERS_PATH='$drive/Caches/Playwright'" 'dry run shows the block'
+assert_contains "$out" "would create directory $drive/Caches/Playwright" 'dry run shows missing drive folders'
+assert_contains "$out" 'local.firstmate.internal-growth' 'dry run prints the LaunchAgent plist'
+assert_contains "$out" 'launchctl bootstrap' 'dry run prints the bootstrap command'
 cmp -s "$user/.bash_profile" "$case_dir/profile-before" || fail 'dry run changed the profile'
 [ ! -e "$user/npm-calls" ] || fail 'dry run changed npm'
+[ ! -e "$user/Library/LaunchAgents/local.firstmate.internal-growth.plist" ] || fail 'dry run wrote the LaunchAgent'
+[ ! -e "$drive/Caches/Playwright" ] || fail 'dry run created a target directory'
 out=$(wd install)
 assert_contains "$out" "ok fresh-shell PLAYWRIGHT_BROWSERS_PATH=$drive/Caches/Playwright" 'fresh shell sees the export'
 assert_contains "$out" "ok npm cache $drive/Caches/npm" 'npm resolves the drive cache'
 assert_contains "$out" "ok xcode derived data $drive/Build/DerivedData" 'Xcode default points at the drive'
-assert_contains "$out" 'pending placement' 'absent placement profile is reported, not passed'
+assert_contains "$out" 'enrolled local.firstmate.internal-growth' 'daily growth check is enrolled'
+for rel in $TARGETS; do [ -d "$drive/$rel" ] || fail "install did not create $rel"; done
+plist="$user/Library/LaunchAgents/local.firstmate.internal-growth.plist"
+python3 - "$plist" "$fm" <<'PY'
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    plist = plistlib.load(handle)
+assert plist["Label"] == "local.firstmate.internal-growth"
+assert plist["ProgramArguments"] == ["/bin/bash", sys.argv[2] + "/bin/fm-internal-growth.sh"]
+assert plist["StartCalendarInterval"] == {"Hour": 3, "Minute": 30}
+PY
+assert_contains "$(cat "$user/launchctl-calls")" "bootstrap gui/$(id -u) $plist" 'install bootstraps the per-user LaunchAgent'
 wd install >/dev/null
 assert_equals 1 "$(grep -c '^# >>> firstmate work drive >>>$' "$user/.bash_profile")" 'install is idempotent'
 grep -qx 'export KEEP_ME=1' "$user/.bash_profile" || fail 'install dropped unmanaged lines'
@@ -154,7 +189,7 @@ jq -n --arg d "$drive" '{drive:$d,required_drive_dirs:["Build/Tmp"]}' > "$fm/con
 set +e; out=$(wd verify 2>&1); rc=$?; set -e
 assert_equals 3 "$rc" 'placement missing a target refuses'
 assert_contains "$out" 'required_drive_dirs lacks Caches/npm' 'uncovered target is named'
-jq -n --arg d "$drive" --arg t "$TARGETS" '{drive:$d,required_drive_dirs:($t|split(" "))}' > "$fm/config/crew-placement.json"
+write_placement
 out=$(wd verify)
 assert_contains "$out" 'ok placement requires SimulatorDevices' 'matching placement passes'
 pass 'verify checks the launch allowlist and placement profile'
