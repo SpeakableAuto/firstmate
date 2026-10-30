@@ -1,7 +1,7 @@
 # Supervisor watchdog
 
 The optional watchdog runs outside the supervisor session and nudges an idle Claude supervisor on Herdr after a network error and restored provider connectivity, or when queued wakes sit undelivered.
-It also restarts a supervisor that stops making progress while work is under way.
+It also detects a supervisor that stops making progress while work is under way, nudges it once, and sends an urgent alert when it remains stalled.
 Its state machine, guards, supported configuration, and residual input race are owned by [`bin/fm-supervisor-watchdog.sh`](../bin/fm-supervisor-watchdog.sh), whose `--help` prints the operator contract.
 It never touches worker panes or repairs a dead shell.
 Other primary harnesses and tmux, Zellij, Orca, cmux, and Codex App are unsupported and must not be configured as targets.
@@ -25,11 +25,12 @@ While the home needs supervision, the watchdog treats a newer watcher beacon onl
 Spinner rows, elapsed durations, token counters and Claude's rotating hint row below the prompt are ignored, while other numbers remain semantic progress.
 A visible usage-limit notice counts as progress, because Claude resumes by itself and typing would cancel that.
 After `FM_WATCHDOG_STALL_SECS` (1800 seconds by default) without progress it sends one guarded nudge, which is withheld when the supervisor is busy or its version is unverified.
-After a second quiet interval it reads a fresh frame and restarts only when the installed version is verified and the composer is explicitly empty.
-A pending, unknown or unreadable composer, an unsupported harness, or version drift holds the restart and sends one urgent alert that says unsent input may be in the box.
-A permitted restart records a durable `restarting` receipt before it stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a real Claude agent process started in that pane.
+By default, a second quiet interval never stops the supervisor and sends one urgent alert that it did not recover after the nudge and needs restarting by hand.
+Set `FM_WATCHDOG_STALL_RESTART=1` to opt into automatic restart from the latest handoff after that second interval.
+The opt-in restart reads a fresh frame and proceeds only when the installed version is verified and the composer is explicitly empty.
+A pending, unknown or unreadable composer, an unsupported harness, or version drift holds an enabled restart and sends one urgent alert that says unsent input may be in the box.
+An enabled restart records a durable `restarting` receipt before it stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a real Claude agent process started in that pane.
 If a tick ends during that restart, the next tick accepts an already proven Claude agent or retries the restart once under the same verified-empty-composer guard, while a second interruption or unproven retry sends the urgent supervisor-down alert.
-After proof, the watchdog baselines transcript, wake, beacon and pane progress produced by the relaunch so an immediately hung supervisor reaches the down alert after one interval.
 An unproven restart or no progress for another interval after a proven one sends one urgent supervisor-down alert through the [urgent captain alert path](wedge-alarm.md#urgent-captain-alerts).
 The same incident retries delivery through the alert limiter until Hermes sends it or reports the incident as a duplicate.
 
@@ -37,8 +38,8 @@ The same incident retries delivery through the alert limiter until Hermes sends 
 
 The job pins the complete `claude --version` output that passed the live check.
 A different installed version raises one check wake and one active alert per newly seen version and switches the watchdog to a degraded mode rather than disabling it.
-In that mode nothing is typed into or stopped in the supervisor, because the network nudge, queue ring, stall nudge and safe restart all depend on verified screen reading.
-The wake-age alert and stall timer keep running, and after the second quiet interval one urgent alert says the supervisor stalled and its restart was held because unsent input may be in the box.
+In that mode nothing is typed into the supervisor, because the network nudge, queue ring and stall nudge depend on verified screen reading, and an enabled restart is held.
+The wake-age alert and stall timer keep running, and after the second quiet interval one urgent supervisor-down alert is sent.
 
 After every Claude upgrade, run the live guard and move the pin only when it passes:
 
@@ -89,6 +90,7 @@ Set `PATH` to include the actual installed locations of Bash, Herdr, Claude, jq,
     <key>FM_SUPERVISOR_TARGET</key><string>chosen-session:w1:p1</string>
     <key>FM_WATCHDOG_CLAUDE_VERSION</key><string>REPLACE WITH VERIFIED VERSION OUTPUT</string>
     <key>FM_WATCHDOG_PROBE_URL</key><string>https://api.anthropic.com/</string>
+    <key>FM_WATCHDOG_STALL_RESTART</key><string>0</string>
     <key>FM_WATCHDOG_RESTART_COMMAND</key><string>claude</string>
     <key>FM_WATCHDOG_TRANSCRIPT_DIR</key><string>/absolute/.claude/projects/encoded-supervisor-cwd</string>
   </dict>

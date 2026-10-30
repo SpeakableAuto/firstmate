@@ -45,6 +45,7 @@ reset_case() {
   CONFIRM_NATIVE=0
   READ_FAIL=0; IDENTITY_FAIL=0; SEND_FAIL=0; ENTER_FAIL=0; STALL=0
   CHANGE_DURING_SEND=0; LIMIT_DURING_SEND=0; READ_FAIL_AFTER_SEND=0
+  FM_WATCHDOG_STALL_RESTART=0; STALL_RESTART=0
   FM_WATCHDOG_PROBE_URL=https://provider.example/
 }
 arm() { watchdog_tick; TICK=1011; }
@@ -211,6 +212,12 @@ for interval in 0 9 010 garbage 86401; do
     bash "$ROOT/bin/fm-supervisor-watchdog.sh" tick >/dev/null 2>&1; then fail "unsafe interval $interval accepted"; fi
 done
 pass 'executable enforces minimum ten-second observation interval'
+for restart in '' -1 2 01 yes; do
+  if FM_HOME="$TMP" FM_SUPERVISOR_TARGET=lab:w1:p1 FM_WATCHDOG_STALL_RESTART="$restart" \
+    FM_WATCHDOG_CLAUDE_VERSION=unused FM_WATCHDOG_PROBE_URL=https://provider.example/ \
+    bash "$ROOT/bin/fm-supervisor-watchdog.sh" tick >/dev/null 2>&1; then fail "unsafe restart setting '$restart' accepted"; fi
+done
+pass 'executable rejects invalid restart settings'
 
 # An aged durable wake is an alert-only condition, independent of network
 # recovery. A dim suggestion is empty input; a real draft stays untouched.
@@ -388,8 +395,8 @@ watchdog_tick; TICK=1011; watchdog_tick; TICK=1500; watchdog_tick
 check "$SENT" 0 'drift never types the network nudge'
 check "$(grep -c "to '2.1.312" "$DIR/alerts")" 1 'drift raises one check wake for the new version'
 check "$(grep -c "to '2.1.312" "$DIR/notifications")" 1 'drift raises one active alert for the new version'
-grep -q 'holds any restart and sends an urgent held-restart alert' "$DIR/alerts" || fail 'drift alert still promised automatic restart'
-pass 'drift alert explains that restart recovery is held'
+grep -q 'an enabled restart remains held' "$DIR/alerts" || fail 'drift alert still promised automatic restart'
+pass 'drift alert explains the optional restart hold'
 check "$(jq -r 'select(.event=="refused") | .detail' "$DIR/events.jsonl" | wc -l | tr -d ' ')" 0 'drift is not a refusal'
 check "$(jq -r 'select(.event=="drift") | .detail' "$DIR/events.jsonl")" 'claude-version-changed:2.1.312 (Claude Code)' 'drift is logged once'
 INSTALLED_VERSION='2.1.320 (Claude Code)'; TICK=1600; watchdog_tick
@@ -404,7 +411,7 @@ DRIFT=0; TICK=1800; watchdog_tick
 pass 'a matching version ends drift'
 DRIFT=0
 
-# Stall detection: nudge, restart, then urgent alert, with progress rearming.
+# Stall detection: nudge, urgent default, opt-in restart, and progress rearming.
 STALL_SECS=1800
 RESTART_COMMAND='claude --model opus'
 RESTART_CWD=/fm/home
@@ -445,9 +452,11 @@ stall_case() {
   PROC_STATE=agent AFTER_LAUNCH_STATE=agent LAST_SENT= URGENT_RESULT=sent
   FM_WATCHDOG_TRANSCRIPT_DIR= RESTART_WRITES_TRANSCRIPT=0
 }
+restart_case() { stall_case; FM_WATCHDOG_STALL_RESTART=1; STALL_RESTART=1; }
 stage() { jq -r .stage "$DIR/stall.json"; }
 HUNG=$'❯ run it\n✻ Thinking… (12s · esc to interrupt)\n────────────────────\n❯ \n────────────────────'
 hung_case() { stall_case; PANE=$HUNG; IDENTITY=$'claude\tworking'; }
+restart_hung_case() { hung_case; FM_WATCHDOG_STALL_RESTART=1; STALL_RESTART=1; }
 stall_case
 watchdog_tick
 check "$(stage)" watching 'stall timer starts while work is under way'
@@ -499,6 +508,27 @@ check "$(jq -r 'select(.event=="withheld") | .detail' "$DIR/events.jsonl")" stal
 TICK=4599; watchdog_tick
 check "$STOPPED" 0 'no restart before the second window'
 TICK=4600; watchdog_tick
+check "$STOPPED" 0 'the default stall policy never stops the supervisor'
+check "$(stage)" down 'the default stall policy marks an unrecovered supervisor down'
+[ ! -e "$DIR/launches" ] || fail 'the default stall policy launched a replacement supervisor'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'the default stall policy sends one urgent alert'
+grep -q 'stopped making progress and did not recover after a nudge, so it needs restarting by hand' "$DIR/urgent" \
+  || fail 'default stall alert did not explain the manual restart'
+pass 'default stall alert explains the manual recovery in plain words'
+TICK=4601; watchdog_tick
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'a delivered default stall alert is not repeated'
+PANE=$'❯ run it\n● Recovered after the alert\n────────────────────\n❯ \n────────────────────'; TICK=4602; watchdog_tick
+check "$(stage)" watching 'real progress after a default stall alert rearms monitoring'
+
+hung_case; URGENT_RESULT=failed:delivery-failed
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
+check "$(jq -r .alerted "$DIR/stall.json")" false 'failed default urgent delivery leaves the incident open'
+URGENT_RESULT=sent; TICK=4601; watchdog_tick
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 2 'the default down incident retries urgent delivery on a later tick'
+check "$(jq -r .alerted "$DIR/stall.json")" true 'successful default retry closes the alert episode'
+
+restart_hung_case
+watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$STOPPED" 1 'working supervisor with an empty composer restarts after the second window'
 check "$(stage)" restarted 'restart is recorded'
 launch=$(cat "$DIR/launches")
@@ -521,7 +551,7 @@ check "$(stage)" down 'a working supervisor cannot claim progress from the watch
 IDENTITY=$'claude\tidle'; BEACON=502; TICK=20002; watchdog_tick
 check "$(stage)" watching 'an idle supervisor can rearm from a fresh watcher beacon'
 
-hung_case
+restart_hung_case
 PANE=$'❯ run it\n✻ Thinking… (12s · esc to interrupt)\n────────────────────\n❯ typed follow-up\n────────────────────'
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$STOPPED" 0 'a working supervisor with typed input is never stopped'
@@ -529,7 +559,7 @@ check "$(stage)" down 'typed input holds the restart as a down incident'
 grep -q 'restart held because unsent input may be in the box' "$DIR/urgent" || fail 'typed-input hold did not send the urgent alert'
 pass 'working typed input uses the urgent held-restart path'
 
-hung_case
+restart_hung_case
 watchdog_tick; TICK=2800; watchdog_tick
 READ_FAIL=1; TICK=4600; watchdog_tick
 check "$STOPPED" 0 'an unreadable supervisor is never stopped'
@@ -538,7 +568,7 @@ grep -q 'restart held because unsent input may be in the box' "$DIR/urgent" || f
 pass 'unreadable frame uses the urgent held-restart path'
 
 # Unproven restarts alert at once; a draft is never destroyed.
-hung_case; AFTER_LAUNCH_STATE=shell; URGENT_RESULT=failed:delivery-failed
+restart_hung_case; AFTER_LAUNCH_STATE=shell; URGENT_RESULT=failed:delivery-failed
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$(stage)" down 'unproven restart marks the supervisor down'
 grep -q 'restart attempt failed (not-proven)' "$DIR/urgent" || fail 'unproven restart did not alert'
@@ -549,25 +579,25 @@ URGENT_RESULT=sent; TICK=5501; watchdog_tick
 check "$(jq -r .alerted "$DIR/stall.json")" true 'later delivery closes the incident alert'
 TICK=5502; watchdog_tick
 check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 3 'a delivered incident stops retrying'
-hung_case; AFTER_LAUNCH_STATE=other
+restart_hung_case; AFTER_LAUNCH_STATE=other
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$(stage)" down 'a non-agent process cannot prove the restarted supervisor'
 grep -q 'restart attempt failed (not-proven)' "$DIR/urgent" || fail 'non-agent restart did not alert'
 pass 'restart proof requires a real Claude agent process'
-hung_case; STOP_OK=0
+restart_hung_case; STOP_OK=0
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 [ ! -e "$DIR/launches" ] || fail 'a supervisor that cannot be stopped was relaunched over'
 pass 'a supervisor that cannot be stopped is not relaunched over'
 grep -q 'stop-failed' "$DIR/urgent" || fail 'failed stop did not alert'
 pass 'failed stop sends the urgent alert'
-stall_case; PANE=$'● Done\n❯ half-typed answer'
+restart_case; PANE=$'● Done\n❯ half-typed answer'
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$STOPPED" 0 'a draft in the prompt holds the restart'
 check "$(stage)" down 'a verified draft is recorded as a down incident'
 grep -q 'restart held because unsent input may be in the box' "$DIR/urgent" || fail 'verified draft hold did not send the urgent alert'
 pass 'a verified draft uses the urgent held-restart path'
 
-hung_case
+restart_hung_case
 FM_WATCHDOG_TRANSCRIPT_DIR=$TMP/restart-transcripts
 mkdir -p "$FM_WATCHDOG_TRANSCRIPT_DIR"
 RESTART_WRITES_TRANSCRIPT=1
@@ -577,7 +607,7 @@ TICK=6400; watchdog_tick
 check "$(stage)" down 'restart-generated transcript does not rearm a hung supervisor'
 check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'hung restarted supervisor alerts after one interval'
 
-hung_case
+restart_hung_case
 watchdog_tick
 jq '.stage="restarting" | .stage_at=1000 | .restart_tries=1' "$DIR/stall.json" > "$DIR/stall.json.tmp"
 mv "$DIR/stall.json.tmp" "$DIR/stall.json"
@@ -587,7 +617,7 @@ check "$STOPPED" 1 'an interrupted restart retries once'
 check "$(stage)" restarted 'the interrupted restart retry is proven'
 check "$(jq -r .restart_tries "$DIR/stall.json")" 0 'a proven retry clears its restart receipt'
 
-hung_case
+restart_hung_case
 watchdog_tick
 jq '.stage="restarting" | .stage_at=1000 | .restart_tries=2' "$DIR/stall.json" > "$DIR/stall.json.tmp"
 mv "$DIR/stall.json.tmp" "$DIR/stall.json"
@@ -598,7 +628,7 @@ check "$(stage)" down 'an exhausted restart retry becomes a down incident'
 grep -q 'could not be proven after one retry' "$DIR/urgent" || fail 'exhausted restart retry did not alert'
 pass 'restart retry exhaustion sends the urgent alert'
 
-stall_case
+restart_case
 watchdog_tick
 jq 'del(.restart_tries)' "$DIR/stall.json" > "$DIR/stall.json.tmp"
 mv "$DIR/stall.json.tmp" "$DIR/stall.json"
@@ -607,7 +637,7 @@ check "$(jq -r .restart_tries "$DIR/stall.json")" 0 'an older stall record gains
 check "$(stage)" watching 'an older stall record remains usable'
 
 # A proven restart remains local even when another stall follows.
-hung_case
+restart_hung_case
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 IDENTITY=$'claude\tidle'; BEACON=600; TICK=4700; watchdog_tick
 IDENTITY=$'claude\tworking'
@@ -646,7 +676,7 @@ watchdog_tick
 check "$(stage)" watching 'corrupt stall state restarts the timer instead of refusing forever'
 
 # Drift holds a restart because the unverified composer may contain a draft.
-stall_case; PANE=$'● Done\n❯ half-typed answer'; DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)'
+restart_case; PANE=$'● Done\n❯ half-typed answer'; DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)'
 watchdog_tick; TICK=2800; watchdog_tick
 check "$SENT" 0 'drift withholds the stall nudge'
 TICK=4600; watchdog_tick

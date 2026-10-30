@@ -7,9 +7,10 @@
 #   FM_WATCHDOG_PROBE_URL      HTTPS provider endpoint (no credentials/query)
 # Optional: FM_WATCHDOG_IDLE_SECS=120, FM_WATCHDOG_BACKOFF_SECS=900,
 # FM_WATCHDOG_WAKE_AGE_SECS=600, FM_WATCHDOG_STALL_SECS=1800,
-# FM_WATCHDOG_RESTART_COMMAND=claude (the supervisor launch command, without
-# its prompt), FM_WATCHDOG_RESTART_CWD=FM_HOME, FM_WATCHDOG_TRANSCRIPT_DIR
-# (the supervisor's Claude project transcript directory).
+# FM_WATCHDOG_STALL_RESTART=0 (nudge then urgent alert without stopping the
+# supervisor), FM_WATCHDOG_RESTART_COMMAND=claude (the supervisor launch
+# command, without its prompt), FM_WATCHDOG_RESTART_CWD=FM_HOME,
+# FM_WATCHDOG_TRANSCRIPT_DIR (the supervisor's Claude transcript directory).
 # Schedule tick with launchd StartInterval, independently of the supervisor.
 # State/logs: FM_HOME/state/supervisor-watchdog/{incident.json,events.jsonl}.
 # Version drift: when `claude --version` differs from the pin, one check wake
@@ -17,25 +18,26 @@
 # a degraded mode that types nothing into the supervisor: the network nudge,
 # queue ring and stall nudge are withheld because they rely on
 # version-specific screen parsing. The wake-age alert and stall timer keep
-# running, but an unverified composer holds a restart and sends one urgent
-# supervisor-down alert after the second stall interval. A matching version
-# ends drift; repeat the live check before moving the pin.
+# running, and the second stall interval sends one urgent supervisor-down
+# alert. An enabled restart remains held while the version is unverified. A
+# matching version ends drift; repeat the live check before moving the pin.
 # Stall: while the home needs supervision, progress is a newer watcher beacon
 # while Claude is natively idle or done, a change of the oldest main-owned wake
 # row (an acknowledgement), a newer transcript file, or a semantic pane change.
 # Spinner rows, elapsed durations and token counters are ignored, while other
 # numbers remain semantic progress. A visible usage-limit notice counts as
 # progress because Claude resumes by itself and typing would cancel that. After
-# STALL_SECS without progress the watchdog sends one guarded nudge; after another
-# STALL_SECS it restarts only when a fresh verified frame proves the composer is
-# empty. Otherwise it holds the restart and sends one urgent supervisor-down
-# alert because unsent input may be in the box. A permitted restart stops only
-# the target pane's foreground processes, relaunches RESTART_COMMAND there with
-# a prompt naming the newest data/supervisor-handoff-*.md, and proves the new
-# session started as a real Claude agent process. It records the restart before
-# stopping Claude, retries one interrupted attempt, and baselines launch-side
-# progress after proof. An unproven restart or no progress for STALL_SECS after
-# a proven one sends one urgent supervisor-down alert through fm_urgent_alert.
+# STALL_SECS without progress the watchdog sends one guarded nudge. By default,
+# another STALL_SECS without progress never stops the supervisor and sends one
+# urgent alert that it needs restarting by hand. FM_WATCHDOG_STALL_RESTART=1
+# opts into restart from the latest handoff only when a fresh verified frame
+# proves the composer is empty. Otherwise it holds the restart and sends one
+# urgent alert because unsent input may be in the box. A permitted restart
+# stops only the target pane's foreground processes, relaunches RESTART_COMMAND
+# there, and proves the new session started as a real Claude agent process. It
+# records the restart before stopping Claude and retries one interrupted attempt.
+# An unproven restart or no progress for STALL_SECS after a proven one sends one
+# urgent supervisor-down alert through fm_urgent_alert.
 # Progress of any kind rearms the timer.
 # State: FM_HOME/state/supervisor-watchdog/{stall.json,version-alert}.
 # A stable viewport with a terminal network error, native Claude idle/done,
@@ -375,7 +377,7 @@ watchdog_version_alert() {
     read -r previous < "$marker" || true
     [ "$previous" != "v:$INSTALLED_VERSION" ] || return 0
   fi
-  summary="Claude changed from '$FM_WATCHDOG_CLAUDE_VERSION' to '${INSTALLED_VERSION:-unknown}'. The supervisor watchdog keeps its wake-age alert and stall timer, but holds any restart and sends an urgent held-restart alert after the second stall interval. It types nothing into the supervisor until the live check is repeated and FM_WATCHDOG_CLAUDE_VERSION is updated."
+  summary="Claude changed from '$FM_WATCHDOG_CLAUDE_VERSION' to '${INSTALLED_VERSION:-unknown}'. The supervisor watchdog keeps its wake-age alert and stall timer, but types nothing into the supervisor. After the second stall interval it sends an urgent supervisor-down alert, and an enabled restart remains held until the live check is repeated and FM_WATCHDOG_CLAUDE_VERSION is updated."
   fm_wake_append check supervisor-watchdog "$summary" || return 1
   printf 'v:%s\n' "$INSTALLED_VERSION" > "$marker.tmp"
   mv "$marker.tmp" "$marker"
@@ -578,12 +580,14 @@ watchdog_supervisor_down() {
   case "$result" in sent|skipped:duplicate) watchdog_stall_update '.alerted=true' ;; esac
 }
 
-watchdog_enter_down() {  # <why>
-  local why=$1
+watchdog_enter_down() {
+  local why=$1 queue_wake=${2:-1}
   watchdog_stall_update --argjson now "$NOW" --arg why "$why" \
     '.stage="down" | .stage_at=$now | .down_reason=$why | .alerted=false'
   watchdog_log alerted "supervisor-down"
-  fm_wake_append check supervisor-watchdog "Supervisor down: $why. Urgent alert attempted." || true
+  if [ "$queue_wake" = 1 ]; then
+    fm_wake_append check supervisor-watchdog "Supervisor down: $why. Urgent alert attempted." || true
+  fi
   wedge_alarm_notify "Supervisor down: $why" "$DIR/stall.json"
   watchdog_supervisor_down
 }
@@ -674,6 +678,11 @@ watchdog_stall() {
     nudged)
       [ "$((NOW - stage_at))" -ge "$STALL_SECS" ] || return 0
       STALL_ACTED=1
+      if [ "$STALL_RESTART" = 0 ]; then
+        watchdog_log action-claimed supervisor-down
+        watchdog_enter_down "it stopped making progress and did not recover after a nudge, so it needs restarting by hand" 0
+        return 0
+      fi
       watchdog_log action-claimed restart
       watchdog_stall_update --argjson now "$NOW" \
         '.stage="restarting" | .stage_at=$now | .restart_tries=1'
@@ -818,6 +827,8 @@ watchdog_main() {
   BACKOFF=${FM_WATCHDOG_BACKOFF_SECS:-900}
   WAKE_AGE=${FM_WATCHDOG_WAKE_AGE_SECS:-600}
   STALL_SECS=${FM_WATCHDOG_STALL_SECS:-1800}
+  STALL_RESTART=${FM_WATCHDOG_STALL_RESTART-0}
+  case "$STALL_RESTART" in 0|1) ;; *) echo 'watchdog: FM_WATCHDOG_STALL_RESTART must be 0 or 1' >&2; return 2 ;; esac
   RESTART_COMMAND=${FM_WATCHDOG_RESTART_COMMAND:-claude}
   RESTART_CWD=${FM_WATCHDOG_RESTART_CWD:-$FM_HOME}
   case "$RESTART_CWD" in /*) ;; *) echo 'watchdog: FM_WATCHDOG_RESTART_CWD must be absolute' >&2; return 2 ;; esac
