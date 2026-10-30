@@ -99,6 +99,10 @@ class Deferred(Unavailable):
     pass
 
 
+class TimedOut(Deferred):
+    pass
+
+
 ITEM_ERRORS = (Unavailable, OSError, ValueError, KeyError, TypeError, IndexError, AttributeError)
 
 
@@ -138,6 +142,8 @@ class Poll:
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.communicate()
+                if bound < 10:
+                    raise TimedOut(f'scan time budget exhausted reading {Path(args[0]).name}')
                 raise Unavailable(f'budget exhausted reading {Path(args[0]).name}; no eligibility established')
         if proc.returncode or re.search(r'^\s*(?:error:|truncated: true)', out, re.M):
             # Do not echo arbitrary tool stderr: it can contain private server data.
@@ -244,6 +250,8 @@ class Poll:
     def holds(self):
         try:
             out = self.run([BIN/'fm-tasks-axi.sh', 'list', '--fields', 'hold_kind,links,body', '--limit', '10000'])
+        except Deferred:
+            raise
         except Unavailable as error:
             raise Unavailable(f'captain hold data unavailable: {error}') from error
         count = re.search(r'^count: ([0-9]+)$', out, re.M)
@@ -526,6 +534,8 @@ def check():
                             record['alerted'].append(candidate[0])
                 except Deferred as error:
                     deferred = urls[index:]
+                    if isinstance(error, TimedOut):
+                        deferred = deferred[1:]+deferred[:1]
                     errors.append(f'{error}; read {read}, deferred {len(deferred)}, '
                                   f'finished-skipped {len(skipped_finished)}')
                     break

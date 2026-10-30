@@ -78,7 +78,9 @@ else:
 ''')
         (self.home/'fakebin/tasks-axi').write_text('''#!/usr/bin/env python3
 import os, pathlib
+import time
 h = pathlib.Path(os.environ['FM_HOME'])
+if (h/'tasks-sleep').exists(): time.sleep(10)
 print((h/'tasks').read_text())
 ''')
         for p in (self.home/'fakebin').iterdir(): p.chmod(0o755)
@@ -342,9 +344,9 @@ print((h/'tasks').read_text())
         (self.home/'slow-pr-7').touch()
         self.env['FM_CHECK_TIMEOUT'] = '4'
         first = self.run_check()
-        self.assertIn(URL+': skipped:', first)
-        self.assertIn('deferred 1', first)
-        self.assertEqual(self.record()['deferred'], [other['url']])
+        self.assertIn('scan time budget exhausted reading gh-axi', first)
+        self.assertIn('deferred 2', first)
+        self.assertEqual(self.record()['deferred'], [other['url'], URL])
         self.assertNotIn('check unavailable', first)
         second = self.run_check()
         self.assertIn('CLEAR unmerged: '+other['url'], second)
@@ -520,6 +522,15 @@ print((h/'tasks').read_text())
         self.assertIn('incomplete', self.run_check())
         self.forge()
         self.assertIn(URL, self.run_check())
+
+    def test_hold_read_killed_by_time_budget_is_deferred(self):
+        (self.home/'tasks-sleep').touch()
+        self.env['FM_CHECK_TIMEOUT'] = '4'
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged scan diagnostics: scan time budget exhausted reading', out)
+        self.assertIn('read 0, deferred 1', out)
+        self.assertNotIn('check unavailable', out)
+        self.assertEqual(self.record()['cursor'], URL)
 
     def test_bad_hold_read_is_diagnostic(self):
         (self.home/'tasks').write_text('error: backend unavailable\n')
