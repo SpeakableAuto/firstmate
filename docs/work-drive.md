@@ -27,28 +27,15 @@ It never creates the drive root and never falls back to internal storage.
 It writes the `env=` exports into a marked block of the user's shell environment file (`~/.zshenv` by default, read by every zsh including worker panes after a reboot), sets the user npm `cache`, and sets Xcode's `IDECustomDerivedDataLocation` default.
 It also writes and bootstraps `~/Library/LaunchAgents/local.firstmate.internal-growth.plist` with a daily 3:30 am schedule.
 Remove any hand-written exports of the same names outside the marked block so one copy remains.
-`verify` then reads each setting back from a fresh login shell started with an empty environment, so it proves what a newly launched worker inherits rather than what the current process happens to have.
+`verify` reads the environment exports and npm cache from a fresh login shell started with an empty environment, then reads the Xcode default directly.
+This proves what a newly launched worker inherits rather than what the current process happens to have.
 When `config/launch-env-allowlist` exists, `verify` also requires every exported name to be listed there, because worker launches otherwise drop it.
 
 ## Refusing heavy work when the drive fails
 
 Worker placement refuses heavy work on a missing or unwritable drive when `config/crew-placement.json` names the same drive and lists every work-drive target in its required directories.
-For the example above, the active placement profile includes this contract:
-
-```json
-{
-  "drive": "/Volumes/Kitchen",
-  "required_drive_dirs": [
-    "Caches/Playwright",
-    "Caches/npm",
-    "Build/DerivedData",
-    "SimulatorDevices",
-    "Build/Tmp"
-  ]
-}
-```
-
-`verify` and `install` refuse an absent profile or any profile whose drive or directories disagree with `config/work-drive`.
+The [crew-placement configuration](configuration.md#crew-placement-configcrew-placementjson) owns that profile's full contract and example.
+`verify` and `install` refuse an absent profile, a different drive, or a profile that does not cover every target in `config/work-drive`.
 This fail-closed behavior prevents an incomplete host configuration from being reported as active.
 The tool settings above point at the drive with no fallback, so a tool started while the drive is absent fails instead of writing to internal storage.
 
@@ -87,13 +74,13 @@ allow=/Users/me/firstmate
 
 Each `scan=` path must be on `volume`; `du -x` keeps each measurement on that volume, so the work drive is never counted.
 List under `allow=` only folders that are meant to live internally, such as the Firstmate home, always-on services, and application data.
-A folder that `du` cannot read is recorded as `UNMEASURED` in every run's log row and in any alert emitted during that run.
+A folder that `du` cannot read is retained in the log row's `unmeasured` list and labeled `UNMEASURED` in any alert emitted during that run.
 A nonzero `du` exit remains a usable partial measurement when the scan-root total exists, while a missing scan-root total is a failed measurement.
 The check also reads total volume use from `df` and opens a separate episode when used-space growth above the threshold is not explained by allowed or already flagged folder growth.
 A run that exceeds `timeout_seconds` is stopped and reported as a failed measurement rather than left hanging.
 Run `FM_HOME=/absolute/firstmate bin/fm-internal-growth.sh --dry-run` first to see the measurement without writing state.
-The first real run records the baseline; later runs compare with it and queue one Firstmate check wake per new episode.
-Each run appends one JSON line to `state/internal-growth/log.jsonl` with free space, the used-space change, and any flagged folders.
+The first successful measurement records the baseline; later runs compare with it and queue one Firstmate check wake naming every new episode.
+Each non-dry measurement attempt appends one JSON line to `state/internal-growth/log.jsonl` with free space, the used-space change, and any flagged folders.
 A large scan can take several minutes, so schedule it rather than running it interactively.
 
 ## Daily launchd enrollment
