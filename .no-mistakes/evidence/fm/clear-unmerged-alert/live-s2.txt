@@ -1,0 +1,8 @@
+### S2a age clock = PR creation + 7200s (exactly 2h; expect silent)
+exit=0
+### S2b age clock = PR creation + 7300s (expect one alert)
+exit=0
+### S2c repeat poll same head (expect silent)
+exit=0
+### state file
+{"schema": 1, "alerted": [], "error": "", "clamped": {}, "heads": {"https://github.com/SpeakableAuto/firstmate/pull/45": {"sha": "8d82a164769eb8cee1d5d1dc7f72eb3651faa744", "changed_at": 1793319187.0}}}

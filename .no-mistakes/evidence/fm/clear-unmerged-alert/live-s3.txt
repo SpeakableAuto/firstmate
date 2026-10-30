@@ -1,0 +1,9 @@
+- firstmate [no-mistakes +yolo] - firstmate harness
+- asap-tiered-reporting [no-mistakes +yolo] - reporting
+### S3 real clock: two registered repos; PR #45 (carve-out) and tiered-reporting #42 (CLEAR 3h ago, report quotes at= stamp)
+CLEAR unmerged: https://github.com/SpeakableAuto/asap-tiered-reporting/pull/42 head=221bae1ec0140480ccfe4d69db568a425ce9aee3 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.kuNpnI/data/rv2/report.md age=10800s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+exit=0
+### S3b repeat poll (expect silent, once per PR/head)
+exit=0
+### state
+{"schema": 1, "alerted": ["https://github.com/SpeakableAuto/asap-tiered-reporting/pull/42@221bae1ec0140480ccfe4d69db568a425ce9aee3"], "error": "", "clamped": {}, "heads": {"https://github.com/SpeakableAuto/firstmate/pull/45": {"sha": "8d82a164769eb8cee1d5d1dc7f72eb3651faa744", "changed_at": 1793319187.0}, "https://github.com/SpeakableAuto/asap-tiered-reporting/pull/42": {"sha": "221bae1ec0140480ccfe4d69db568a425ce9aee3", "changed_at": 1787727168.0}}}

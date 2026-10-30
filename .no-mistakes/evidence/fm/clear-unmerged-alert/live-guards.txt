@@ -1,0 +1,18 @@
+### S4 later blocking review at same head (rv3, 1h ago) after CLEAR (3h ago): expect silent
+exit=0
+### S5 CLEAR only 1h59m ago: expect silent
+exit=0
+### S5b CLEAR 2h01m ago: expect alert
+CLEAR unmerged: https://github.com/SpeakableAuto/asap-tiered-reporting/pull/42 head=221bae1ec0140480ccfe4d69db568a425ce9aee3 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.kuNpnI/data/rv2/report.md age=7260s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+exit=0
+### S6 CLEAR names a stale head SHA: expect silent
+exit=0
+### S7 repo listed in config/clear-unmerged-skip-repos (Michael-owned style exclusion): expect silent
+exit=0
+### S7b registry row naming Michael: expect silent
+- firstmate [no-mistakes +yolo] - firstmate harness
+- asap-tiered-reporting [no-mistakes +yolo] - reporting (Michael)
+exit=0
+### S8 control: restored, expect alert
+CLEAR unmerged: https://github.com/SpeakableAuto/asap-tiered-reporting/pull/42 head=221bae1ec0140480ccfe4d69db568a425ce9aee3 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.kuNpnI/data/rv2/report.md age=10802s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+exit=0

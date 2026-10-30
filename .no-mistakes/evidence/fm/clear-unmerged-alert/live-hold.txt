@@ -1,0 +1,43 @@
+### S9 captain hold via real fm-tasks-axi + fm-captain-hold, task bound to PR by state/ship.meta: expect silent
+ok: added ship (repo asap-tiered-reporting) -> Queued
+task:
+  id: ship
+  title: Wait for captain decision
+  state: queued
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: task
+  repo: asap-tiered-reporting
+  priority: "-"
+  created: 2026-10-30
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+help[2]:
+  - Run `tasks-axi start ship` to move it to in flight
+  - Run `tasks-axi block ship --by <other>` to record a dependency
+ship
+exit=0
+### S9b hold released (task done): expect alert
+### S9b captain hold released via fm-captain-hold.sh release: expect alert
+cannot be written is reported as `actionable:` on stderr rather than undoing
+the record; bin/fm-inactive-reconcile.sh's diagnostics name a broken binding.
+exit=0
+### S10 broken registry entry (clone missing) alongside good repo: expect diagnostic + alert
+CLEAR unmerged check unavailable: ghost: git read unavailable; check access and complete output
+exit=0
+### S9b (retry) captain answers with --release: expect alert
+released: ship
+  state: queued
+  held: no
+CLEAR unmerged: https://github.com/SpeakableAuto/asap-tiered-reporting/pull/42 head=221bae1ec0140480ccfe4d69db568a425ce9aee3 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.kuNpnI/data/rv2/report.md age=10835s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+exit=0
+### S10 (retry) broken registry entry (clone missing) alongside good repo: expect diagnostic + alert
+CLEAR unmerged: https://github.com/SpeakableAuto/asap-tiered-reporting/pull/42 head=221bae1ec0140480ccfe4d69db568a425ce9aee3 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.kuNpnI/data/rv2/report.md age=10837s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+CLEAR unmerged check unavailable: ghost: git read unavailable; check access and complete output
+exit=0

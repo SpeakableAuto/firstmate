@@ -1,0 +1,4 @@
+### S1 live: CLEAR report at current head of real PR #45, report mtime 3h ago
+exit=0
+### S1b second poll (expect no repeat)
+exit=0

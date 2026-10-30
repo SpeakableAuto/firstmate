@@ -1,0 +1,14 @@
+### S11 arm
+armed: state/clear-unmerged.check.sh
+clear-unmerged.check-trust
+clear-unmerged.check.sh
+--- run registered shim (as the watcher would)
+CLEAR unmerged: https://github.com/SpeakableAuto/asap-tiered-reporting/pull/42 head=221bae1ec0140480ccfe4d69db568a425ce9aee3 report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/fm-lab.kuNpnI/data/rv2/report.md age=10846s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+exit=0
+--- second shim run (expect silent)
+exit=0
+### disarm
+unregistered: state/clear-unmerged.check.sh
+exit=0
+.clear-unmerged.json
+.clear-unmerged.lock
