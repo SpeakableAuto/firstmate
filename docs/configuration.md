@@ -407,7 +407,7 @@ This setting is independent of the disk-copy bound in `config/worktree-slot-cap`
 ### Daily work flow
 
 [`bin/fm-flow-report.sh`](../bin/fm-flow-report.sh) reports finished, closed-not-landed, started and reopened items separately for the previous AEST day, or for one explicit completed day selected with `--date`.
-Only a completion carrying a recorded pull request merge or the `local main` landing note is finished; another Done transition is closed-not-landed.
+Only teardown after a verified pull request merge or verified `local main` landing emits a finished event; another Done transition, including a direct `done --pr`, is closed-not-landed.
 Stored timestamps remain UTC.
 [`bin/fm-flow-history.py`](../bin/fm-flow-history.py) owns journal schema, recording boundaries and unknown-history behavior; [`tests/fm-flow-report.test.sh`](../tests/fm-flow-report.test.sh) exercises real wrapper and lifecycle transitions.
 Manual edits and direct calls to `tasks-axi` are outside this journal, so this is transition evidence rather than a reconstruction of all historical work.

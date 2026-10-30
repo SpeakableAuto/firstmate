@@ -28,26 +28,36 @@ rows=[json.loads(line) for line in open(sys.argv[1])]
 events=[r for r in rows if r['type']=='transition']
 assert [r['action'] for r in events] == ['start','done','reopen','done'], events
 assert all(r['priority']==2 and r['timestamp'] for r in events)
-assert [r['landing'] for r in events] == ['none','none','none','merge'], events
+assert [r['landing'] for r in events] == ['none','none','none','none'], events
 PY
 # Help is read-only and must reach the underlying CLI unchanged.
 before=$(cksum "$FM_HOME/data/flow-history.jsonl")
 out=$(bash "$wrapper" start --help)
 assert_contains "$out" 'usage: tasks-axi start' 'mutation help remains available'
 assert_equals "$before" "$(cksum "$FM_HOME/data/flow-history.jsonl")" 'help does not journal'
-# Lifecycle mutations must use the same journal, without relying on wrapper use.
+# Teardown-owned markers carry verified merge and local-landing authority.
 FM_HOME="$FM_HOME" bash -c '
   . "$1/bin/fm-tasks-axi-lib.sh"
   . "$1/bin/fm-backlog-transition-lib.sh"
+  mkdir -p "$FM_HOME/state"
+  FM_BACKLOG_FLOW_LANDING=merge
+  fm_backlog_close_marker_write "$FM_HOME/state" oldest "$FM_HOME/data" test-merge \
+    --pr https://github.com/example/repo/pull/2
+  FM_BACKLOG_FLOW_LANDING=none
+  fm_backlog_close_marker_replay "$FM_HOME/state" "$FM_HOME/state/oldest.backlog-close" "$FM_HOME/data"
   fm_backlog_start "$FM_HOME/data" candidate
-  fm_backlog_done "$FM_HOME/data" candidate --note "local main" --no-prune
+  FM_BACKLOG_FLOW_LANDING=local
+  fm_backlog_close_marker_write "$FM_HOME/state" candidate "$FM_HOME/data" test-local \
+    --note "local main"
+  FM_BACKLOG_FLOW_LANDING=none
+  fm_backlog_close_marker_replay "$FM_HOME/state" "$FM_HOME/state/candidate.backlog-close" "$FM_HOME/data"
 ' _ "$ROOT" || fail 'lifecycle mutations failed'
 python3 - "$FM_HOME/data/flow-history.jsonl" <<'PY'
 import json, sys
 rows=[json.loads(line) for line in open(sys.argv[1])]
 events=[r for r in rows if r['type']=='transition']
-assert [r['action'] for r in events] == ['start','done','reopen','done','start','done']
-assert [r['landing'] for r in events] == ['none','none','none','merge','none','local']
+assert [r['action'] for r in events] == ['start','done','reopen','done','done','start','done']
+assert [r['landing'] for r in events] == ['none','none','none','none','merge','none','local']
 # Keep real mutation evidence, move timestamps into a completed AEST day.
 rows[0]['timestamp']='2020-10-26T13:00:00Z'
 for row in rows[1:]: row['timestamp']='2020-10-27T12:00:00Z'
@@ -64,9 +74,9 @@ PY
 out=$(bash "$report" --date 2020-10-25)
 assert_contains "$out" '2020-10-25 unknown' 'pre-journal day unknown'
 out=$(bash "$report" --date 2020-10-27)
-assert_contains "$out" '2020-10-27 finished=2 closed-not-landed=1 started=1 reopened=1' 'landed and bare closes are separated'
+assert_contains "$out" '2020-10-27 finished=2 closed-not-landed=2 started=1 reopened=1' 'landed and bare closes are separated'
 assert_contains "$out" 'finished: candidate, oldest' 'landed jobs named separately'
-assert_contains "$out" 'closed-not-landed: candidate' 'bare close is not reported as finished'
+assert_contains "$out" 'closed-not-landed: candidate, oldest' 'direct PR close is not reported as finished'
 assert_contains "$out" 'started: candidate' 'started jobs named separately'
 out=$(bash "$report" --date 2020-10-29)
 assert_contains "$out" 'stop_starting: yes' 'two consecutive days raise the signal'

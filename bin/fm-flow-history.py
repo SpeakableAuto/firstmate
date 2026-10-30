@@ -105,7 +105,8 @@ def finish(path, token, action, task_id, result, output):
             raise ValueError('missing journal attempt')
         if any(r.get('token') == token and r.get('type') != 'attempt' for r in rows):
             raise ValueError('journal attempt already completed')
-        append(stream, dict(type='transition' if changed else 'complete', token=token,
+        landed = action == 'done' and attempt.get('landing', 'none') != 'none' and result == 0
+        append(stream, dict(type='transition' if changed or landed else 'complete', token=token,
                             action=action, task_id=task_id, priority=attempt['priority'],
                             landing=attempt.get('landing', 'none'), timestamp=now(), result=result))
 
