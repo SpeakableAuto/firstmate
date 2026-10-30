@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Urgent captain alerts: condition allow-list, opt-in target, Hermes hand-off,
+# Urgent captain alerts: condition allow-list, Telegram Hermes hand-off,
 # rate limits, dedupe, failure retry, message-id log and the machine probe.
 # A recording sender replaces Hermes through FM_URGENT_ALERT_EXEC; nothing
 # leaves the machine.
@@ -9,7 +9,7 @@ set -eu
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export FM_HOME="$TMP/home"
-mkdir -p "$FM_HOME/config" "$FM_HOME/state"
+mkdir -p "$FM_HOME/state"
 CLI="$ROOT/bin/fm-urgent-alert.sh"
 SENT_DIR="$TMP/sent"
 mkdir -p "$SENT_DIR"
@@ -44,14 +44,6 @@ sent_count() { find "$SENT_DIR" -type f | wc -l | tr -d ' '; }
 check() { [ "$1" = "$2" ] || fail "$3 (got '$1', expected '$2')"; pass "$3"; }
 run() { FULL=$("$CLI" "$@" 2>/dev/null) && RC=0 || RC=$?; OUT=${FULL%%$'\n'*}; }
 
-run send supervisor-down sup 'Firstmate: supervisor stopped.'
-check "$RC" 1 'no target configured refuses delivery'
-check "$OUT" failed:not-configured 'missing config is reported, not silently skipped'
-check "$(sent_count)" 0 'unconfigured channel sends nothing'
-check "$(jq -r .reason "$LOG")" not-configured 'unconfigured attempt is logged'
-
-rm -f "$LOG"
-printf '# urgent alerts\n\ntelegram\n' > "$FM_HOME/config/urgent-alert"
 run send routine-update k 'All shipshape.'
 check "$RC" 2 'a routine update is not an urgent condition'
 check "$(sent_count)" 0 'unknown condition never reaches the sender'
@@ -62,7 +54,7 @@ run test
 check "$RC" 0 'setup test message delivered'
 check "$OUT" sent 'test reports sent'
 check "$(printf '%s\n' "$FULL" | sed -n 's/^message_id=//p')" 4001 'test prints the delivered message id'
-check "$(sed -n 1p "$SENT_DIR/1")" target=telegram 'configured Hermes target is used'
+check "$(sed -n 1p "$SENT_DIR/1")" target=telegram 'fixed Telegram home target is used'
 check "$(sed -n 2p "$SENT_DIR/1")" 'Firstmate weekend alerts are set up' 'exact setup words are sent'
 check "$(tail -1 "$LOG" | jq -c '[.condition,.result,.message_id]')" '["test","sent","4001"]' 'log records the message id'
 grep -q '999' "$LOG" && fail 'chat id leaked into the log'
@@ -111,11 +103,8 @@ rm -rf "$FM_HOME/state/urgent-alert"
 SENDER_MODE=hang FM_WEDGE_ALARM_TIMEOUT_SECS=1 run send supervisor-down sup 'Firstmate: supervisor stopped.'
 check "$OUT" failed:delivery-timeout 'a hung sender is bounded'
 
-rm -rf "$FM_HOME/state/urgent-alert"
-printf 'off\n' > "$FM_HOME/config/urgent-alert"
-run send supervisor-down sup 'Firstmate: supervisor stopped.'
-check "$OUT" failed:off 'off disables delivery'
-printf 'telegram\n' > "$FM_HOME/config/urgent-alert"
+run log
+check "$RC" 2 'the unrelated log subcommand is not exposed'
 
 # The real Hermes hand-off: home-channel target, JSON mode, message file.
 rm -rf "$FM_HOME/state/urgent-alert"
@@ -160,3 +149,23 @@ check "$OUT" unreachable 'the same outage never alerts twice'
 check "$(sent_count)" 1 'one outage, one message'
 if "$CLI" check-machine '../x' host >/dev/null 2>&1; then fail 'unsafe machine label accepted'; fi
 pass 'machine label is restricted to a safe file name'
+
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+printf 'down\n' > "$TMP/probe-state"
+for t in 400000 400300 400600; do at "$t"; run check-machine m0002 mac-mini-0002; done
+export FM_URGENT_ALERT_DAILY_CAP=0
+at 400900; run check-machine m0002 mac-mini-0002
+unset FM_URGENT_ALERT_DAILY_CAP
+check "$OUT" skipped:daily-cap 'a limited machine alert reports the limiter result'
+check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" false 'a limited alert leaves the outage open'
+at 401200; run check-machine m0002 mac-mini-0002
+check "$OUT" sent 'the open outage retries after the limit clears'
+check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" true 'delivery closes the outage alert episode'
+
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+for t in 500000 500300 500600; do at "$t"; run check-machine m0002 mac-mini-0002; done
+at 500900; SENDER_MODE=error run check-machine m0002 mac-mini-0002
+check "$OUT" failed:delivery-failed 'a failed machine alert reports delivery failure'
+check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" false 'a failed delivery leaves the outage open'
+at 501801; run check-machine m0002 mac-mini-0002
+check "$OUT" sent 'the open outage retries after delivery backoff'

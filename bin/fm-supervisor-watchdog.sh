@@ -16,22 +16,25 @@
 # and one active alert fire per newly seen version, and the tick continues in
 # a degraded mode that types nothing into the supervisor: the network nudge,
 # queue ring and stall nudge are withheld because they rely on
-# version-specific screen parsing, while the wake-age alert, the stall timer
-# and the stall restart, which do not, keep running. A matching version ends
-# drift; repeat the live check before moving the pin.
-# Stall: while the home needs supervision, progress is a newer watcher beacon,
-# a change of the oldest main-owned wake row (an acknowledgement), a newer
-# transcript file, or a semantic pane change (spinner rows and digits ignored,
-# so an elapsed-time counter on a hung turn is not progress). A visible
-# usage-limit notice counts as progress because Claude resumes by itself and
-# typing would cancel that. After STALL_SECS without progress the watchdog
-# sends one guarded nudge; after another STALL_SECS it stops only the target
-# pane's foreground processes, relaunches RESTART_COMMAND there with a prompt
-# naming the newest data/supervisor-handoff-*.md, and proves the new session
-# started. A draft visible on a verified version holds the restart. An
-# unproven restart, no progress for STALL_SECS after a proven one, or a second
-# stall within six hours of a restart sends one urgent supervisor-down alert
-# through fm_urgent_alert; progress of any kind rearms the timer.
+# version-specific screen parsing. The wake-age alert and stall timer keep
+# running, but an unverified composer holds a restart and sends one urgent
+# supervisor-down alert after the second stall interval. A matching version
+# ends drift; repeat the live check before moving the pin.
+# Stall: while the home needs supervision, progress is a newer watcher beacon
+# while Claude is natively idle or done, a change of the oldest main-owned wake
+# row (an acknowledgement), a newer transcript file, or a semantic pane change
+# (spinner rows and digits ignored, so an elapsed-time counter on a hung turn is
+# not progress). A visible usage-limit notice counts as progress because Claude
+# resumes by itself and typing would cancel that. After STALL_SECS without
+# progress the watchdog sends one guarded nudge; after another STALL_SECS it
+# stops only the target pane's foreground processes, relaunches RESTART_COMMAND
+# there with a prompt naming the newest data/supervisor-handoff-*.md, and proves
+# the new session started. A draft visible on a verified version holds the
+# restart locally. An unverified version also holds the restart and sends one
+# urgent supervisor-down alert because unsent input may be in the box. An
+# unproven restart or no progress for STALL_SECS after a proven one sends one
+# urgent supervisor-down alert through fm_urgent_alert. Progress of any kind
+# rearms the timer.
 # State: FM_HOME/state/supervisor-watchdog/{stall.json,version-alert}.
 # A stable viewport with a terminal network error, native Claude idle/done,
 # no busy footer, and a proven empty composer must survive two observations
@@ -163,10 +166,12 @@ watchdog_identity() {
 }
 watchdog_observe() {
   local identity composer semantic
+  NATIVE_STATE=
   STYLED=$(watchdog_read) || { VERDICT=unreadable; return; }
   SCREEN=$(printf '%s\n' "$STYLED" | fm_composer_strip_ansi)
   [ -n "$SCREEN" ] || { VERDICT=unreadable; return; }
   identity=$(watchdog_identity) || { VERDICT=unreadable; return; }
+  NATIVE_STATE=${identity#*$'\t'}
   case "$identity" in
     claude$'\t'idle|claude$'\t'done) ;;
     claude$'\t'*) VERDICT=not-idle; return ;;
@@ -508,13 +513,24 @@ watchdog_restart() {
   return 1
 }
 
-watchdog_supervisor_down() {  # <why>
-  local message
-  message="Firstmate needs you: the supervisor on $(hostname -s 2>/dev/null || printf 'this machine') stopped making progress and $1. Workers keep running, but nothing is being reviewed or merged until it is restarted by hand."
-  watchdog_log alerted "supervisor-down"
-  fm_wake_append check supervisor-watchdog "Supervisor down: $1. Urgent alert attempted." || true
-  wedge_alarm_notify "Supervisor down: $1" "$DIR/stall.json"
+watchdog_supervisor_down() {
+  local why message result
+  why=$(printf '%s' "$SREC" | jq -r .down_reason)
+  message="Firstmate needs you: the supervisor on $(hostname -s 2>/dev/null || printf 'this machine') stalled; $why. Workers keep running, but nothing is being reviewed or merged until it is restarted by hand."
+  FM_URGENT_ALERT_RESULT=
   fm_urgent_alert supervisor-down "$PANE_ID-$(printf '%s' "$SREC" | jq -r .progress)" "$message" >/dev/null || true
+  result=${FM_URGENT_ALERT_RESULT:-}
+  case "$result" in sent|skipped:duplicate) watchdog_stall_update '.alerted=true' ;; esac
+}
+
+watchdog_enter_down() {  # <why>
+  local why=$1
+  watchdog_stall_update --argjson now "$NOW" --arg why "$why" \
+    '.stage="down" | .stage_at=$now | .down_reason=$why | .alerted=false'
+  watchdog_log alerted "supervisor-down"
+  fm_wake_append check supervisor-watchdog "Supervisor down: $why. Urgent alert attempted." || true
+  wedge_alarm_notify "Supervisor down: $why" "$DIR/stall.json"
+  watchdog_supervisor_down
 }
 
 # Stall detection and recovery; see the header for the progress contract.
@@ -527,7 +543,7 @@ watchdog_stall() {
   pane=$(watchdog_progress_hash)
   if [ ! -e "$DIR/stall.json" ]; then
     SREC=$(jq -cn --arg b "$beacon" --arg o "$oldest" --arg p "$pane" --argjson now "$NOW" \
-      '{beacon:$b,oldest:$o,pane:$p,progress:$now,stage:"watching",stage_at:$now,last_restart:0}')
+      '{beacon:$b,oldest:$o,pane:$p,progress:$now,stage:"watching",stage_at:$now,down_reason:"",alerted:false}')
     watchdog_stall_save
     watchdog_transcript_moved || true
     return 0
@@ -535,14 +551,20 @@ watchdog_stall() {
   SREC=$(cat "$DIR/stall.json")
   if ! printf '%s\n' "$SREC" | jq -e '
     type == "object" and ([.beacon,.oldest,.pane,.stage]|all(type=="string")) and
-    ([.progress,.stage_at,.last_restart] | all(type=="number" and .>=0 and floor==.))' >/dev/null 2>&1; then
+    ([.progress,.stage_at] | all(type=="number" and .>=0 and floor==.)) and
+    ((.down_reason // "") | type=="string") and ((.alerted // false) | type=="boolean")' >/dev/null 2>&1; then
     # Keep the evidence and start a fresh timer rather than refusing every tick.
     mv "$DIR/stall.json" "$DIR/stall.json.corrupt"
     watchdog_log refused corrupt-stall-state
     return 0
   fi
+  watchdog_stall_update '
+    .down_reason //= "" | .alerted //= false
+    | if .stage == "down" and .down_reason == "" then .down_reason="automatic recovery did not bring it back" else . end'
   prev=$(printf '%s' "$SREC" | jq -r .beacon)
-  [ -z "$beacon" ] || [ "$beacon" = "$prev" ] || progressed=1
+  case "${NATIVE_STATE:-}" in
+    idle|done) [ -z "$beacon" ] || [ "$beacon" = "$prev" ] || progressed=1 ;;
+  esac
   prev=$(printf '%s' "$SREC" | jq -r .oldest)
   [ -z "$prev" ] || [ "$oldest" = "$prev" ] || progressed=1
   prev=$(printf '%s' "$SREC" | jq -r .pane)
@@ -555,7 +577,8 @@ watchdog_stall() {
   stage=$(printf '%s' "$SREC" | jq -r .stage)
   if [ "$progressed" = 1 ]; then
     [ "$stage" = watching ] || watchdog_log rearmed "stall-$stage"
-    watchdog_stall_update --argjson now "$NOW" '.progress=$now | .stage="watching" | .stage_at=$now'
+    watchdog_stall_update --argjson now "$NOW" \
+      '.progress=$now | .stage="watching" | .stage_at=$now | .down_reason="" | .alerted=false'
     return 0
   fi
   stage_at=$(printf '%s' "$SREC" | jq -r .stage_at)
@@ -570,7 +593,11 @@ watchdog_stall() {
     nudged)
       [ "$((NOW - stage_at))" -ge "$STALL_SECS" ] || return 0
       STALL_ACTED=1
-      if [ "${DRIFT:-0}" = 0 ] && [ "$VERDICT" = composer-pending ]; then
+      if [ "${DRIFT:-0}" = 1 ]; then
+        watchdog_enter_down "restart held because unsent input may be in the box"
+        return 0
+      fi
+      if [ "$VERDICT" = composer-pending ]; then
         watchdog_stall_update --argjson now "$NOW" '.stage="held" | .stage_at=$now'
         watchdog_log held stall-restart-draft
         fm_wake_append check supervisor-watchdog \
@@ -579,27 +606,23 @@ watchdog_stall() {
         return 0
       fi
       watchdog_log action-claimed restart
-      prev=$(printf '%s' "$SREC" | jq -r .last_restart)
-      watchdog_stall_update --argjson now "$NOW" '.stage="restarted" | .stage_at=$now | .last_restart=$now'
+      watchdog_stall_update --argjson now "$NOW" '.stage="restarted" | .stage_at=$now'
       if watchdog_restart; then
         watchdog_log restarted supervisor
         # The relaunch itself is not progress: the next window must show some.
         watchdog_stall_update '.pane="unreadable"'
-        # A second stall soon after a restart means restarting is not fixing it.
-        if [ "$prev" -gt 0 ] && [ "$((NOW - prev))" -lt "$RESTART_REPEAT_SECS" ]; then
-          watchdog_supervisor_down "it stalled again within $(( (NOW - prev) / 60 )) minutes of an earlier automatic restart"
-        fi
       else
         reason=$FAIL_REASON
         watchdog_log held "restart-$reason"
-        watchdog_stall_update --argjson now "$NOW" '.stage="down" | .stage_at=$now'
-        watchdog_supervisor_down "a restart attempt failed ($reason)"
+        watchdog_enter_down "a restart attempt failed ($reason)"
       fi
       ;;
     restarted)
       [ "$((NOW - stage_at))" -ge "$STALL_SECS" ] || return 0
-      watchdog_stall_update --argjson now "$NOW" '.stage="down" | .stage_at=$now'
-      watchdog_supervisor_down "it still made no progress $((STALL_SECS / 60)) minutes after an automatic restart"
+      watchdog_enter_down "it still made no progress $((STALL_SECS / 60)) minutes after an automatic restart"
+      ;;
+    down)
+      [ "$(printf '%s' "$SREC" | jq -r .alerted)" = true ] || watchdog_supervisor_down
       ;;
     *) return 0 ;;
   esac
@@ -733,7 +756,6 @@ watchdog_main() {
   BACKOFF=${FM_WATCHDOG_BACKOFF_SECS:-900}
   WAKE_AGE=${FM_WATCHDOG_WAKE_AGE_SECS:-600}
   STALL_SECS=${FM_WATCHDOG_STALL_SECS:-1800}
-  RESTART_REPEAT_SECS=21600
   RESTART_COMMAND=${FM_WATCHDOG_RESTART_COMMAND:-claude}
   RESTART_CWD=${FM_WATCHDOG_RESTART_CWD:-$FM_HOME}
   case "$RESTART_CWD" in /*) ;; *) echo 'watchdog: FM_WATCHDOG_RESTART_CWD must be absolute' >&2; return 2 ;; esac

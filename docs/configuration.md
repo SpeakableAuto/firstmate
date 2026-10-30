@@ -588,12 +588,6 @@ Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, r
 `config/wedge-alarm` provides the shared active-alert channels for an away-mode injection wedge and the supervisor watchdog's aged durable-wake alarm.
 See [`wedge-alarm.md`](wedge-alarm.md) for the authoritative channel and caller behavior, [`verification/supervision.md`](verification/supervision.md#wedge-alarm-channels) for active evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
-## Urgent captain alerts (config/urgent-alert)
-
-`config/urgent-alert` opts the home into urgent captain alerts that leave the machine through Hermes; its first non-comment line is the Hermes delivery target, such as `telegram`, or `off`, and an absent file leaves the path off.
-`FM_URGENT_ALERT_TARGET` overrides the file.
-See [`wedge-alarm.md`](wedge-alarm.md#urgent-captain-alerts) for the allowed conditions and rate limits; `fm_urgent_alert` in `bin/fm-active-alert-lib.sh` owns the limit variables and log format.
-
 ## Trace context propagation (config/trace-context / FM_TRACE_CONTEXT)
 
 The optional local, gitignored `config/trace-context` presence flag enables default-off native W3C trace-context propagation.

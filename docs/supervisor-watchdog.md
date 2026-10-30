@@ -21,19 +21,21 @@ A confirmed ring repeats after another stable idle interval and the backoff whil
 
 ## Stall recovery
 
-While the home needs supervision, the watchdog treats a newer watcher beacon, an acknowledged wake, a newer supervisor transcript file, or a semantic screen change as progress.
+While the home needs supervision, the watchdog treats a newer watcher beacon only while Claude is natively idle or done, and it also treats an acknowledged wake, a newer supervisor transcript file, or a semantic screen change as progress.
 Spinner rows, digit runs such as elapsed-time counters, and Claude's rotating hint row below the prompt are ignored, so a hung turn does not look busy forever.
 A visible usage-limit notice counts as progress, because Claude resumes by itself and typing would cancel that.
 After `FM_WATCHDOG_STALL_SECS` (1800 seconds by default) without progress it sends one guarded nudge, which is withheld when the supervisor is busy or its version is unverified.
 After a second quiet interval it stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a new Claude session started in that pane.
-A typed draft in the prompt holds the restart and alerts locally instead.
-An unproven restart, no progress for another interval after a proven one, or a second stall within six hours of a restart sends one urgent supervisor-down alert through the [urgent captain alert path](wedge-alarm.md#urgent-captain-alerts).
+A typed draft visible on a verified version holds the restart and alerts locally instead.
+An unproven restart or no progress for another interval after a proven one sends one urgent supervisor-down alert through the [urgent captain alert path](wedge-alarm.md#urgent-captain-alerts).
+The same incident retries delivery through the alert limiter until Hermes sends it or reports the incident as a duplicate.
 
 ## Claude version drift
 
 The job pins the complete `claude --version` output that passed the live check.
 A different installed version raises one check wake and one active alert per newly seen version and switches the watchdog to a degraded mode rather than disabling it.
-In that mode nothing is typed into the supervisor, because the network nudge, queue ring and stall nudge depend on version-specific screen reading, while the wake-age alert, the stall timer and the stall restart keep running.
+In that mode nothing is typed into or stopped in the supervisor, because the network nudge, queue ring, stall nudge and safe restart all depend on verified screen reading.
+The wake-age alert and stall timer keep running, and after the second quiet interval one urgent alert says the supervisor stalled and its restart was held because unsent input may be in the box.
 
 After every Claude upgrade, run the live guard and move the pin only when it passes:
 

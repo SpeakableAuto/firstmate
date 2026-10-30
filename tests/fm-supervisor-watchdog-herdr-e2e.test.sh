@@ -217,7 +217,7 @@ STATE="$CASE_DIR/state"
 mkdir -p "$DIR"
 FM_DATA_OVERRIDE="$CASE_DIR/data"
 FM_WAKE_QUEUE="$DIR/.wake-queue"
-STALL_SECS=10 RESTART_REPEAT_SECS=21600 RESTART_CWD=$CASE_DIR WATCHDOG_RESTART_POLLS=20
+STALL_SECS=10 RESTART_CWD=$CASE_DIR WATCHDOG_RESTART_POLLS=20
 printf -v RESTART_COMMAND 'bash %q %q %q %q %q' "$CASE_DIR/restarted.sh" "$HERDR_LAB_HELPER" "$HERDR_LAB_SESSION" "$PANE_ID" "$CASE_DIR"
 watchdog_under_way() { return 0; }
 fm_urgent_alert() { printf '%s\n' "$*" >> "$CASE_DIR/urgent"; }

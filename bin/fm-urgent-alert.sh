@@ -4,17 +4,14 @@
 # Usage:
 #   FM_HOME=/abs/home fm-urgent-alert.sh send <condition> <key> <message...>
 #   FM_HOME=/abs/home fm-urgent-alert.sh test
-#   FM_HOME=/abs/home fm-urgent-alert.sh log [count]
 #   FM_HOME=/abs/home fm-urgent-alert.sh check-machine <label> <ssh-host>
 # Conditions: supervisor-down, carve-out-blocked, machine-down.
 # `send` passes a plain-words message through fm_urgent_alert in
-# bin/fm-active-alert-lib.sh, which owns the target config, the Hermes
+# bin/fm-active-alert-lib.sh, which owns the Telegram Hermes
 # delivery, the rate limits and the sent.jsonl log; it prints sent,
 # skipped:<reason> or failed:<reason>, plus `message_id=<id>` when delivered.
 # `test` sends the fixed setup message "Firstmate weekend alerts are set up"
 # under the `test` condition and prints its message id.
-# `log` prints the most recent attempts (default 10) from
-# state/urgent-alert/sent.jsonl.
 # `check-machine` is one bounded reachability probe for a scheduled job:
 # `ssh -o BatchMode=yes -o ConnectTimeout=10 <ssh-host> true`, replaceable by
 # FM_MACHINE_PROBE (a command run with the host as $1). Failures are counted
@@ -22,8 +19,8 @@
 # FM_MACHINE_DOWN_PROBES (default 3) consecutive probes spanning at least
 # FM_MACHINE_DOWN_SECS (default 900), one machine-down alert is sent for that
 # outage. A successful probe ends the outage.
-# Exit: 0 sent or rate-limited skip (or machine reachable), 1 delivery failed
-# or not configured, 2 usage error.
+# Exit: 0 sent or rate-limited skip (or machine reachable), 1 delivery failed,
+# 2 usage error.
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-active-alert-lib.sh
@@ -73,7 +70,7 @@ check_machine() {  # <label> <host>
   if [ "$alerted" = false ] && [ "$fails" -ge "$probes" ] && [ "$((now - first))" -ge "$secs" ]; then
     fm_urgent_alert machine-down "$label-$first" \
       "Firstmate: the $label machine has been unreachable for $(( (now - first) / 60 )) minutes. Work routed to it is stopped until it is back online." || rc=$?
-    case "$FM_URGENT_ALERT_RESULT" in sent|skipped:*) alerted=true ;; esac
+    case "$FM_URGENT_ALERT_RESULT" in sent|skipped:duplicate) alerted=true ;; esac
   else
     printf 'unreachable\n'
   fi
@@ -100,11 +97,6 @@ main() {
     test)
       [ "$#" -eq 0 ] || { usage >&2; return 2; }
       urgent_send test setup 'Firstmate weekend alerts are set up'
-      ;;
-    log)
-      local n=${1:-10} file="${FM_STATE_OVERRIDE:-$FM_HOME/state}/urgent-alert/sent.jsonl"
-      case "$n" in ''|*[!0-9]*) usage >&2; return 2 ;; esac
-      [ ! -f "$file" ] || tail -n "$n" "$file"
       ;;
     check-machine)
       [ "$#" -eq 2 ] || { usage >&2; return 2; }

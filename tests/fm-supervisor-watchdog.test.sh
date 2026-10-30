@@ -404,7 +404,6 @@ DRIFT=0
 
 # Stall detection: nudge, restart, then urgent alert, with progress rearming.
 STALL_SECS=1800
-RESTART_REPEAT_SECS=21600
 RESTART_COMMAND='claude --model opus'
 RESTART_CWD=/fm/home
 SESSION=lab
@@ -416,7 +415,11 @@ printf 'old\n' > "$FM_HOME/data/supervisor-handoff-1029.md"
 printf 'new\n' > "$FM_HOME/data/supervisor-handoff-1030.md"
 touch -t 202610290000 "$FM_HOME/data/supervisor-handoff-1029.md"
 fm_sup_stat_mtime() { case "$1" in *.last-watcher-beat) printf '%s' "$BEACON" ;; *) command stat -f %m "$1" ;; esac; }
-fm_urgent_alert() { printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$DIR/urgent"; }
+fm_urgent_alert() {
+  printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$DIR/urgent"
+  FM_URGENT_ALERT_RESULT=${URGENT_RESULT:-sent}
+  case "$FM_URGENT_ALERT_RESULT" in failed:*) return 1 ;; esac
+}
 fm_backend_herdr_pane_process_state() { printf '%s' "$PROC_STATE"; }
 watchdog_stop_supervisor() { STOPPED=$((STOPPED+1)); [ "$STOP_OK" = 1 ]; }
 fm_backend_herdr_cli() {
@@ -434,7 +437,7 @@ stall_case() {
   reset_case
   rm -f "$DIR/stall.json" "$DIR/urgent" "$DIR/launches" "$FM_WAKE_QUEUE" "$DIR/queue-alert" "$DIR/queue-nudge.json"
   UNDER_WAY=1 BEACON=500 PANE=$CLEAR CONFIRM_NATIVE=1 STOPPED=0 STOP_OK=1 LAUNCH_OK=1
-  PROC_STATE=agent AFTER_LAUNCH_STATE=agent LAST_SENT=
+  PROC_STATE=agent AFTER_LAUNCH_STATE=agent LAST_SENT= URGENT_RESULT=sent
 }
 stage() { jq -r .stage "$DIR/stall.json"; }
 HUNG=$'❯ run it\n✻ Thinking… (12s · esc to interrupt)\n────────────────────\n❯ \n────────────────────'
@@ -460,10 +463,11 @@ stall_case
 PANE=$'❯ run it\n✻ Thinking… (12s · esc to interrupt)\n────────────────────\n❯ \n────────────────────'
 IDENTITY=$'claude\tworking'; watchdog_tick
 for t in 1900 2400 2799; do
+  BEACON=$((BEACON + 1))
   PANE=$'❯ run it\n✻ Pondering… ('"$((t-988))"$'s · esc to interrupt)\n────────────────────\n❯ \n────────────────────'
   TICK=$t; watchdog_tick
 done
-check "$(stage)" watching 'a hung turn is still counting toward the stall'
+check "$(stage)" watching 'a live watcher beacon does not reset a hung working turn'
 TICK=2800; watchdog_tick
 check "$SENT" 0 'a busy supervisor never receives the stall nudge'
 check "$(stage)" nudged 'a ticking spinner is not progress'
@@ -489,14 +493,22 @@ pass 'urgent alert says what happened in plain words'
 TICK=9000; watchdog_tick; TICK=20000; watchdog_tick
 check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'down supervisor is not re-alerted every tick'
 BEACON=501; TICK=20001; watchdog_tick
-check "$(stage)" watching 'a fresh watcher beacon rearms a down supervisor'
+check "$(stage)" down 'a working supervisor cannot claim progress from the watcher beacon'
+IDENTITY=$'claude\tidle'; BEACON=502; TICK=20002; watchdog_tick
+check "$(stage)" watching 'an idle supervisor can rearm from a fresh watcher beacon'
 
 # Unproven restarts alert at once; a draft is never destroyed.
-hung_case; AFTER_LAUNCH_STATE=shell
+hung_case; AFTER_LAUNCH_STATE=shell; URGENT_RESULT=failed:delivery-failed
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$(stage)" down 'unproven restart marks the supervisor down'
 grep -q 'restart attempt failed (not-proven)' "$DIR/urgent" || fail 'unproven restart did not alert'
-pass 'unproven restart sends the urgent alert'
+check "$(jq -r .alerted "$DIR/stall.json")" false 'failed urgent delivery leaves the incident open'
+URGENT_RESULT=skipped:retry-backoff; TICK=4601; watchdog_tick
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 2 'an open incident retries through the limiter'
+URGENT_RESULT=sent; TICK=5501; watchdog_tick
+check "$(jq -r .alerted "$DIR/stall.json")" true 'later delivery closes the incident alert'
+TICK=5502; watchdog_tick
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 3 'a delivered incident stops retrying'
 hung_case; STOP_OK=0
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 [ ! -e "$DIR/launches" ] || fail 'a supervisor that cannot be stopped was relaunched over'
@@ -510,14 +522,15 @@ check "$(stage)" held 'held stall is recorded'
 [ ! -e "$DIR/urgent" ] || fail 'a held draft must not page the captain'
 pass 'a held draft alerts locally only'
 
-# Restart repeated within six hours escalates even when it is proven.
+# A proven restart remains local even when another stall follows.
 hung_case
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
-BEACON=600; TICK=4700; watchdog_tick
+IDENTITY=$'claude\tidle'; BEACON=600; TICK=4700; watchdog_tick
+IDENTITY=$'claude\tworking'
 TICK=6500; watchdog_tick; TICK=8300; watchdog_tick
 check "$STOPPED" 2 'a second stall restarts again'
-grep -q 'stalled again within' "$DIR/urgent" || fail 'repeated restart did not escalate'
-pass 'repeated stall within six hours reaches the captain'
+[ ! -e "$DIR/urgent" ] || fail 'a proven repeated restart must not reach the captain'
+pass 'a proven repeated restart is only logged locally'
 
 # Progress signals: acknowledgement, usage limit, nothing under way.
 stall_case
@@ -548,10 +561,15 @@ watchdog_tick
 watchdog_tick
 check "$(stage)" watching 'corrupt stall state restarts the timer instead of refusing forever'
 
-# Drift keeps the stall restart (no screen parsing) but never the nudge.
-stall_case; DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)'
+# Drift holds a restart because the unverified composer may contain a draft.
+stall_case; PANE=$'● Done\n❯ half-typed answer'; DRIFT=1 INSTALLED_VERSION='2.1.312 (Claude Code)'
 watchdog_tick; TICK=2800; watchdog_tick
 check "$SENT" 0 'drift withholds the stall nudge'
 TICK=4600; watchdog_tick
-check "$STOPPED" 1 'drift still restarts a stalled supervisor'
+check "$STOPPED" 0 'drift never stops a supervisor with unverified input'
+check "$(stage)" down 'drift records the held restart as a down incident'
+grep -q 'supervisor .* stalled; restart held because unsent input may be in the box' "$DIR/urgent" || fail 'drift alert did not explain the held restart'
+pass 'drift sends the held-restart alert in plain words'
+TICK=4601; watchdog_tick
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'delivered drift alert is not repeated'
 DRIFT=0
