@@ -2,7 +2,7 @@
 
 `config/wedge-alarm` configures the shared pane-independent channels for serious supervision failures.
 The away-mode sub-supervisor uses them when escalation injection cannot confirm a submit past `FM_MAX_DEFER_SECS`.
-The optional supervisor watchdog also uses them when a main-owned durable wake exceeds `FM_WATCHDOG_WAKE_AGE_SECS` while Claude is idle or done.
+The optional supervisor watchdog also uses them when a main-owned durable wake exceeds `FM_WATCHDOG_WAKE_AGE_SECS` while Claude is idle or done, when the installed Claude version drifts from its verified pin, and when a stalled supervisor enters the down stage.
 Each caller owns its condition, durable marker, and rate limit, and the away-mode caller retains its tmux status-line flash as an additional signal.
 
 ## Channels
@@ -20,7 +20,8 @@ It lists channel directives, one per non-empty, non-comment line, and every list
 
 An absent `config/wedge-alarm` behaves as `auto`, which is default-on on macOS.
 This is deliberate because both callers represent a supervision failure that should not remain silent.
-The away-mode caller alerts at most once per max-defer window, while the supervisor watchdog alerts once for each unchanged oldest-row episode and rearms when that row changes or the main-owned queue drains.
+The away-mode caller alerts at most once per max-defer window.
+The supervisor watchdog alerts once for each unchanged oldest-row episode, once per newly seen unverified Claude version, and once when a stall enters the down stage.
 
 Each channel is best-effort.
 A missing binary or non-zero exit logs a warning and continues to the next channel without aborting the caller.
