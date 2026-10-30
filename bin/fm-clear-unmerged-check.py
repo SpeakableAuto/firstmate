@@ -263,7 +263,7 @@ class Poll:
         heads[pr['url']] = {'sha': pr['headRefOid'], 'changed_at': changed}
         return changed
 
-    def candidate(self, pr, reports, held_ids, held_urls, head_time):
+    def candidate(self, pr, reports, held_ids, held_urls, head_time, alerted):
         url, sha = pr['url'], pr['headRefOid']
         if not URL.fullmatch(url) or not re.fullmatch('[a-f0-9]{40}', sha):
             raise Unavailable('forge returned invalid PR identity')
@@ -296,12 +296,12 @@ class Poll:
         if LINT.carve_out_signals(body, paths):
             return None
         age = int(self.now - max(clear_time, head_time))
-        if age <= 7200:
+        identity = url+'@'+sha
+        if age <= 7200 or identity in alerted:
             return None
         changes = self.added_lines(pr)
         if LINT.carve_out_signals(body, paths, changes):
             return None
-        identity = url+'@'+sha
         note = f'CLEAR unmerged: {url} head={sha} report={path} age={age}s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards'
         return identity, note
 
@@ -401,12 +401,11 @@ def check():
                     try:
                         poll.remaining()
                         head_time = poll.head_time(pr, record)
-                        found = poll.candidate(pr, reports, held_ids, held_urls, head_time)
+                        if candidate is None:
+                            candidate = poll.candidate(pr, reports, held_ids, held_urls, head_time, record['alerted'])
                     except ITEM_ERRORS as error:
                         errors.append(str(error))
                         continue
-                    if found and found[0] not in record['alerted'] and candidate is None:
-                        candidate = found
             if candidate:
                 # Output precedes the receipt: failed persistence can repeat an
                 # alert but cannot silently suppress an alert never produced.

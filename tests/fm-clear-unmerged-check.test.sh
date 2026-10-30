@@ -45,6 +45,7 @@ if (h/'forge-error').exists():
     print('error: forbidden'); sys.exit(1)
 if (h/'forge-sleep').exists(): time.sleep(10)
 if sys.argv[1:3] == ['pr', 'diff']:
+    if (h/('slow-diff-'+sys.argv[3])).exists(): time.sleep(10)
     if (h/'diff-error').exists(): print('error: missing diff'); sys.exit(1)
     print('pull_request:\\n  diff: '+json.dumps((h/'diff').read_text()))
 elif sys.argv[1] == 'api' and '/pulls/' in sys.argv[2]:
@@ -258,6 +259,24 @@ print((h/'tasks').read_text())
         self.assertIn('pull/6 has invalid Carve-outs', out)
         self.assertIn('other:', out)
         self.assertNotIn('pull/6', json.loads((self.home/'state/.clear-unmerged.json').read_text())['alerted'][0])
+
+    def test_alerted_pr_does_not_spend_budget_needed_by_next(self):
+        alerted, later = (json.loads(json.dumps(self.pr)) for _ in range(2))
+        alerted['url'] = 'https://github.com/example/demo/pull/6'
+        later['url'] = 'https://github.com/example/demo/pull/8'
+        self.forge(prs=[alerted, self.pr, later])
+        self.report('# CLEAR\n'+' '.join([alerted['url'], URL, later['url'], SHA]), NOW-7260)
+        (self.home/'state/.clear-unmerged.json').write_text(json.dumps(
+            dict(schema=1, alerted=[alerted['url']+'@'+SHA], error='')))
+        for number in ('6', '8'):
+            (self.home/('slow-diff-'+number)).touch()
+        self.env['FM_CHECK_TIMEOUT'] = '6'
+        out = self.run_check()
+        self.assertIn('CLEAR unmerged: '+URL, out)
+        self.assertNotIn('unavailable', out)
+        record = json.loads((self.home/'state/.clear-unmerged.json').read_text())
+        self.assertEqual(record['alerted'], [alerted['url']+'@'+SHA, URL+'@'+SHA])
+        self.assertEqual(set(record['heads']), {alerted['url'], URL, later['url']})
 
     def test_closed_pr_heads_pruned_after_complete_list(self):
         self.run_check()
