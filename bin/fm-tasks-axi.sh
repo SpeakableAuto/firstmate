@@ -137,6 +137,10 @@ else
 fi
 
 cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
+# Help is read-only even for mutation verbs; do not create a journal attempt.
+for arg in ${ARGS[@]+"${ARGS[@]}"}; do
+  case "$arg" in -h|--help) exec tasks-axi "${ARGS[@]}" ;; esac
+done
 case "${ARGS[0]:-}" in
   start|done|close|reopen)
     # Preserve tasks-axi output and status; the shared hook also covers spawn

@@ -71,10 +71,21 @@ def admit(rows, task_id, cap_file):
     if cap_file.is_symlink():
         raise ValueError('crew-slot-cap must be a regular file')
     if cap_file.exists():
+        if not cap_file.is_file():
+            raise ValueError('crew-slot-cap must be a regular file')
         raw = cap_file.read_text()
         if not re.fullmatch(r'[1-9][0-9]{0,8}\n?', raw):
             raise ValueError('crew-slot-cap must be a positive decimal integer')
         cap = int(raw)
+    else:
+        placement = cap_file.with_name('crew-placement.json')
+        if placement.exists() or placement.is_symlink():
+            if placement.is_symlink() or not placement.is_file():
+                raise ValueError('crew-placement.json must be a regular file')
+            profile = json.loads(placement.read_text())
+            cap = profile.get('max_crew') if isinstance(profile, dict) else None
+            if type(cap) is not int or cap <= 0:
+                raise ValueError('crew-placement.json max_crew must be a positive integer')
     target = next((row for row in rows if row['id'] == task_id), None)
     if target is None:
         raise ValueError(f'backlog item {task_id} missing')
@@ -86,7 +97,7 @@ def admit(rows, task_id, cap_file):
         return 0
     if target['state'] != 'queued':
         raise ValueError(f'{task_id} is not queued or in flight')
-    work = [r for r in rows if r['kind'] not in ('captain', 'secondmate', 'public-followup')]
+    work = [r for r in rows if r['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')]
     inflight = [r for r in work if r['state'] == 'in_flight']
     if cap is not None and len(inflight) >= 2 * cap:
         oldest = min(inflight, key=lambda r: (r['priority'], r['order']))

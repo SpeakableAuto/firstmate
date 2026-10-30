@@ -132,8 +132,11 @@ case "\${1:-}" in
   --version) printf '0.2.6\n' ;;
   update) printf '%s\n' '--archive-body' ;;
   mv) printf '%s\n' '[<id>...]' ;;
+  list)
+    printf '%s\n' 'count: 1' 'tasks[1]{id,state,kind,blocked,held,created,priority}:' '  fm-env-adapter-b15,queued,ship,no,no,-,3'
+    ;;
   show)
-    printf 'task:\n  state: queued\n  held: no\n  blocked: no\n'
+    printf 'task:\n  state: queued\n  held: no\n  blocked: no\n  priority: 3\n'
     ;;
   start)
     printf '%s\n' "\$*" > "$case_dir/env-backend-start"
@@ -193,6 +196,10 @@ case "\${1:-}" in
     [ "\${2:-}" = --help ] || exit 1
     printf '%s\n' 'usage: tasks-axi mv [<id>...]'
     ;;
+  list)
+    case " \$* " in *" --file "*) exit 1 ;; esac
+    printf '%s\n' 'count: 1' 'tasks[1]{id,state,kind,blocked,held,created,priority}:' '  $id,in_flight,ship,no,no,-,3'
+    ;;
   show)
     [ "\${2:-}" = "$id" ] || exit 1
     if [ "\${3:-}" = --file ]; then
@@ -202,7 +209,7 @@ case "\${1:-}" in
     fi
     printf '%s\n' 'task:'
     printf '  id: %s\n' "$id"
-    printf '%s\n' '  state: in_flight' '  held: no' '  blocked: no'
+    printf '%s\n' '  state: in_flight' '  held: no' '  blocked: no' '  priority: 3'
     ;;
   *)
     exit 1
@@ -865,7 +872,7 @@ case "\${1:-}" in
     esac
     printf '%s\n' 'task:'
     printf '  id: %s\n' "$id"
-    printf '%s\n' '  state: in_flight' '  held: no' '  blocked: no'
+    printf '%s\n' '  state: in_flight' '  held: no' '  blocked: no' '  priority: 3'
     ;;
   done)
     [ "\${2:-}" = "$id" ] || exit 1

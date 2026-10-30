@@ -17,8 +17,8 @@ out=$(bash "$report" --since 2020-10-27 --until 2020-10-30)
 assert_contains "$out" unknown 'missing history must not invent counts'
 bash "$wrapper" start candidate >/dev/null
 bash "$wrapper" start candidate >/dev/null
-bash "$wrapper" done candidate --note 'test delivered' --no-prune >/dev/null
-bash "$wrapper" done candidate --note 'test delivered' --no-prune >/dev/null
+bash "$wrapper" "done" candidate --note 'test delivered' --no-prune >/dev/null
+bash "$wrapper" "done" candidate --note 'test delivered' --no-prune >/dev/null
 bash "$wrapper" reopen candidate >/dev/null
 bash "$wrapper" reopen candidate >/dev/null
 python3 - "$FM_HOME/data/flow-history.jsonl" <<'PY'

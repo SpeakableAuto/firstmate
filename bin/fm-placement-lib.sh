@@ -78,6 +78,28 @@ fm_placement_alerts() {
   done < <(printf '%s\n' "$alerts" | jq -c '.[]')
 }
 
+# Add the shared backlog policy to the existing placement decision. Rechecks
+# use this too, so an order/WIP refusal stays queued until it actually clears.
+fm_placement_finish_first() { # <decision-json>
+  local decision=$1 reason='not applicable' status=pass applies=0
+  if [ "${RELAUNCH:-0}" != 1 ]; then
+    fm_backlog_transition_applies "$CONFIG" "$DATA" "${KIND:-ship}" || applies=$?
+    if [ "$applies" = 0 ]; then
+      if ! reason=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_DATA_OVERRIDE="$DATA" \
+        bash "$SCRIPT_DIR/fm-finish-first.sh" "$FM_PLACEMENT_ID" 2>&1); then
+        status=fail
+      fi
+    elif [ "$applies" != 1 ]; then
+      status=fail
+      reason="${FM_BACKLOG_TRANSITION_ERROR:-cannot read backlog applicability}"
+    fi
+  fi
+  printf '%s\n' "$decision" | jq --arg status "$status" --arg reason "$reason" '
+    .checks["finish-first"]={status:$status,reason:$reason} |
+    .failed=[.checks|to_entries[]|select(.value.status != "pass")|.key] |
+    .admitted=(.failed|length == 0)'
+}
+
 fm_placement_worktree() { # <project> <acquired-worktree>; amend the same decision
   local check decision
   [ "$FM_PLACEMENT_ACTIVE" = 1 ] || return 0
@@ -203,5 +225,6 @@ fm_placement_check() {
     {quota:$quota,disk:{status:$disk},
      project:$project,slots:{status:$slots,reason:$reason},locks:{status:$locks,reason:"placement and spawn locks"},crew_count:$count,memory:$memory} + (if $liveness == "" then {} else {crew_liveness:$liveness} end)') || return 1
   decision=$(printf '%s\n' "$evidence" | python3 "$SCRIPT_DIR/fm-placement.py" assess "$CONFIG" "$DATA" "$FM_PLACEMENT_ID" "$harness" "$model" "$effort") || return 1
+  decision=$(fm_placement_finish_first "$decision") || return 1
   fm_placement_publish "$decision"
 }

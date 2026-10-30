@@ -133,6 +133,9 @@ case "$1" in
   --version) echo 99.0.0 ;;
   update) echo --archive-body ;;
   mv) echo '[<id>...]' ;;
+  list)
+    printf '%s\n' 'count: 1' 'tasks[1]{id,state,kind,blocked,held,created,priority}:' '  task-one,queued,ship,no,no,-,3'
+    ;;
   show)
     for arg in "$@"; do
       [ ! -f "$FM_HOME/missing-$arg" ] || { echo 'code: NOT_FOUND'; exit 1; }

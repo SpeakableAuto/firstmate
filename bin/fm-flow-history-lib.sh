@@ -16,6 +16,6 @@ fm_flow_begin() {  # <data> <verb> <id>; sets FM_FLOW_TOKEN
 fm_flow_finish() {  # <data> <token> <verb> <id> <status> <output>
   local action=$3
   [ -n "$2" ] || return 0
-  [ "$action" != close ] || action=done
+  [ "$action" != close ] || action="done"
   printf '%s\n' "$6" | python3 "$FM_FLOW_SCRIPT_DIR/fm-flow-history.py" --data "$1" finish "$2" "$action" "$4" "$5"
 }

@@ -58,3 +58,55 @@ rm "$FM_HOME/config/crew-slot-cap"
 printf '{"version":1,"max_crew":true}\n' > "$FM_HOME/config/crew-placement.json"
 check 2 'max_crew' urgent
 pass 'WIP reuses placement crew limits with an explicit override'
+# The placement decision must retain the finish-first refusal and queue it.
+printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
+CONFIG="$FM_HOME/config" DATA="$FM_HOME/data" STATE="$FM_HOME/state"
+SCRIPT_DIR="$ROOT/bin"
+. "$ROOT/bin/fm-tasks-axi-lib.sh"
+. "$ROOT/bin/fm-backlog-transition-lib.sh"
+. "$ROOT/bin/fm-placement-lib.sh"
+FM_PLACEMENT_ID=urgent
+FM_PLACEMENT_ACTIVE=1
+RELAUNCH=0
+KIND=ship
+PROJ=demo
+seed='{"task":"urgent","request":{},"checks":{},"admitted":true}'
+decision=$(fm_placement_finish_first "$seed")
+assert_equals fail "$(jq -r '.checks["finish-first"].status' <<< "$decision")" 'placement checks order and WIP'
+rc=0
+fm_placement_publish "$decision" >/dev/null 2>&1 || rc=$?
+expect_code 1 "$rc" 'placement refuses work above WIP'
+assert_equals '["finish-first"]' "$(jq -c '.waits.urgent.failed' "$STATE/capacity.json")" 'refusal enters existing queue'
+printf '2\n' > "$CONFIG/crew-slot-cap"
+FM_PLACEMENT_MODE=recheck
+decision=$(fm_placement_finish_first "$seed")
+fm_placement_publish "$decision" >/dev/null
+assert_equals ready "$(jq -r '.waits.urgent.state' "$STATE/capacity.json")" 'capacity recheck releases the waiting item'
+pass 'finish-first refusal and recovery use the placement ledger'
+# The real spawn entrypoint refuses before allocating a worker or local copy.
+# shellcheck source=tests/fixtures.sh
+. "$ROOT/tests/fixtures.sh"
+spawn_home="$TMP_ROOT/spawn-home"
+fm_test_spawn_home "$spawn_home" claude
+fm_test_spawn_brief "$spawn_home" candidate
+printf 'backend = "markdown"\n' > "$spawn_home/.tasks.toml"
+cp "$ROOT/tests/fixtures/finish-first/backlog.md" "$spawn_home/data/backlog.md"
+fm_git_init_commit "$spawn_home/projects/demo"
+fm_git_add_origin "$spawn_home/projects/demo" "$TMP_ROOT/demo.origin.git"
+fakebin=$(fm_test_make_spawn_fakebin "$TMP_ROOT/spawn-tools" gh gh-axi no-mistakes)
+mv "$fakebin/tmux" "$fakebin/tmux-original"
+cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in new-window) touch "$FM_HOME/allocated" ;; esac
+exec "$(dirname "$0")/tmux-original" "$@"
+SH
+chmod +x "$fakebin/tmux"
+rc=0
+out=$(fm_test_run_spawn "$spawn_home" "$TMP_ROOT/never-allocated" "$fakebin" \
+  candidate "$spawn_home/projects/demo" --mode no-mistakes --yolo off) || rc=$?
+expect_code 1 "$rc" 'real spawn rejects newer work'
+assert_contains "$out" 'finish urgent first' 'real spawn names priority leader'
+assert_absent "$spawn_home/allocated" 'refusal happens before worker allocation'
+assert_absent "$spawn_home/state/candidate.meta" 'refusal leaves no parked task record'
+assert_contains "$(TASKS_AXI_FILE="$spawn_home/data/backlog.md" tasks-axi show candidate)" 'state: queued' 'refused job remains queued'
+pass 'real spawn enforces finish-first before resource allocation'

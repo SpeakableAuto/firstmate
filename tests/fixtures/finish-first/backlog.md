@@ -1,4 +1,5 @@
 ## In flight
+- [ ] programme - Parent commission (repo: demo) (kind: program) (priority: 0) (since 2026-10-01)
 - [ ] current - New implementation (repo: demo) (kind: ship) (priority: 2) (since 2026-10-30)
 - [ ] held - Waiting for an answer (repo: demo) (kind: ship) (priority: 1) (since 2026-10-29) (hold: Needs an outside answer) (hold-kind: captain)
 - [ ] carried - Earlier implementation (repo: demo) (kind: ship) (priority: 2) (since 2026-10-28)
