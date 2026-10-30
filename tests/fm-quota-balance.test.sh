@@ -139,9 +139,26 @@ assert_equals 1 "${result%%|*}" 'a profile in no rule is refused without an over
 assert_contains "$result" 'record balance_override in data/t1/placement.json' 'the refusal names the required record'
 jq -n '{balance_override:"raw harness required by this task fixture"}' > "$GATE_HOME/data/t1/placement.json"
 result=$(gate grok grok-4 high)
-assert_equals 0 "${result%%|*}" 'a profile in no rule proceeds with a recorded override'
-assert_equals 'override:profile is in no dispatch rule:raw harness required by this task fixture' \
-  "$(printf '%s\n' "${result##*|}" | jq -r '"\(.verdict):\(.reason):\(.override)"')" 'the no-rule override and reason are recorded'
+f8=${result%%|*}
+rm "$GATE_HOME/data/t1/placement.json"
+# A profile present only in a specialist rule is not evidence of task fit.
+write_quota -60 -3
+jq '.rules += [{when:"Design",use:[{harness:"claude",model:"fable",effort:"high"}]}]' "$GATE_HOME/config/crew-dispatch.json" > "$TMP_ROOT/rules.json"
+mv "$TMP_ROOT/rules.json" "$GATE_HOME/config/crew-dispatch.json"
+result=$(gate claude fable high)
+f1=${result%%|*}
+printf '%s\n' '{"dispatch_rule":99}' > "$GATE_HOME/data/t1/placement.json"
+result=$(gate codex gpt-6-astra high)
+f2rule=${result%%|*}
+rm "$GATE_HOME/data/t1/placement.json"
+write_quota -5 -30
+jq '.providers[0].quotaSemantics.effectiveAvailability[0].pace="x"' "$QUOTA_FIXTURE" > "$TMP_ROOT/bad-pace.json"
+result=$(QUOTA_FIXTURE="$TMP_ROOT/bad-pace.json" gate codex gpt-6-astra high)
+printf '# review probes: F1=%s F2rule=%s F2shape=%s F8=%s (all must refuse with 1)\n' "$f1" "$f2rule" "${result%%|*}" "$f8"
+assert_equals 1 "$f8" 'an override with no mapped allowance refuses rather than starting uncharged'
+assert_equals 1 "$f1" 'an inferred specialist rule cannot drain an allowance behind the global pool'
+assert_equals 1 "$f2rule" 'an invalid recorded rule is a structural refusal, not quota uncertainty'
+assert_equals 1 "${result%%|*}" 'a resolver shape error fails closed' 
 pass 'the spawn gate enforces the balanced pick, alerts degraded starts, uses fresh evidence, and honors recorded overrides'
 
 # --- measured draw --------------------------------------------------------------
