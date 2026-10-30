@@ -1516,7 +1516,7 @@ live_claude() {  # <state-dir> <count>
   local n=1
   rm -f "$1"/crew*.meta
   while [ "$n" -le "$2" ]; do
-    printf 'harness=claude\nkind=ship\nbackend=unknown\nwindow=recorded-%s\naccount=ordinary\n' "$n" > "$1/crew$n.meta"
+    printf 'harness=claude\nkind=ship\nbackend=unknown\nwindow=recorded-%s\naccount=ordinary\nspawn_gen=s%s.1.1\n' "$n" "$(date +%s)" > "$1/crew$n.meta"
     n=$((n + 1))
   done
 }
@@ -1532,6 +1532,29 @@ mkdir -p "$HOME_DIR/state"
 
 write_pool_quota "$TMP_ROOT/pool-local.json" 1.0 through_reset 0.2 through_reset
 write_pool_quota "$REMOTE_QUOTA" 0.6 through_reset 0.2 through_reset
+# Historical records must not veto either machine in the pool. The inventory
+# answers successfully but contains none of the parked endpoints.
+cat > "$FAKEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+[ "$1" = list-windows ] && exit 0
+exit 1
+SH
+chmod +x "$FAKEBIN/tmux"
+for state_dir in "$HOME_DIR/state" "$REMOTE_HOME/state"; do
+  for n in $(seq 1 65); do
+    printf 'harness=claude\nkind=ship\nbackend=tmux\nwindow=firstmate:old-%s\naccount=ordinary\n' "$n" > "$state_dir/old-$n.meta"
+  done
+done
+pool_case "$BRIEF" --project pager
+assert_contains "$out" 'status: clear' 'parked metadata blocked resolver'
+assert_not_contains "$out" 'crew at its limit' 'parked metadata became machine capacity'
+for state_dir in "$HOME_DIR/state" "$REMOTE_HOME/state"; do
+  for n in $(seq 1 65); do
+    [ -f "$state_dir/old-$n.meta" ] || fail 'resolver removed old records'
+  done
+  rm "$state_dir"/old-*.meta
+done
+pass "65 parked records on each machine do not block resolver placement"
 live_claude "$HOME_DIR/state" 3
 pool_case "$BRIEF" --project pager
 assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=90%  spendPriority=1.0  runway=through_reset  -> not eligible: Claude crew at its limit on this machine: 3 of 3 (live: crew1, crew2, crew3)' "the local Claude guard counts this machine's live crew"

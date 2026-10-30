@@ -777,6 +777,7 @@ POOL_JQ='
       {allowed: $allowed,
           nextWindow: ([$binding[].nextWindow | select(. != null)] | min // null),
           unknown: any($items[]; .allowedConcurrency == null),
+          livenessError: ([$items[].livenessError | select(. != null)] | first // null),
           blockingScopes: [$binding[].scope],
           state: (if any($items[]; .state == "below_floor") then "below_floor"
                   elif any($items[]; .state == "at_floor") then "at_floor"
@@ -802,7 +803,9 @@ POOL_JQ='
     (if $pace == null then $c else $c + {pacing: $pace, pacingNextWindow: $pace.nextWindow} end) as $c |
     if ($c.eligible | not) or ($c.unranked // false) then $c
     else
-    if $pace != null and ($pace.unknown or $pace.allowed == null) then
+    if $pace != null and $pace.livenessError != null then
+      $c + {eligible: false, reason: "\($pace.livenessError) on \(where($h.id))"}
+    elif $pace != null and ($pace.unknown or $pace.allowed == null) then
       $c + {eligible: false, reason: "quota pacing evidence unknown on \(where($h.id))"}
     elif $pace != null and $pace.allowed == 0 then
       $c + {eligible: false, pacingRejection: true, reason: "quota pacing at or below floor on \(where($h.id))"}

@@ -600,7 +600,7 @@ SH
   done
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "three crew refuse despite unknown quota: $out"
-  assert_contains "$out" '3 live or unverified crew, limit 3' 'default cap applies'
+  assert_contains "$out" '3 live crew, limit 3' 'default cap applies'
   assert_contains "$out" 'counted tasks: crew1, crew2, crew3' 'refusal names every counted task'
   echo dead > "$CASE/verdict-fm-3"
   out=$(check_admission); rc=$?
@@ -615,8 +615,12 @@ SH
   cp "$CASE/meta" "$HOME_DIR/state/crew3.meta"
   echo missing > "$CASE/verdict-fm-3"
   out=$(check_admission); rc=$?
-  expect_code 1 "$rc" "tmux absence that cannot be proved conservatively consumes a slot: $out"
-  assert_contains "$out" '3 live or unverified crew, limit 3' 'an unproven missing endpoint counts against the cap'
+  expect_code 0 "$rc" "tmux missing endpoint does not consume a slot: $out"
+  echo unreadable > "$CASE/verdict-fm-3"
+  out=$(check_admission); rc=$?
+  expect_code 1 "$rc" "unreadable backend must refuse: $out"
+  assert_contains "$out" 'crew liveness unreadable: tmux' 'unreadable backend reason'
+  assert_not_contains "$out" 'counted tasks:' 'unknown liveness must not become a count'
   sed 's/kind=ship/kind=secondmate/' "$HOME_DIR/state/crew3.meta" > "$CASE/meta"
   cp "$CASE/meta" "$HOME_DIR/state/crew3.meta"
   out=$(check_admission); rc=$?
@@ -643,7 +647,7 @@ test_claude_admission_checks_processes_without_a_registration() (
   # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
   local PATH="$FAKEBIN:$PATH"
   export PATH
-  local out rc fixture_shell_pid fixture_mode=exited fixture_registration=unknown fixture_absence=missing
+  local out rc fixture_shell_pid fixture_mode=exited fixture_registration=unknown
   bash -c 'while :; do sleep 1; done' &
   fixture_shell_pid=$!
   trap 'kill "$fixture_shell_pid" 2>/dev/null || true; wait "$fixture_shell_pid" 2>/dev/null || true' EXIT
@@ -701,32 +705,21 @@ SH
     fixture_mode=running
     FM_TEST_HERDR_MODE=$fixture_mode FM_TEST_HERDR_REGISTRATION=$fixture_registration run_process_admission
     expect_code 1 "$rc" "a running Claude with $fixture_registration registration consumes its slot: $out"
-    assert_contains "$out" 'counted tasks: parked' 'refusal names the counted task'
+    if [ "$fixture_registration" = idle ]; then
+      assert_contains "$out" 'counted tasks: parked' 'positive liveness names the counted task'
+    else
+      assert_contains "$out" 'crew liveness unreadable: herdr' 'unclassified registration refuses separately'
+    fi
     fixture_mode=unreadable
     FM_TEST_HERDR_MODE=$fixture_mode FM_TEST_HERDR_REGISTRATION=$fixture_registration run_process_admission
-    expect_code 1 "$rc" "an unreadable process probe with $fixture_registration registration consumes its slot: $out"
-    assert_contains "$out" 'counted tasks: parked' 'unreadable task remains actionable'
+    expect_code 1 "$rc" "an unreadable process probe with $fixture_registration registration refuses: $out"
+    assert_contains "$out" 'crew liveness unreadable: herdr' 'unreadable backend remains actionable'
   done
-  # The sourced admission library invokes this test override indirectly.
-  # shellcheck disable=SC2329
-  fm_backend_herdr_endpoint_absence_recheck() {
-    : > "$CASE/absence-recheck"
-    printf '%s' "$fixture_absence"
-  }
   fixture_mode=gone
-  fixture_absence=missing
   FM_TEST_HERDR_MODE=$fixture_mode FM_TEST_HERDR_REGISTRATION=$fixture_registration run_process_admission
-  expect_code 0 "$rc" "a confirmed gone endpoint releases its slot after the absence recheck: $out"
-  assert_present "$CASE/absence-recheck" 'a missing endpoint uses the shared absence proof'
-  fixture_absence=alive
-  run_process_admission
-  expect_code 1 "$rc" "an endpoint found alive during the absence recheck consumes its slot: $out"
-  assert_contains "$out" 'counted tasks: parked' 'a live endpoint found by the recheck remains actionable'
-  fixture_absence=unreadable
-  run_process_admission
-  expect_code 1 "$rc" "an unproved endpoint absence conservatively consumes its slot: $out"
-  assert_absent "$CASE/unexpected-herdr-call" 'the fixture must not invoke Herdr lifecycle commands'
-  pass 'Claude admission reads process evidence and preserves endpoint absence proof'
+  expect_code 0 "$rc" "a missing endpoint releases its admission slot: $out"
+  assert_absent "$CASE/unexpected-herdr-call" 'admission must not invoke Herdr recovery or lifecycle commands'
+  pass 'Claude admission reads process evidence without recovering absent endpoints'
 )
 
 test_spawn_enforces_claude_admission() {
@@ -771,13 +764,13 @@ SH
   out=$(spawn_ship selected-floor --harness claude --profile-floor-scope all_models --profile-floor-min-percent 90); rc=$?
   expect_code 1 "$rc" "spawn enforces the selected candidate floor: $out"
   assert_refused_before_launch selected-floor "$out" 'all_models remaining 80% below 90%'
-  # Unverified backend records count without invoking any installed backend.
+  # Recent launches reserve slots before their backend is readable.
   for n in 1 2 3; do
-    printf 'harness=claude\nkind=scout\nbackend=unknown\nwindow=recorded-%s\n' "$n" > "$HOME_DIR/state/crew$n.meta"
+    printf 'harness=claude\nkind=scout\nbackend=unknown\nwindow=recorded-%s\nspawn_gen=s%s.1.1\n' "$n" "$(date +%s)" > "$HOME_DIR/state/crew$n.meta"
   done
   out=$(spawn_ship capped --harness claude); rc=$?
   expect_code 1 "$rc" "real spawn cannot bypass the cap: $out"
-  assert_refused_before_launch capped "$out" '3 live or unverified crew, limit 3'
+  assert_refused_before_launch capped "$out" '3 live crew, limit 3'
   out=$(spawn_ship unaffected --harness codex); rc=$?
   expect_code 0 "$rc" "Codex is unaffected by Claude admission: $out"
   pass 'spawn enforces Claude admission before metadata or launch and releases the lock on refusal'
@@ -787,7 +780,7 @@ test_concurrent_claude_spawns_share_last_slot() {
   local n first_pid second_pid first_rc second_rc
   new_case concurrent-admission claude
   for n in 1 2; do
-    printf 'harness=claude\nkind=ship\nbackend=unknown\nwindow=recorded-%s\n' "$n" > "$HOME_DIR/state/crew$n.meta"
+    printf 'harness=claude\nkind=ship\nbackend=unknown\nwindow=recorded-%s\nspawn_gen=s%s.1.1\n' "$n" "$(date +%s)" > "$HOME_DIR/state/crew$n.meta"
   done
   # Hold the first spawn at launch delivery, after the existing task-set
   # publication lock has released but before admission may release its slot.
@@ -826,7 +819,7 @@ SH
   wait "$second_pid"; second_rc=$?
   expect_code 0 "$first_rc" "first spawn should take last slot: $(cat "$CASE/first.out")"
   expect_code 1 "$second_rc" "second simultaneous spawn must refuse: $(cat "$CASE/second.out")"
-  assert_contains "$(cat "$CASE/second.out")" '3 live or unverified crew, limit 3' 'published startup reservation counts'
+  assert_contains "$(cat "$CASE/second.out")" '3 live crew, limit 3' 'published startup reservation counts'
   assert_absent "$HOME_DIR/state/concurrent-second.meta" 'losing spawn never publishes'
   assert_absent "$HOME_DIR/state/.claude-admission.lock" 'finished spawns release admission lock'
   pass 'simultaneous Claude spawns cannot both take the last account slot'
@@ -848,7 +841,7 @@ SH
   printf 'harness=codex\nkind=ship\nmodel=gpt-5.6-sol\nbackend=unknown\nwindow=recorded\nspawn_gen=s%s.1.1\n' "$now" > "$HOME_DIR/state/live-codex.meta"
   out=$(spawn_ship "$id" --harness codex --model gpt-5.6-sol); rc=$?
   expect_code 1 "$rc" "a live Codex worker must consume its configured pacing slot: $out"
-  assert_refused_before_launch "$id" "$out" '1 live or unverified crew, limit 1'
+  assert_refused_before_launch "$id" "$out" '1 live crew, limit 1'
 
   new_case codex-pacing-unmeasured codex
   cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'

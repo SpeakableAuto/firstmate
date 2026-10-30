@@ -865,13 +865,13 @@ test_codex_pacing_refuses_before_relaunch_stop() {
 JSON
   printf '%s\n' "{\"schemaVersion\":5,\"providers\":[{\"provider\":\"codex\",\"state\":{\"stale\":false},\"windows\":[{\"id\":\"weekly\",\"percentRemaining\":80,\"resetsAt\":\"$reset\"}],\"quotaSemantics\":{\"status\":\"known\",\"effectiveAvailability\":[{\"scope\":\"all_models\",\"status\":\"known\",\"effectivePercentRemaining\":80,\"runway\":{\"status\":\"through_reset\"}}]}}]}" \
     > "$dir/fake/quota.json"
-  printf 'harness=codex\nkind=ship\nmodel=gpt-5.6-sol\nbackend=unknown\nwindow=other\n' \
+  printf 'harness=codex\nkind=ship\nmodel=gpt-5.6-sol\nbackend=unknown\nwindow=other\nspawn_gen=s%s.1.1\n' "$(date +%s)" \
     > "$dir/home/state/other-codex.meta"
   cp "$dir/home/state/$id.meta" "$dir/meta-before"
 
   out=$(run_control "$dir" "$id" relaunch --model gpt-5.6-sol --note "retry after a slot opens"); rc=$?
   expect_code 1 "$rc" "a full Codex pacing account must refuse relaunch: $out"
-  assert_contains "$out" '1 live or unverified crew, limit 1' \
+  assert_contains "$out" '1 live crew, limit 1' \
     "the relaunch refusal should report the paced account cap"
   [ "$(cat "$dir/fake/command")" = codex ] \
     || fail "full Codex pacing admission stopped the existing agent"

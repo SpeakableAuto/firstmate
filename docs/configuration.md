@@ -1233,7 +1233,7 @@ Applicable scopes on the same account use the strictest allowance.
 The earliest reset among the scopes tied for that strictest allowance supplies the candidate's pacing window.
 The resolver checks live crew and recent placements against that allowance, then prefers the passing paced account whose reset comes soonest.
 Existing runway and selected profile floors still apply.
-Every directly classified crew launch whose harness and model resolve to a configured provider account applies the same pacing allowance against recovery-grade live-worker evidence under a home-wide launch lock.
+Every directly classified crew launch whose harness and model resolve to a configured provider account applies the same pacing allowance against the shared live-worker count in [`bin/fm-live-workers-lib.sh`](../bin/fm-live-workers-lib.sh) under a home-wide launch lock; an unreadable backend attaches its named `livenessError` to only the affected account records, which then refuse, and leaves the rest of the quota snapshot usable.
 Direct Claude launches retain their stricter account-identity and fixed session-floor checks and also apply every configured scope for the selected model.
 A typed profile's explicit `provider` is not yet carried into spawn metadata, so a profile whose declared provider differs from the launch-time harness/model mapping receives resolver pacing but not direct-launch pacing; durable provider/account launch identity is a known follow-up.
 
@@ -1292,8 +1292,8 @@ A light-machine example:
 ```
 
 The light-machine cap may be raised to three after measuring its room; the heavy-machine cap cannot exceed four.
-The crew cap counts recorded endpoints positively classified alive by the existing backend liveness owner, plus any record launched within the last 60 seconds, excluding the launching task and persistent secondmates.
-Records whose backend answered that the endpoint is missing, dead or gone, such as retained paused or done records, do not consume crew capacity.
+The crew cap uses the same shared live-worker count: recorded endpoints positively classified alive by the existing backend liveness owner, plus any record launched within the last 60 seconds, excluding the launching task and persistent secondmates.
+Records whose backend answered that the endpoint is missing, dead, gone, ambiguous or unverified, such as retained paused or done records, do not consume crew capacity.
 If a backend cannot be read for an existing record, placement refuses its room check with `crew liveness unreadable: <backend>` instead of counting or admitting.
 Missing memory, disk or quota evidence also refuses placement through its named check; endpoint recovery and duplicate-launch guards keep their separate evidence requirements.
 Workload names are exact configuration values, never inferred from hostnames.
@@ -1374,10 +1374,10 @@ Account identity is the declared worker pin or a provable absolute ambient Claud
 An unpinned canonical launch refuses when a higher-precedence Claude credential is set because that credential cannot be mapped to a quota profile.
 Every admitted launch removes higher-precedence pane credentials and explicitly selects the same config root used for its quota snapshot.
 Unpinned raw commands count against every account and are refused because their credential selection and quota cannot be proved.
-Backend recovery-grade liveness excludes confirmed dead agents and endpoints whose absence is proven; uncertain liveness counts conservatively, and a just-published launch reserves its slot for 60 seconds while the process starts.
-For Herdr, an unreadable agent registration falls back to the existing process probe: a shell-only pane with no harness descendants releases its slot, while an unreadable process view still counts.
+Admission uses the shared live-worker count in [`bin/fm-live-workers-lib.sh`](../bin/fm-live-workers-lib.sh), also used by the away spend cap, quota pacing and crew placement; its header owns liveness, startup reservations, and unreadable-backend refusals.
+For Herdr, an unreadable agent registration falls back to the existing process probe: a shell-only pane with no harness descendants releases its slot, while an unreadable process view refuses admission with a named liveness error.
 A concurrency refusal lists every counted task.
-Backends without a recovery classifier retain their recorded slots conservatively until teardown removes the record.
+Ambiguous endpoints (open, but with no agent in the foreground) and backends without a recovery classifier neither count nor refuse once the startup reservation expires; only a backend read failure refuses.
 A home-wide admission lock spans the count, quota check, provisioning, launch, and publication or rollback, preventing simultaneous spawns from independently taking the same last slot.
 The supported boundary is per home; homes sharing one Claude account share the cap, but this guard does not coordinate that total across homes or machines.
 Typed dispatch resolution applies the same cap and five-hour floor to each machine's Claude candidates before recommending one: `bin/fm-quota-snapshot.sh` attaches that home's limits, live crew count, and session reading to every snapshot it prints, so a parent judges a remote machine from that machine's own crew and account.
