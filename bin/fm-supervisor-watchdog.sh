@@ -26,13 +26,16 @@
 # row (an acknowledgement), a newer transcript file, or a semantic pane change.
 # After the watchdog types (nudge or ring) or restarts, only a beacon while
 # idle, a changed oldest row or a usage-limit notice counts until one occurs,
-# because the turn it caused may just fail and change the screen.
+# because the turn it caused may just fail and change the screen. A visible
+# usage-limit notice counts only for one STALL_SECS after it first appears.
 # Spinner rows, elapsed durations, token counters, Claude's rotating footer
 # hints, and a composer row containing only an unstyled `Try "..."` suggestion
 # are ignored, while other numbers remain semantic progress. The unstyled
-# suggestion remains pending for every typing guard. A visible usage-limit
-# notice counts as progress because Claude resumes by itself and typing would
-# cancel that. After STALL_SECS without progress, the watchdog sends one guarded
+# suggestion remains pending for every typing guard. A usage-limit notice is
+# never typed over or restarted, because Claude resumes by itself and input
+# would cancel that; if it still shows with no other progress for another
+# STALL_SECS, one urgent supervisor-down alert says the supervisor is stopped
+# by a usage limit. After STALL_SECS without progress, the watchdog sends one guarded
 # nudge. With the default FM_WATCHDOG_STALL_RESTART=0, another STALL_SECS
 # without progress never stops the supervisor and sends one urgent alert that
 # it needs restarting by hand. FM_WATCHDOG_STALL_RESTART=1
@@ -628,7 +631,7 @@ watchdog_reconcile_restart() {
 
 # Stall detection and recovery; see the header for the progress contract.
 watchdog_stall() {
-  local beacon oldest pane progressed=0 moved=0 stage stage_at quiet prev
+  local beacon oldest pane progressed=0 moved=0 stage stage_at quiet prev usage_since=0
   STALL_ACTED=0
   if ! watchdog_under_way; then rm -f "$DIR/stall.json" "$DIR/typed"; return 0; fi
   beacon=$(fm_sup_stat_mtime "$STATE/.last-watcher-beat") || beacon=
@@ -647,14 +650,15 @@ watchdog_stall() {
     (.stage as $stage | ["watching","nudged","restarting","restarted","down","held"] | index($stage) != null) and
     ([.progress,.stage_at] | all(type=="number" and .>=0 and floor==.)) and
     ((.restart_tries // 0) | type=="number" and .>=0 and floor==.) and
-    ((.down_reason // "") | type=="string") and ((.alerted // false) | type=="boolean")' >/dev/null 2>&1; then
+    ((.down_reason // "") | type=="string") and ((.alerted // false) | type=="boolean") and
+    ((.usage_since // 0) | type=="number" and .>=0 and floor==.)' >/dev/null 2>&1; then
     # Keep the evidence and start a fresh timer rather than refusing every tick.
     mv "$DIR/stall.json" "$DIR/stall.json.corrupt"
     watchdog_log refused corrupt-stall-state
     return 0
   fi
   watchdog_stall_update '
-    .restart_tries //= 0 | .down_reason //= "" | .alerted //= false
+    .restart_tries //= 0 | .down_reason //= "" | .alerted //= false | .usage_since //= 0
     | if .stage == "down" and .down_reason == "" then .down_reason="automatic recovery did not bring it back" else . end'
   stage=$(printf '%s' "$SREC" | jq -r .stage)
   if [ "$stage" = restarting ]; then
@@ -678,7 +682,19 @@ watchdog_stall() {
   esac
   prev=$(printf '%s' "$SREC" | jq -r .oldest)
   [ -z "$prev" ] || [ "$oldest" = "$prev" ] || progressed=1
-  [ "$VERDICT" != usage-limit ] || progressed=1
+  # A usage-limit notice is progress only for one interval after it appears,
+  # so a long limit, or the words left on screen, cannot hide a stall forever.
+  if [ "$VERDICT" = usage-limit ]; then
+    usage_since=$(printf '%s' "$SREC" | jq -r .usage_since)
+    if [ "$usage_since" -eq 0 ]; then
+      usage_since=$NOW
+      watchdog_stall_update --argjson now "$NOW" '.usage_since=$now'
+    fi
+    [ "$((NOW - usage_since))" -ge "$STALL_SECS" ] || progressed=1
+  else
+    usage_since=0
+    watchdog_stall_update '.usage_since=0'
+  fi
   prev=$(printf '%s' "$SREC" | jq -r .pane)
   if [ "$pane" != unreadable ]; then
     [ "$prev" = unreadable ] || [ "$pane" = "$prev" ] || moved=1
@@ -701,6 +717,21 @@ watchdog_stall() {
   fi
   stage_at=$(printf '%s' "$SREC" | jq -r .stage_at)
   quiet=$((NOW - $(printf '%s' "$SREC" | jq -r .progress)))
+  # A stall under a usage-limit notice is never nudged or restarted, since
+  # either would cancel Claude's own resume; it goes straight to the alert.
+  if [ "$usage_since" -gt 0 ] && [ "$((NOW - usage_since))" -ge "$STALL_SECS" ]; then
+    case "$stage" in
+      watching) [ "$quiet" -ge "$STALL_SECS" ] || return 0 ;;
+      nudged) [ "$((NOW - stage_at))" -ge "$STALL_SECS" ] || return 0 ;;
+      *) usage_since=0 ;;
+    esac
+    if [ "$usage_since" -gt 0 ]; then
+      STALL_ACTED=1
+      watchdog_log action-claimed supervisor-down-usage-limit
+      watchdog_enter_down "it has shown a usage-limit notice for $(( (NOW - usage_since) / 60 )) minutes with no other progress, so it cannot work until the limit resets"
+      return 0
+    fi
+  fi
   case "$stage" in
     watching)
       [ "$quiet" -ge "$STALL_SECS" ] || return 0

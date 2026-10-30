@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Urgent captain alerts: condition allow-list, Telegram Hermes hand-off,
-# rate limits, dedupe, failure retry, message-id log and the machine probe.
+# rate limits, dedupe, failure retry, unconfirmed-delivery retry, delivery
+# timeout, message-id log and the machine probe.
 # A recording sender replaces Hermes through FM_URGENT_ALERT_EXEC; nothing
 # leaves the machine.
 set -eu
@@ -22,6 +23,7 @@ n=$(( $(find "$dir" -type f | wc -l) + 1 ))
 case "${SENDER_MODE:-ok}" in
   ok) printf '{"success": true, "platform": "telegram", "chat_id": "999", "message_id": "%s"}\n' "$((4000 + n))" ;;
   error) printf '{"error": "Telegram send failed"}\n'; exit 1 ;;
+  usage) printf 'hermes send: --to PLATFORM is required\n' >&2; exit 2 ;;
   noid) printf '{"success": true}\n' ;;
   banner) printf 'Sending to telegram...\n{"success": true, "message_id": "%s"}\n' "$((4000 + n))" ;;
   pretty) printf '{\n  "success": true,\n  "message_id": "%s"\n}\n' "$((4000 + n))" ;;
@@ -89,12 +91,13 @@ at $((100000 + 86400 + 1))
 run send machine-down m0002 'Firstmate: the 0002 machine has been unreachable for 20 minutes.'
 check "$OUT" sent 'daily cap rolls after 24 hours'
 
-# A failed delivery is logged, retried only after the retry window.
+# A delivery that never started is logged, retried only after the retry window.
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 at 200000
-SENDER_MODE=error run send supervisor-down sup 'Firstmate: supervisor stopped.'
-check "$RC" 1 'Hermes error is a failure'
-check "$OUT" failed:delivery-failed 'Hermes error reported'
+SENDER_MODE=usage run send supervisor-down sup 'Firstmate: supervisor stopped.'
+check "$RC" 1 'a Hermes usage error is a failure'
+check "$OUT" failed:hermes-usage-error 'a Hermes usage error is reported'
+check "$(tail -1 "$LOG" | jq -r .result)" failed 'a usage error never sent anything, so it is a plain failure'
 at 200100
 run send supervisor-down sup 'Firstmate: supervisor stopped.'
 check "$OUT" skipped:retry-backoff 'failed delivery is not hammered'
@@ -105,7 +108,7 @@ rm -rf "$FM_HOME/state/urgent-alert"
 SENDER_MODE=noid run send supervisor-down sup 'Firstmate: supervisor stopped.'
 check "$OUT" failed:no-message-id 'a reply without a message id is not proof of delivery'
 rm -rf "$FM_HOME/state/urgent-alert"
-SENDER_MODE=hang FM_WEDGE_ALARM_TIMEOUT_SECS=1 run send supervisor-down sup 'Firstmate: supervisor stopped.'
+SENDER_MODE=hang FM_URGENT_ALERT_TIMEOUT_SECS=1 run send supervisor-down sup 'Firstmate: supervisor stopped.'
 check "$OUT" failed:delivery-timeout 'a hung sender is bounded'
 
 # An ambiguous delivery may have reached the phone, so it counts against the
@@ -118,7 +121,7 @@ check "$(tail -1 "$LOG" | jq -r .result)" unconfirmed 'an id-less reply is logge
 at 211000
 run send supervisor-down sup-b 'Firstmate: supervisor still stopped.'
 check "$OUT" skipped:condition-rate-limit 'an unconfirmed delivery holds its condition like a sent one'
-SENDER_MODE=hang FM_WEDGE_ALARM_TIMEOUT_SECS=1 run send machine-down m0002 'Firstmate: 0002 unreachable.'
+SENDER_MODE=hang FM_URGENT_ALERT_TIMEOUT_SECS=1 run send machine-down m0002 'Firstmate: 0002 unreachable.'
 check "$OUT" failed:delivery-timeout 'a timed-out delivery is still not proof'
 check "$(tail -1 "$LOG" | jq -r .result)" unconfirmed 'a timed-out delivery is logged as unconfirmed'
 FM_URGENT_ALERT_DAILY_CAP=2 run send carve-out-blocked pr-1 'Firstmate: waiting on your decision.'
@@ -129,6 +132,48 @@ for t in 1 2 3 4 5 6 7 8; do
   SENDER_MODE=noid run send supervisor-down "sup-$t" 'Firstmate: supervisor stopped.'
 done
 check "$(sent_count)" 3 'id-less replies reach the phone at most once per condition window'
+
+# A timed-out send may never have left: the same key retries about an hour
+# later instead of reading as delivered, and stops after a few tries.
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+at 230000
+SENDER_MODE=hang FM_URGENT_ALERT_TIMEOUT_SECS=1 run send supervisor-down down-1 'Firstmate: supervisor stopped.'
+check "$OUT" failed:delivery-timeout 'a timed-out supervisor alert reports failure'
+at 230060
+run send supervisor-down down-1 'Firstmate: supervisor stopped.'
+check "$OUT" skipped:unconfirmed-backoff 'an unconfirmed key waits before retrying'
+at 233600
+run send supervisor-down down-1 'Firstmate: supervisor stopped.'
+check "$OUT" sent 'an unconfirmed key retries after an hour and is delivered'
+at 233700
+run send supervisor-down down-1 'Firstmate: supervisor stopped.'
+check "$OUT" skipped:duplicate 'only a confirmed send makes the key a duplicate'
+check "$(sent_count)" 2 'the timed-out attempt and its one retry reached the sender'
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+for t in $(seq 240000 900 325500); do
+  at "$t"; SENDER_MODE=hang FM_URGENT_ALERT_TIMEOUT_SECS=1 run send supervisor-down down-2 'Firstmate: supervisor stopped.'
+done
+check "$(sent_count)" 3 'a sender that always times out is tried three times in a day'
+check "$OUT" skipped:unconfirmed-exhausted 'an exhausted key reports its retries are used, not delivered'
+check "$(jq -r 'select(.result=="unconfirmed") | .at' "$LOG" | tr '\n' ' ')" '240000 243600 247200 ' 'unconfirmed retries are an hour apart'
+
+# A reply lost after Telegram accepted the message makes Hermes exit with an
+# error; that may have reached the phone, so the limits still hold.
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+for t in $(seq 400000 900 486000); do
+  at "$t"; SENDER_MODE=error run send supervisor-down lost-1 'Firstmate: supervisor stopped.'
+done
+check "$(sent_count)" 3 'a lost reply with an error exit reaches the phone at most three times a day for one key'
+check "$(jq -r 'select(.result=="unconfirmed") | .reason' "$LOG" | sort -u)" delivery-failed 'an error exit after Hermes ran is logged as unconfirmed'
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+n=0
+for t in $(seq 500000 1800 586000); do
+  n=$((n + 1)); at "$t"
+  for c in supervisor-down carve-out-blocked machine-down; do
+    SENDER_MODE=error run send "$c" "lost-$c-$n" 'Firstmate: still blocked.'
+  done
+done
+check "$(sent_count)" 4 'lost replies on new keys across all conditions stay under the daily cap'
 
 # A text line before the JSON, or pretty-printed JSON, still yields the id.
 for mode in banner pretty; do
@@ -170,6 +215,35 @@ check "$(head -5 "$TMP/hermes-args" | tr '\n' ' ')" 'send --to telegram --json -
 check "$(cat "$TMP/hermes-body")" 'Firstmate weekend alerts are set up' 'message travels in a file Hermes reads'
 [ ! -e "$(sed -n 6p "$TMP/hermes-args")" ] || fail 'message file left behind'
 pass 'message file is removed after delivery'
+
+# A Hermes double shaped like the installed `hermes send --json`: it prints
+# indented JSON and exits 1 on a platform error. A real send starts Python and
+# may retry Telegram itself, so the urgent path waits longer than the local
+# notifier limit and has its own bound.
+cat > "$TMP/hermes-real" <<'HERMES'
+#!/usr/bin/env bash
+sleep "${HERMES_DELAY:-0}"
+case "${HERMES_MODE:-ok}" in
+  ok) printf '{\n  "success": true,\n  "platform": "telegram",\n  "chat_id": "1",\n  "message_id": "88"\n}\n' ;;
+  error) printf '{\n  "error": "Telegram send failed: Timed out"\n}\n'; exit 1 ;;
+esac
+HERMES
+chmod +x "$TMP/hermes-real"
+rm -rf "$FM_HOME/state/urgent-alert"
+OUT=$(env -u FM_URGENT_ALERT_EXEC FM_HERMES_BIN="$TMP/hermes-real" HERMES_DELAY=2 FM_WEDGE_ALARM_TIMEOUT_SECS=1 "$CLI" test 2>/dev/null)
+check "$(printf '%s\n' "$OUT" | tr '\n' ' ')" 'sent message_id=88 ' 'a slow Hermes send outlasts the local notifier limit'
+rm -rf "$FM_HOME/state/urgent-alert"
+OUT=$(env -u FM_URGENT_ALERT_EXEC FM_HERMES_BIN="$TMP/hermes-real" HERMES_DELAY=3 FM_URGENT_ALERT_TIMEOUT_SECS=1 "$CLI" test 2>/dev/null) || true
+check "$OUT" failed:delivery-timeout 'the urgent send has its own bound'
+check "$(tail -1 "$LOG" | jq -r .result)" unconfirmed 'a timed-out Hermes send is unconfirmed'
+rm -rf "$FM_HOME/state/urgent-alert"
+OUT=$(env -u FM_URGENT_ALERT_EXEC FM_HERMES_BIN="$TMP/hermes-real" HERMES_MODE=error "$CLI" test 2>/dev/null) || true
+check "$OUT" failed:delivery-failed 'a Hermes platform error is reported'
+check "$(tail -1 "$LOG" | jq -r .result)" unconfirmed 'a Hermes platform error may have reached the phone'
+rm -rf "$FM_HOME/state/urgent-alert"
+OUT=$(env -u FM_URGENT_ALERT_EXEC FM_HERMES_BIN="$TMP/missing-hermes" "$CLI" test 2>/dev/null) || true
+check "$OUT" failed:hermes-not-found 'a missing Hermes is reported'
+check "$(tail -1 "$LOG" | jq -r .result)" failed 'a missing Hermes never sent anything'
 
 # Machine probe: alert once after a sustained outage, never on one blip.
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
@@ -227,4 +301,8 @@ at 500900; SENDER_MODE=error run check-machine m0002 mac-mini-0002
 check "$OUT" failed:delivery-failed 'a failed machine alert reports delivery failure'
 check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" false 'a failed delivery leaves the outage open'
 at 501801; run check-machine m0002 mac-mini-0002
-check "$OUT" sent 'the open outage retries after delivery backoff'
+check "$OUT" skipped:unconfirmed-backoff 'an unconfirmed machine alert waits before retrying'
+check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" false 'an unconfirmed machine alert never closes the outage'
+at 504500; run check-machine m0002 mac-mini-0002
+check "$OUT" sent 'the open outage retries after the unconfirmed backoff'
+check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" true 'confirmed delivery closes the outage alert episode'

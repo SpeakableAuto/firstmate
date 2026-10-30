@@ -424,6 +424,7 @@ printf 'old\n' > "$FM_HOME/data/supervisor-handoff-1029.md"
 printf 'new\n' > "$FM_HOME/data/supervisor-handoff-1030.md"
 touch -t 202610290000 "$FM_HOME/data/supervisor-handoff-1029.md"
 fm_sup_stat_mtime() { case "$1" in *.last-watcher-beat) printf '%s' "$BEACON" ;; *) command stat -f %m "$1" ;; esac; }
+real_fm_urgent_alert=$(declare -f fm_urgent_alert)
 fm_urgent_alert() {
   printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$DIR/urgent"
   FM_URGENT_ALERT_RESULT=${URGENT_RESULT:-sent}
@@ -609,6 +610,44 @@ URGENT_RESULT=sent; TICK=4601; watchdog_tick
 check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 2 'the default down incident retries urgent delivery on a later tick'
 check "$(jq -r .alerted "$DIR/stall.json")" true 'successful default retry closes the alert episode'
 
+# The real limiter: a supervisor-down alert whose first send times out is
+# not delivered, so the incident stays open and retries about an hour later.
+cat > "$TMP/urgent-sender" <<'SENDER'
+#!/usr/bin/env bash
+dir=$(dirname "$0")
+n=$(( $(cat "$dir/urgent-calls" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$n" > "$dir/urgent-calls"
+cat > /dev/null
+case "$(cat "$dir/urgent-mode")" in
+  hang-first) [ "$n" -gt 1 ] || exec /bin/sleep 30 ;;
+  hang) exec /bin/sleep 30 ;;
+esac
+printf '{"success": true, "message_id": "%s"}\n' "$((500 + n))"
+SENDER
+chmod +x "$TMP/urgent-sender"
+stub_fm_urgent_alert=$(declare -f fm_urgent_alert)
+eval "$real_fm_urgent_alert"
+real_urgent_case() {
+  hung_case
+  rm -rf "$FM_HOME/state/urgent-alert" "$TMP/urgent-calls"
+  printf '%s\n' "$1" > "$TMP/urgent-mode"
+}
+# The runner counts whole seconds, so a short bound leaves room for a healthy reply.
+export FM_URGENT_ALERT_EXEC="$TMP/urgent-sender" FM_URGENT_ALERT_TIMEOUT_SECS=3
+real_urgent_case hang-first
+for t in $(seq 1000 600 94600); do TICK=$t; watchdog_tick; done
+check "$(cat "$TMP/urgent-calls")" 2 'a timed-out supervisor-down alert is retried once Hermes recovers'
+check "$(jq -r .alerted "$DIR/stall.json")" true 'the retried alert closes the incident only after delivery'
+check "$(jq -r 'select(.result=="sent") | .at' "$FM_HOME/state/urgent-alert/sent.jsonl")" 8200 'the retry lands an hour after the timed-out send'
+real_urgent_case hang
+for t in $(seq 1000 600 94600); do TICK=$t; watchdog_tick; done
+check "$(jq -s '[.[] | select(.result=="unconfirmed") | .at] | . as $a | [$a[] as $t | [$a[] | select(. >= $t and . < $t + 86400)] | length] | max' "$FM_HOME/state/urgent-alert/sent.jsonl")" 3 'a sender that keeps timing out is tried at most three times in any day'
+check "$(jq -r 'select(.result=="unconfirmed") | .at' "$FM_HOME/state/urgent-alert/sent.jsonl" | head -3 | tr '\n' ' ')" '4600 8200 11800 ' 'timed-out alerts retry an hour apart'
+check "$(jq -r .alerted "$DIR/stall.json")" false 'an alert never confirmed never reads as delivered'
+check "$(stage)" down 'an unconfirmed alert keeps the incident down'
+unset FM_URGENT_ALERT_EXEC FM_URGENT_ALERT_TIMEOUT_SECS
+eval "$stub_fm_urgent_alert"
+
 restart_hung_case
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$STOPPED" 1 'working supervisor with an empty composer restarts after the second window'
@@ -769,6 +808,23 @@ stall_case; PANE=$'Usage limit reached · continuing automatically at 3pm\n❯ '
 watchdog_tick; TICK=2800; watchdog_tick; TICK=4600; watchdog_tick
 check "$STOPPED" 0 'a usage-limit pause is never restarted'
 check "$SENT" 0 'a usage-limit pause is never typed into'
+# A usage-limit notice counts as progress only for one interval; a long limit
+# reaches the urgent alert without typing or restarting.
+restart_case; PANE=$'Usage limit reached · continuing automatically at 3pm\n────────────────────\n❯ \n────────────────────'
+for t in $(seq 1000 900 260200); do TICK=$t; watchdog_tick; done
+check "$SENT" 0 'a 72-hour usage limit is never typed into'
+check "$STOPPED" 0 'a 72-hour usage limit is never restarted'
+check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 1 'a 72-hour usage limit sends one urgent alert'
+check "$(jq -r 'select(.event=="alerted") | .at' "$DIR/events.jsonl" | head -1)" 4600 'the usage-limit alert fires one interval after the notice stops counting'
+grep -Eq 'shown a usage-limit notice for [0-9]+ minutes with no other progress, so it cannot work until the limit resets' "$DIR/urgent" || fail 'usage-limit alert is not plain'
+pass 'usage-limit alert says the supervisor is stopped by a usage limit'
+stall_case; PANE=$'Usage limit reached · continuing automatically at 3pm\n────────────────────\n❯ \n────────────────────'
+for t in $(seq 1000 60 3400); do TICK=$t; watchdog_tick; done
+PANE=$CLEAR; IDENTITY=$'claude\tworking'; TICK=3460; watchdog_tick
+check "$(stage)" watching 'Claude resuming after a short usage limit is progress'
+[ ! -e "$DIR/urgent" ] || fail 'a short usage limit reached the captain'
+pass 'a usage limit that clears inside the window never alerts'
+check "$(jq -r .usage_since "$DIR/stall.json")" 0 'the usage-limit window resets once the notice clears'
 stall_case; UNDER_WAY=0
 watchdog_tick; TICK=2800; watchdog_tick
 [ ! -e "$DIR/stall.json" ] || fail 'idle home kept a stall timer'

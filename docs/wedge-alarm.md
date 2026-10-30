@@ -36,9 +36,10 @@ See [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 It accepts only `supervisor-down`, `carve-out-blocked` and `machine-down`, plus its own `test` subcommand, and never carries routine updates.
 It always sends to Hermes' Telegram home channel.
 Hermes keeps the platform login; firstmate only hands it the plain message.
-Delivery is rate limited to one message per condition per six hours, the same condition and key once per day, and four messages in any 24 hours.
+Delivery is rate limited to one message per condition per six hours, the same condition and key once per day after Hermes confirms it, and four messages in any 24 hours.
 Every attempt is logged in `state/urgent-alert/sent.jsonl`, delivered attempts include the platform message id, and message text and Telegram chat ids are never logged.
-A timeout or a reply without a message id may still have reached the phone, so it is reported as failed but counts toward those limits, and an unreadable log line is skipped rather than muting later alerts.
+Once Hermes has run, a timeout, an error exit or a reply without a message id may still have reached the phone, so it is reported as failed and counts toward the daily cap, while the same key retries a few times about an hour apart instead of being treated as delivered.
+Delivery waits up to 60 seconds, enough for Hermes to start and finish its own Telegram retries, and an unreadable log line is skipped rather than muting later alerts.
 `fm_urgent_alert` in [`bin/fm-active-alert-lib.sh`](../bin/fm-active-alert-lib.sh) owns those limits and the log format, and the script header owns the commands, including the scheduled `check-machine` probe.
 `tests/fm-active-alert.test.sh` covers the allow-list, fixed Telegram hand-off, rate limits, retry, message-id log and machine probe with a recording sender.
 
