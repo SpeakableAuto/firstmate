@@ -3,7 +3,13 @@
 set -euo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if [ "$(id -u)" = 0 ]; then
+  echo 'skip: work-drive permission proofs require an unprivileged user'
+  exit 0
+fi
+REAL_NPM=$(command -v npm || true)
 TMP_ROOT=$(fm_test_tmproot fm-work-drive)
+trap 'chmod -R u+w "$TMP_ROOT"; fm_test_cleanup' EXIT
 FAKEBIN="$TMP_ROOT/fakebin"
 mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/npm" <<'SH'
@@ -44,8 +50,8 @@ new_case() {
   case_dir="$TMP_ROOT/$1"
   user="$case_dir/user"
   fm="$case_dir/fm"
-  drive="$case_dir/drive"
-  mkdir -p "$user" "$fm/config"
+  drive="$case_dir/mounts/drive"
+  mkdir -p "$user" "$fm/config" "$case_dir/mounts"
   # The fresh login shell finds the fake tools only through the user's profile.
   # shellcheck disable=SC2016 # $PATH expands when the profile is sourced.
   printf 'export PATH=%s:$PATH\nexport KEEP_ME=1\n' "$FAKEBIN" > "$user/.bash_profile"
@@ -69,8 +75,12 @@ write_placement() {
 }
 # FM_WORK_DRIVE_TEST_MOUNT stands in for a real mount; unset it to test refusal.
 wd() {
+  local rc=0
+  [ "${unsafe_parent:-0}" = 1 ] || chmod 0555 "$case_dir/mounts"
   env HOME="$user" SHELL="$(command -v bash)" FM_HOME="$fm" PATH="$FAKEBIN:$PATH" \
-    FM_WORK_DRIVE_TEST_MOUNT="${mount_seam-$drive}" bash "$ROOT/bin/fm-work-drive.sh" "$@"
+    FM_WORK_DRIVE_TEST_MOUNT="${mount_seam-$drive}" bash "$ROOT/bin/fm-work-drive.sh" "$@" || rc=$?
+  chmod 0755 "$case_dir/mounts"
+  return "$rc"
 }
 
 new_case missing
@@ -148,6 +158,15 @@ assert_equals 3 "$rc" 'install refuses without placement admission'
 assert_contains "$out" 'refused placement:' 'install names its missing placement admission'
 pass 'verify and install fail closed until placement admission is active'
 
+new_case unsafe_parent
+make_drive
+write_placement
+set +e; out=$(unsafe_parent=1 wd install --dry-run 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'persisting paths beneath a writable mount parent refuses'
+assert_contains "$out" 'refused mount parent' 'unsafe parent is named'
+[ ! -e "$user/npm-calls" ] || fail 'unsafe parent changed npm config'
+pass 'install refuses a path tools could recreate after unmount'
+
 new_case install
 mkdir -p "$drive"
 write_placement
@@ -186,6 +205,53 @@ assert_equals 1 "$(grep -c '^# >>> firstmate work drive >>>$' "$user/.bash_profi
 grep -qx 'export KEEP_ME=1' "$user/.bash_profile" || fail 'install dropped unmanaged lines'
 [ -n "$(find "$user/.bash_profile" -perm 0600)" ] || fail 'install changed the file mode'
 pass 'install writes persistent settings that a fresh login shell inherits'
+[ -s "$fm/config/internal-growth" ] || fail 'install omitted growth configuration'
+[ -s "$fm/state/internal-growth/baseline.tsv" ] || fail 'install omitted measured baseline'
+cp "$fm/config/internal-growth" "$case_dir/growth-before"
+rm "$fm/config/internal-growth"
+set +e; out=$(wd verify 2>&1); rc=$?; set -e
+assert_equals 3 "$rc" 'verify refuses absent growth configuration'
+assert_contains "$out" 'internal growth measurement' 'missing growth config is named'
+printf 'unknown=1\n' > "$fm/config/internal-growth"
+for command in install verify; do
+  set +e; out=$(wd "$command" 2>&1); rc=$?; set -e
+  assert_equals 3 "$rc" "$command refuses malformed growth configuration"
+done
+printf 'volume=%s\nscan=%s/missing\n' "$case_dir" "$case_dir" > "$fm/config/internal-growth"
+for command in install verify; do
+  set +e; out=$(wd "$command" 2>&1); rc=$?; set -e
+  assert_equals 3 "$rc" "$command refuses failed growth measurement"
+done
+cp "$case_dir/growth-before" "$fm/config/internal-growth"
+pass 'enrollment requires valid growth configuration and a usable measurement'
+
+if [ -n "$REAL_NPM" ]; then
+  # Reproduce the reviewer command using the persisted path and real npm.
+  cache=$(cat "$user/npm-cache")
+  env HOME="$user" npm_config_cache="$cache" "$REAL_NPM" cache verify > "$case_dir/npm-mounted.log" 2>&1
+  mv "$drive" "$case_dir/away"
+  # Counterfactual: the same cache path can be recreated under a writable parent.
+  env HOME="$user" npm_config_cache="$cache" "$REAL_NPM" cache verify > "$case_dir/npm-unsafe.log" 2>&1
+  [ -d "$cache" ] || fail 'unsafe-parent reproduction did not create the cache'
+  rm -rf "$drive"
+  chmod 0555 "$case_dir/mounts"
+  set +e
+  env HOME="$user" npm_config_cache="$cache" "$REAL_NPM" cache verify > "$case_dir/npm-absent.log" 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail 'npm reported success with absent protected mount'
+  [ ! -e "$drive" ] || fail 'npm recreated the absent drive'
+  # mkdir is the filesystem operation shared by every persisted directory target.
+  for rel in $TARGETS; do
+    if mkdir -p "$drive/$rel" 2>/dev/null; then fail "recreated $rel on internal storage"; fi
+  done
+  chmod 0755 "$case_dir/mounts"
+  mv "$case_dir/away" "$drive"
+  pass 'real npm and every target fail without recreating an absent protected mount'
+else
+  echo 'skip: npm not found; real npm missing-drive proof unavailable'
+fi
+
 
 printf 'HOME\nPATH\n' > "$fm/config/launch-env-allowlist"
 set +e; out=$(wd verify 2>&1); rc=$?; set -e
