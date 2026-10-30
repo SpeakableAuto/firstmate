@@ -118,6 +118,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-quota-axi-lib.sh`    | Shared `quota-axi` compatibility floor and quota snapshot schema validation           |
 | `fm-live-workers-lib.sh` | Shared live-worker count for Claude admission, away spend cap, quota pacing and placement |
 | `fm-quota-pacing-lib.sh` | Shared quota-pacing allowance evidence and launch admission                          |
+| `fm-quota-balance-lib.sh` | Spawn-time enforcement of the configured quota-balance pick and degraded-evidence episode alert |
+| `fm-quota-burn.py`      | Sample allowance loss and derive measured per-model and per-provider placement draw |
 | `fm-quota-snapshot.sh`   | Read one validated local or remote-secondmate quota snapshot with bounded failures    |
 | `fm-quota-choose.sh`     | Choose the first candidate with known positive quota from an ordered harness:model list |
 | `fm-vendor-auth-probe.sh`| Run one hard-bounded, non-destructive authentication probe of a named vendor CLI and report the fact |
