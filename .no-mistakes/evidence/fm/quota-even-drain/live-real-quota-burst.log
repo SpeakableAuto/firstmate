@@ -1,0 +1,88 @@
+LIVE REAL QUOTA BURST
+utc=2026-10-30T16:19:57Z
+quota evidence:
+generatedAt=2026-10-30T16:19:57.449Z
+claude	65	-17.5402
+codex	80	-17.4898
+resolver batch:
+dispatch-resolve:
+  brief: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.05BF70/data/live-1/brief.md
+  status: clear
+  model: known-rule   latency_ms: 0   tokens: -/-
+  rule: rule_1 (Hard engineering.)   confidence: 1
+  probabilities: rule_1=1
+  selection: quota-balanced
+  note: rule matched
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=80%  spendPriority=-7.1465  runway=projected_exhaustion  headroom=-17.49  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=65%  spendPriority=-1.1541  runway=projected_exhaustion  headroom=-17.54  cached=27s old  -> eligible
+  near-tie broken by stable task-key hash: claude:opus=-17.54 workers=0, codex:gpt-6-astra=-17.49 workers=0 (within 1 point)
+  profile: --harness 'codex' --model 'gpt-6-astra' --effort 'high'
+dispatch-resolve:
+  brief: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.05BF70/data/live-2/brief.md
+  status: clear
+  model: known-rule   latency_ms: 0   tokens: -/-
+  rule: rule_1 (Hard engineering.)   confidence: 1
+  probabilities: rule_1=1
+  selection: quota-balanced
+  note: rule matched
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=75%  spendPriority=-7.2465  runway=projected_exhaustion  headroom=-22.49  charged=1 recent placement(s)  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=65%  spendPriority=-1.1541  runway=projected_exhaustion  headroom=-17.54  cached=27s old  -> eligible
+  profile: --harness 'claude' --model 'opus' --effort 'high'
+dispatch-resolve:
+  brief: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.05BF70/data/live-3/brief.md
+  status: clear
+  model: known-rule   latency_ms: 0   tokens: -/-
+  rule: rule_1 (Hard engineering.)   confidence: 1
+  probabilities: rule_1=1
+  selection: quota-balanced
+  note: rule matched
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=75%  spendPriority=-7.2465  runway=projected_exhaustion  headroom=-22.49  charged=1 recent placement(s)  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=60%  spendPriority=-1.2541  runway=projected_exhaustion  headroom=-22.54  cached=27s old  charged=1 recent placement(s)  -> eligible
+  near-tie broken by stable task-key hash: claude:opus=-22.54 workers=1, codex:gpt-6-astra=-22.49 workers=1 (within 1 point)
+  profile: --harness 'codex' --model 'gpt-6-astra' --effort 'high'
+dispatch-resolve:
+  brief: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.05BF70/data/live-4/brief.md
+  status: clear
+  model: known-rule   latency_ms: 0   tokens: -/-
+  rule: rule_1 (Hard engineering.)   confidence: 1
+  probabilities: rule_1=1
+  selection: quota-balanced
+  note: rule matched
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=70%  spendPriority=-7.3465  runway=projected_exhaustion  headroom=-27.49  charged=2 recent placement(s)  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=60%  spendPriority=-1.2541  runway=projected_exhaustion  headroom=-22.54  cached=27s old  charged=1 recent placement(s)  -> eligible
+  profile: --harness 'claude' --model 'opus' --effort 'high'
+dispatch-resolve:
+  brief: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.05BF70/data/live-5/brief.md
+  status: clear
+  model: known-rule   latency_ms: 0   tokens: -/-
+  rule: rule_1 (Hard engineering.)   confidence: 1
+  probabilities: rule_1=1
+  selection: quota-balanced
+  note: rule matched
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=70%  spendPriority=-7.3465  runway=projected_exhaustion  headroom=-27.49  charged=2 recent placement(s)  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=55%  spendPriority=-1.3541  runway=projected_exhaustion  headroom=-27.54  cached=27s old  charged=2 recent placement(s)  -> eligible
+  near-tie broken by stable task-key hash: claude:opus=-27.54 workers=2, codex:gpt-6-astra=-27.49 workers=2 (within 1 point)
+  profile: --harness 'codex' --model 'gpt-6-astra' --effort 'high'
+dispatch-resolve:
+  brief: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.05BF70/data/live-6/brief.md
+  status: clear
+  model: known-rule   latency_ms: 0   tokens: -/-
+  rule: rule_1 (Hard engineering.)   confidence: 1
+  probabilities: rule_1=1
+  selection: quota-balanced
+  note: rule matched
+  candidate: codex:gpt-6-astra  provider=codex  scope=all_models  remaining=65%  spendPriority=-7.4465  runway=projected_exhaustion  headroom=-32.49  charged=3 recent placement(s)  -> eligible
+  candidate: claude:opus  provider=claude  scope=all_models  remaining=55%  spendPriority=-1.3541  runway=projected_exhaustion  headroom=-27.54  cached=27s old  charged=2 recent placement(s)  -> eligible
+  profile: --harness 'claude' --model 'opus' --effort 'high'
+dispatch-batch:
+  briefs: 6   clear: 6   other: 0
+  machine: local=6
+  provider: claude=3 codex=3
+  profile: local:claude:opus=3 local:codex:gpt-6-astra=3
+persisted charges:
+codex	gpt-6-astra	null	null
+claude	opus	null	null
+codex	gpt-6-astra	null	null
+claude	opus	null	null
+codex	gpt-6-astra	null	null
+claude	opus	null	null

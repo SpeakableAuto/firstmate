@@ -1,0 +1,51 @@
+LIVE SPAWN GATE + HERDR HARNESS
+utc=2026-10-30T16:22:13Z
+session=fm-lab-quota-spawn-live-91838-19125
+balanced_profile=codex:gpt-6-astra
+adversarial_profile=claude:opus
+preflight:
+{"status":"clear","ranked_by":"pace headroom","check":{"verdict":"balanced","reason":null,"pick":null,"requested":{"provider":"codex","headroom":-17.47,"profile":{"harness":"codex","model":"gpt-6-astra","effort":"high"}}}}
+adversarial spawn attempt:
+adversarial_rc=1
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.W1zOAq
+Claude quota: cached reading 41s old
+error: quota balance: the balanced pick is codex:gpt-6-astra on codex (headroom -17.47); requested claude:opus has headroom -17.52
+balanced spawn attempt:
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.W1zOAq
+warning: herdr presentation parent is absent or ambiguous; using the ordinary flat layout without projection
+spawned quota-live-spawn harness=codex kind=scout window=fm-lab-quota-spawn-live-91838-19125:w1:p2 worktree=/Users/maxverstappen/.treehouse/project-6c6849/1/project
+spawned metadata:
+window=fm-lab-quota-spawn-live-91838-19125:w1:p2
+endpoint_task_id=quota-live-spawn
+worktree=/Users/maxverstappen/.treehouse/project-6c6849/1/project
+project=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.W1zOAq/project
+harness=codex
+kind=scout
+tasktmp=/tmp/fm-quota-live-spawn
+model=gpt-6-astra
+effort=high
+spawn_gen=s1793377344.3601.13928
+backend=herdr
+herdr_session=fm-lab-quota-spawn-live-91838-19125
+herdr_workspace_id=w1
+herdr_tab_id=w1:t2
+herdr_pane_id=w1:p2
+endpoint=fm-lab-quota-spawn-live-91838-19125:w1:p2
+live Herdr pane:
+maxverstappen@maxs-Mac-mini project % treehouse get
+A new version of treehouse is available: v2.1.1 → v3.1.7
+Run "treehouse update" to update
+
+🌳 Setting up worktree...
+🌳 Entered worktree at ~/.treehouse/project-6c6849/1/project. Type 'exit' to return.
+maxverstappen@maxs-Mac-mini project % cd -- '/Users/maxverstappen/.treehouse/project-6c6849/1/project'
+maxverstappen@maxs-Mac-mini project % export GOTMPDIR=/tmp/fm-quota-live-spawn/gotmp
+maxverstappen@maxs-Mac-mini project % export COMPACT_ADVISER_DISABLE=1
+maxverstappen@maxs-Mac-mini project % export FM_TASK_ID=quota-live-spawn
+maxverstappen@maxs-Mac-mini project % . '/tmp/fm-quota-live-spawn+bc8a57ab56d9c2c4c73dc64a83c446026957e26807a39100a078d6
+8e3acb3c2a/launch.s1793377344.3601.13928.sh'
+committed launch charge:
+{"key":"quota-live-spawn","provider":"codex","model":"gpt-6-astra","scopes":["all_models"],"draw":null,"span":null}
+default-session tripwire is verified during teardown.
+post-teardown verification:
+{"default":{"name":"default","running":true},"lab_present":false}

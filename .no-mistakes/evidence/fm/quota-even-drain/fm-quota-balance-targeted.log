@@ -1,0 +1,15 @@
+quota balance: no rankable eligible candidate; starting t1 without a balanced pick (recorded)
+quota balance: no rankable eligible candidate; starting t1 without a balanced pick (recorded)
+quota balance: no rankable eligible candidate; starting t1 without a balanced pick (recorded)
+quota balance: override recorded for t1: P0 needs this mapped profile
+quota balance: override recorded for t1: needs the Codex computer-use skill for this browser journey
+quota balance: override recorded for t1: needs a Codex effort outside the dispatch rules
+# review probes: F1=1 F2rule=1 F2shape=1 F8=1 (all must refuse with 1)
+ok - the spawn gate enforces the balanced pick, alerts degraded starts, uses fresh evidence, and honors recorded overrides
+quota balance: override recorded for t1: restore failed booking system
+quota balance: override recorded for t1: restore failed booking system
+# jitter probes: wakes=1 open=1 reopen=1 (want 1/1/1)
+# window burn probe: {"models":{"claude:opus":{"windows":{"five_hour":{"crew_hours":2.0,"draw":40.0,"points_per_hour":40.0,"run_seconds":3600,"span":3600},"seven_day":{"crew_hours":2.0,"draw":2.0,"points_per_hour":2.0,"run_seconds":3600,"span":3600}}}},"providers":{"claude":{"windows":{"five_hour":{"crew_hours":2.0,"draw":40.0,"points_per_hour":40.0,"run_seconds":3600,"span":3600},"seven_day":{"crew_hours":2.0,"draw":2.0,"points_per_hour":2.0,"run_seconds":3600,"span":3600}}}}}
+ok - measured draw comes from sampled allowance loss per crew-hour and crew lifetimes
+ok - fm-spawn refuses an off-balance crew before provisioning and launches the balanced one
+# all fm-quota-balance tests passed
