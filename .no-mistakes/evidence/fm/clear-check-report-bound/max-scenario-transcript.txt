@@ -1,0 +1,13 @@
+===== target 0b773129 =====
+--- first poll (3 MiB unrelated report + bad UTF-8 report + valid CLEAR review 2h01m old) ---
+CLEAR unmerged: https://github.com/example/demo/pull/7 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa report=<home>/data/review/report.md age=7260s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+CLEAR unmerged report diagnostics: <home>/data/aircon-qa-broad/report.md: skipped report: missing PR URL or full head SHA in report prefix; <home>/data/bad/report.md: skipped report: 'utf-8' codec can't decode byte 0xff in position 8: invalid start byte
+
+--- second poll (dedup) ---
+''
+===== base c104928c =====
+--- first poll (3 MiB unrelated report + bad UTF-8 report + valid CLEAR review 2h01m old) ---
+CLEAR unmerged check unavailable: <home>/data/aircon-qa-broad/report.md exceeds the 2 MiB read bound
+
+--- second poll (dedup) ---
+''

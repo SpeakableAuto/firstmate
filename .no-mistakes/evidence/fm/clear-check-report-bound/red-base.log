@@ -1,0 +1,75 @@
+.....F...FF........FF.........F.F...FF.
+======================================================================
+FAIL: test_bad_utf8_report_does_not_silence_valid_review (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 120, in test_bad_utf8_report_does_not_silence_valid_review
+  File "<stdin>", line 93, in assert_report_skipped
+AssertionError: 'CLEAR unmerged: https://github.com/example/demo/pull/7' not found in "CLEAR unmerged check unavailable: 'utf-8' codec can't decode byte 0xff in position 8: invalid start byte\n"
+
+======================================================================
+FAIL: test_clear_identity_beyond_prefix_does_not_alert (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 134, in test_clear_identity_beyond_prefix_does_not_alert
+AssertionError: 'missing PR URL or full head SHA' not found in 'CLEAR unmerged check unavailable: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/tmp.JmVLvGii1r/tmpxe13pibr/data/review/report.md exceeds the 2 MiB read bound\n'
+
+======================================================================
+FAIL: test_clear_must_start_on_line_one (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 158, in test_clear_must_start_on_line_one
+AssertionError: 'CLEAR unmerged: https://github.com/exampl[255 chars]ds\n' != ''
+- CLEAR unmerged: https://github.com/example/demo/pull/7 head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa report=/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/tmp.JmVLvGii1r/tmp6vcrq0l8/data/review/report.md age=7260s; firstmate should merge via bin/fm-pr-merge.sh under existing merge guards
+
+
+======================================================================
+FAIL: test_large_clear_report_uses_identity_in_prefix (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 125, in test_large_clear_report_uses_identity_in_prefix
+AssertionError: 'CLEAR unmerged: https://github.com/example/demo/pull/7' not found in 'CLEAR unmerged check unavailable: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/tmp.JmVLvGii1r/tmpv226fcm0/data/review/report.md exceeds the 2 MiB read bound\n'
+
+======================================================================
+FAIL: test_large_unrelated_report_does_not_silence_valid_review (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 104, in test_large_unrelated_report_does_not_silence_valid_review
+  File "<stdin>", line 93, in assert_report_skipped
+AssertionError: 'CLEAR unmerged: https://github.com/example/demo/pull/7' not found in 'CLEAR unmerged check unavailable: /private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/tmp.JmVLvGii1r/tmp71x8svh2/data/oversized/report.md exceeds the 2 MiB read bound\n'
+
+======================================================================
+FAIL: test_partial_sha_at_prefix_boundary_cannot_alert (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 148, in test_partial_sha_at_prefix_boundary_cannot_alert
+AssertionError: 'missing PR URL or full head SHA' not found in ''
+
+======================================================================
+FAIL: test_real_captain_hold_producer (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 375, in test_real_captain_hold_producer
+AssertionError: 2 != 0 : fm-tasks-axi: tasks-axi is not on PATH; run bin/fm-bootstrap.sh for the install command
+
+
+======================================================================
+FAIL: test_report_directory_is_skipped (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 154, in test_report_directory_is_skipped
+  File "<stdin>", line 93, in assert_report_skipped
+AssertionError: 'CLEAR unmerged: https://github.com/example/demo/pull/7' not found in "CLEAR unmerged check unavailable: [Errno 21] Is a directory: '/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/tmp.JmVLvGii1r/tmpca8fqflg/data/directory/report.md'\n"
+
+======================================================================
+FAIL: test_unreadable_report_does_not_silence_valid_review (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 114, in test_unreadable_report_does_not_silence_valid_review
+  File "<stdin>", line 93, in assert_report_skipped
+AssertionError: 'CLEAR unmerged: https://github.com/example/demo/pull/7' not found in "CLEAR unmerged check unavailable: [Errno 13] Permission denied: '/private/var/folders/1y/cbz0nysd63zdb3wdg0mnlkxw0000gn/T/tmp.JmVLvGii1r/tmp0ot674rc/data/unreadable/report.md'\n"
+
+----------------------------------------------------------------------
+Ran 39 tests in 24.450s
+
+FAILED (failures=9)

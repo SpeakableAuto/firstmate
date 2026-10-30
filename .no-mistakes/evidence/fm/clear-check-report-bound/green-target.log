@@ -1,0 +1,13 @@
+................................F......
+======================================================================
+FAIL: test_real_captain_hold_producer (__main__.Check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<stdin>", line 375, in test_real_captain_hold_producer
+AssertionError: 2 != 0 : fm-tasks-axi: tasks-axi is not on PATH; run bin/fm-bootstrap.sh for the install command
+
+
+----------------------------------------------------------------------
+Ran 39 tests in 29.311s
+
+FAILED (failures=1)
