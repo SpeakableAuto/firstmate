@@ -4,7 +4,7 @@
 #        FM_HOME=/absolute/firstmate fm-work-drive.sh exec -- <command> [args...]
 #        FM_HOME=/absolute/firstmate fm-work-drive.sh simctl <simctl args...>
 # Config: $FM_HOME/config/work-drive, plain lines (never sourced):
-#   root=/Volumes/Work                    required absolute drive mount
+#   root=/Volumes/Kitchen                 required absolute drive mount
 #   env=PLAYWRIGHT_BROWSERS_PATH=Caches/Playwright   repeatable NAME=relative
 #   npm-cache=Caches/npm                  user npm config `cache`
 #   xcode-derived-data=Build/DerivedData  Xcode IDECustomDerivedDataLocation
@@ -22,12 +22,14 @@
 # `defaults read com.apple.dt.Xcode`, so it proves what a newly launched worker
 # inherits rather than this process's environment. When config/launch-env-allowlist
 # exists, every env name must be listed there or worker launches would drop it.
-# When config/crew-placement.json exists, its drive must equal root and its
+# config/crew-placement.json must exist, its drive must equal root, and its
 # required_drive_dirs must cover every target, so placement refuses heavy work on
-# the same paths; an absent profile is reported as pending, not as a pass.
-# install (after a passing check) rewrites only the marked block in the shell env
-# file, sets the user npm cache and the Xcode DerivedData default, then verifies.
-# --dry-run prints those actions without changing anything.
+# the same paths. verify and install fail closed until that profile is active.
+# install first proves the drive root, creates missing target directories on that
+# mounted drive, rewrites only the marked block in the shell env file, sets the
+# user npm cache and Xcode DerivedData default, enrolls the daily internal-growth
+# LaunchAgent, then verifies. --dry-run prints those actions without changing
+# anything.
 # exec creates a private job directory under build-tmp, runs the command with
 # TMPDIR pointing there plus every env entry, removes the job directory, and
 # returns the command's status. It is opt-in for build jobs: a global TMPDIR on
@@ -46,6 +48,7 @@ CONFIG=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
 config="$CONFIG/work-drive"
 BLOCK_BEGIN='# >>> firstmate work drive >>>'
 BLOCK_END='# <<< firstmate work drive <<<'
+GROWTH_LABEL=local.firstmate.internal-growth
 
 root=
 env_names=()
@@ -116,8 +119,7 @@ write_probe() {
   probe=$(mktemp "$1/.fm-work-drive.XXXXXXXX" 2>/dev/null) || return 1
   rm -f -- "$probe"
 }
-run_check() {
-  local failed=0 target label path
+run_drive_check() {
   if ! real_dir "$root"; then
     echo "refused drive: $root is missing, not a directory, or reached through a symlink" >&2
     return 3
@@ -131,6 +133,10 @@ run_check() {
     return 3
   fi
   echo "ok drive $root"
+}
+run_check() {
+  local failed=0 target label path
+  run_drive_check || return $?
   for target in "${targets[@]+"${targets[@]}"}"; do
     label=${target%%$'\t'*}
     path="$root/${target#*$'\t'}"
@@ -148,8 +154,36 @@ run_check() {
 }
 shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 
+check_placement() {
+  local failed=0 placement target
+  placement="$CONFIG/crew-placement.json"
+  if [ ! -f "$placement" ] || [ -L "$placement" ]; then
+    echo "refused placement: $placement is missing, not a file, or symlinked" >&2
+    return 3
+  fi
+  if ! command -v jq >/dev/null; then
+    echo 'refused placement: jq is unavailable' >&2
+    return 3
+  fi
+  if [ "$(jq -r '.drive // ""' "$placement" 2>/dev/null)" != "$root" ]; then
+    echo "refused placement: crew-placement.json drive is not $root" >&2
+    failed=1
+  else
+    for target in "${targets[@]+"${targets[@]}"}"; do
+      if jq -e --arg rel "${target#*$'\t'}" '(.required_drive_dirs // []) | index($rel) != null' \
+        "$placement" >/dev/null 2>&1; then
+        echo "ok placement requires ${target#*$'\t'}"
+      else
+        echo "refused placement: required_drive_dirs lacks ${target#*$'\t'}" >&2
+        failed=1
+      fi
+    done
+  fi
+  [ "$failed" -eq 0 ] || return 3
+}
+
 run_verify() {
-  local failed=0 out sh script name expected actual i allow placement target
+  local failed=0 out sh script name expected actual i allow
   run_check || return $?
   sh=${SHELL:-/bin/sh}
   script=
@@ -205,25 +239,7 @@ run_verify() {
       fi
     done
   fi
-  placement="$CONFIG/crew-placement.json"
-  if [ -e "$placement" ] || [ -L "$placement" ]; then
-    if [ "$(jq -r '.drive // ""' "$placement" 2>/dev/null)" != "$root" ]; then
-      echo "refused placement: crew-placement.json drive is not $root" >&2
-      failed=1
-    else
-      for target in "${targets[@]+"${targets[@]}"}"; do
-        if jq -e --arg rel "${target#*$'\t'}" '(.required_drive_dirs // []) | index($rel) != null' \
-          "$placement" >/dev/null 2>&1; then
-          echo "ok placement requires ${target#*$'\t'}"
-        else
-          echo "refused placement: required_drive_dirs lacks ${target#*$'\t'}" >&2
-          failed=1
-        fi
-      done
-    fi
-  else
-    echo "pending placement: no crew-placement.json, so heavy work is not refused when the drive fails"
-  fi
+  check_placement || failed=1
   [ "$failed" -eq 0 ] || return 3
 }
 
@@ -268,14 +284,107 @@ write_shell_env() {
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$file"
 }
+ensure_target_dir() {
+  local rel=$1 path=$root part
+  local -a parts
+  IFS=/ read -r -a parts <<< "$rel"
+  for part in "${parts[@]}"; do
+    path="$path/$part"
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      if ! real_dir "$path"; then
+        echo "refused target directory: $path is not a real directory" >&2
+        return 3
+      fi
+    else
+      mkdir -- "$path" || { echo "refused target directory: could not create $path" >&2; return 3; }
+    fi
+  done
+}
+prepare_targets() {
+  local dry=$1 target rel path part missing
+  local -a parts
+  for target in "${targets[@]+"${targets[@]}"}"; do
+    rel=${target#*$'\t'}
+    if [ "$dry" = 0 ]; then
+      ensure_target_dir "$rel" || return $?
+      continue
+    fi
+    path=$root
+    missing=0
+    IFS=/ read -r -a parts <<< "$rel"
+    for part in "${parts[@]}"; do
+      path="$path/$part"
+      if [ "$missing" = 0 ] && { [ -e "$path" ] || [ -L "$path" ]; }; then
+        if ! real_dir "$path"; then
+          echo "refused target directory: $path is not a real directory" >&2
+          return 3
+        fi
+      else
+        missing=1
+      fi
+    done
+    [ "$missing" = 0 ] || echo "would create directory $root/$rel"
+  done
+}
+render_growth_plist() {
+  python3 - "$FM_HOME" "$HOME" "$GROWTH_LABEL" <<'PY'
+import os
+import plistlib
+import sys
+
+fm_home, home, label = sys.argv[1:]
+payload = {
+    "Label": label,
+    "ProgramArguments": ["/bin/bash", os.path.join(fm_home, "bin", "fm-internal-growth.sh")],
+    "EnvironmentVariables": {
+        "FM_HOME": fm_home,
+        "HOME": home,
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    },
+    "StartCalendarInterval": {"Hour": 3, "Minute": 30},
+    "LowPriorityIO": True,
+    "Nice": 10,
+    "StandardOutPath": os.path.join(home, "Library", "Logs", "firstmate-internal-growth.log"),
+    "StandardErrorPath": os.path.join(home, "Library", "Logs", "firstmate-internal-growth.log"),
+}
+sys.stdout.buffer.write(plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=False))
+PY
+}
+enroll_growth_check() {
+  local dry=$1 launch_dir log_dir plist tmp domain
+  launch_dir="$HOME/Library/LaunchAgents"
+  log_dir="$HOME/Library/Logs"
+  plist="$launch_dir/$GROWTH_LABEL.plist"
+  domain="gui/$(id -u)"
+  if [ "$dry" = 1 ]; then
+    echo "would write $plist:"
+    render_growth_plist
+    echo "would run: launchctl bootout $domain/$GROWTH_LABEL"
+    echo "would run: launchctl bootstrap $domain $(shell_quote "$plist")"
+    return 0
+  fi
+  mkdir -p -- "$launch_dir" "$log_dir"
+  tmp=$(mktemp "$launch_dir/.fm-internal-growth.XXXXXXXX") || return 1
+  render_growth_plist > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  chmod 0644 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$plist"
+  launchctl bootout "$domain/$GROWTH_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "$domain" "$plist"
+  echo "enrolled $GROWTH_LABEL"
+}
 run_install() {
   local dry=$1
-  run_check >/dev/null || return $?
+  run_drive_check >/dev/null || return $?
+  check_placement >/dev/null || return $?
+  command -v python3 >/dev/null || { echo 'refused internal growth enrollment: python3 is unavailable' >&2; return 3; }
+  command -v launchctl >/dev/null || { echo 'refused internal growth enrollment: launchctl is unavailable' >&2; return 3; }
+  prepare_targets "$dry" || return $?
   if [ "$dry" = 1 ]; then
     echo "would write to $shell_env_file:"
     render_block
     [ -z "$npm_rel" ] || echo "would run: npm config set cache $(shell_quote "$root/$npm_rel") --location=user"
     [ -z "$xcode_rel" ] || echo "would run: defaults write com.apple.dt.Xcode IDECustomDerivedDataLocation -string $(shell_quote "$root/$xcode_rel")"
+    enroll_growth_check 1
     return 0
   fi
   write_shell_env "$shell_env_file" || return $?
@@ -288,6 +397,7 @@ run_install() {
     command -v defaults >/dev/null || { echo 'refused xcode derived data: defaults is unavailable' >&2; return 3; }
     defaults write com.apple.dt.Xcode IDECustomDerivedDataLocation -string "$root/$xcode_rel"
   fi
+  enroll_growth_check 0 || return $?
   run_verify
 }
 run_exec() {

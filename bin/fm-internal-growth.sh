@@ -5,20 +5,19 @@
 #   volume=/System/Volumes/Data   required; free space is read from it
 #   scan=/Users/me                repeatable, required; must be on that volume
 #   allow=/Users/me/firstmate     repeatable; growth at or below it is ignored
-#   exclude=/Users/me/Library/Mail  repeatable; never opened or measured
 #   threshold_gib=1               default 1
 #   depth=3                       folder depth below each scan path, default 3
 #   min_baseline_hours=20         default 20; 0 rolls the baseline every run
 #   timeout_seconds=1800          whole-run measurement budget, default 1800
 # Paths are plain absolute paths; overlapping scan paths and unknown keys refuse.
-# Each run measures folder sizes with `du -xk -d <depth>`, staying on the internal
-# volume, and compares them with the stored baseline. Growth of an allowed folder
-# is subtracted from its ancestors, and only the deepest folder whose remaining
-# growth exceeds the threshold is flagged. The first run only records a baseline.
-# A subtree containing an excluded folder is listed entry by entry so the
-# excluded folder is never opened; exclude folders whose access can block, such
-# as macOS privacy-protected folders. A measurement over the budget is killed
-# and reported as a failed measurement.
+# Each run measures folder sizes with `du -xk -d <depth>` and total volume use
+# with `df -kP`. Growth of an allowed folder is subtracted from its ancestors,
+# and only the deepest folder whose remaining growth exceeds the threshold is
+# flagged. Volume growth not explained by allowed or already flagged folder
+# growth opens its own episode. A folder that du cannot read is recorded as
+# UNMEASURED in every log row and any alert. Only a missing scan-root total fails
+# the measurement. A measurement over the budget is killed and reported as a
+# failed measurement. The first complete run records a baseline.
 # The baseline rolls forward when it is at least min_baseline_hours old, so extra
 # runs within a day compare against the same day-old baseline.
 # One Firstmate check wake names every newly flagged folder. A flagged folder is
@@ -26,8 +25,9 @@
 # a failed measurement is its own episode. A wake that cannot be queued leaves
 # the episode closed, so the next run retries it.
 # State lives in state/internal-growth/: baseline.tsv, episodes.tsv, and
-# log.jsonl, which gains one JSON line per run (free KiB, used delta, flagged
-# folders, new episodes, any alert) as the inspectable capacity record.
+# log.jsonl, which gains one JSON line per run (used and free KiB, used delta,
+# unmeasured and flagged folders, new episodes, any alert) as the inspectable
+# capacity record.
 # --dry-run measures and prints that JSON line without writing state or alerting.
 # Exit 0 means the check completed and any alert was queued; 1 means measurement
 # or alert delivery failed; 2 means invalid usage or configuration.

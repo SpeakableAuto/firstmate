@@ -30,7 +30,7 @@ def read_config(path):
         print(f"internal growth check not configured: {path}", file=sys.stderr)
         sys.exit(2)
     cfg = {"volume": None, "threshold_gib": 1, "depth": 3, "min_baseline_hours": 20,
-           "timeout_seconds": 1800, "scan": [], "allow": [], "exclude": []}
+           "timeout_seconds": 1800, "scan": [], "allow": []}
     with open(path, encoding="utf-8") as handle:
         for raw in handle:
             line = raw.rstrip("\n")
@@ -46,7 +46,7 @@ def read_config(path):
                 if not value.isdigit() or (value.startswith("0") and not zero_ok) or int(value) > 1048576:
                     fail_config(line)
                 cfg[key] = int(value)
-            elif key in ("scan", "allow", "exclude"):
+            elif key in ("scan", "allow"):
                 cfg[key].append(value)
             else:
                 fail_config(line)
@@ -54,7 +54,7 @@ def read_config(path):
         fail_config("volume must be an absolute path")
     if not cfg["scan"]:
         fail_config("at least one scan= path is required")
-    for path in cfg["scan"] + cfg["allow"] + cfg["exclude"]:
+    for path in cfg["scan"] + cfg["allow"]:
         if not plain_abs(path):
             fail_config(f"not a plain absolute path: {path}")
     for a in cfg["scan"]:
@@ -66,11 +66,6 @@ def read_config(path):
 
 def under(path, parent):
     return path == parent or path.startswith(parent.rstrip("/") + "/")
-
-
-def free_kib(volume):
-    stat = os.statvfs(volume)
-    return stat.f_bavail * stat.f_frsize // 1024
 
 
 class Budget:
@@ -87,6 +82,34 @@ class Budget:
         return left
 
 
+def volume_usage(volume, budget):
+    try:
+        proc = subprocess.run(["df", "-kP", volume], capture_output=True, text=True,
+                              check=False, timeout=budget.remaining(volume))
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f"df exceeded the {budget.seconds} second budget at {volume}") from error
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    fields = lines[-1].split() if len(lines) >= 2 else []
+    if proc.returncode or len(fields) < 6 or not all(value.isdigit() for value in fields[1:4]):
+        raise RuntimeError(f"df could not measure {volume}")
+    return int(fields[2]), int(fields[3])
+
+
+def unreadable_paths(stderr):
+    paths = set()
+    for line in stderr.splitlines():
+        if not line.startswith("du: ") or ": " not in line[4:]:
+            continue
+        candidate = line[4:].rsplit(": ", 1)[0]
+        for prefix in ("cannot read directory ", "cannot access "):
+            if candidate.startswith(prefix):
+                candidate = candidate[len(prefix):]
+        candidate = candidate.strip("'`\"")
+        if candidate.startswith("/"):
+            paths.add(candidate.rstrip("/") or "/")
+    return paths
+
+
 def du(args, budget):
     try:
         proc = subprocess.run(["du", "-xk"] + args, capture_output=True, text=True,
@@ -98,63 +121,31 @@ def du(args, budget):
         size, sep, path = line.partition("\t")
         if sep and size.isdigit():
             sizes[path.rstrip("/") or "/"] = int(size)
-    return sizes
+    return sizes, unreadable_paths(proc.stderr)
 
 
-def measure_tree(path, depth, device, cfg, budget, sizes, unreadable):
-    """Measure path; record it and its descendants down to depth; return KiB.
-
-    A subtree holding an excluded folder is split by listing its entries, so
-    the excluded folder itself is never opened.
-    """
-    if not any(e != path and under(e, path) for e in cfg["exclude"]):
-        found = du(["-d", str(max(depth, 0)), path] if depth >= 0 else ["-s", path], budget)
-        if path not in found:
-            if path in cfg["scan"]:
-                raise RuntimeError(f"du produced no total for {path}")
-            # An unreadable folder inside a split scan counts as empty and is logged.
-            unreadable.append(path)
-            return 0
-        if depth >= 0:
-            sizes.update(found)
-        return found[path]
-    total = os.lstat(path).st_blocks * 512 // 1024
-    with os.scandir(path) as entries:
-        for entry in entries:
-            child = os.path.join(path, entry.name)
-            if child in cfg["exclude"]:
-                continue
-            stat = entry.stat(follow_symlinks=False)
-            if stat.st_dev != device:
-                continue
-            if entry.is_dir(follow_symlinks=False):
-                total += measure_tree(child, depth - 1, device, cfg, budget, sizes, unreadable)
-            else:
-                total += stat.st_blocks * 512 // 1024
-    if depth >= 0:
-        sizes[path] = total
-    return total
-
-
-def measure(cfg, unreadable):
+def measure(cfg, budget, unmeasured):
     """Folder sizes in KiB on the internal volume, keyed by path."""
     device = os.stat(cfg["volume"]).st_dev
-    budget = Budget(cfg["timeout_seconds"])
     sizes = {}
     for scan in cfg["scan"]:
         if not os.path.isdir(scan) or os.path.islink(scan):
             raise RuntimeError(f"scan path missing or symlinked: {scan}")
         if os.stat(scan).st_dev != device:
             raise RuntimeError(f"scan path is not on {cfg['volume']}: {scan}")
-        if scan in cfg["exclude"]:
-            continue
-        measure_tree(scan, cfg["depth"], device, cfg, budget, sizes, unreadable)
+        found, inaccessible = du(["-d", str(cfg["depth"]), scan], budget)
+        unmeasured.update(inaccessible)
+        if scan not in found:
+            raise RuntimeError(f"du produced no total for {scan}")
+        sizes.update(found)
         # Allowed folders deeper than the scan depth are measured directly so
         # their growth can still be excluded from every ancestor.
-        deep = [a for a in cfg["allow"] if under(a, scan) and a not in sizes and os.path.isdir(a)
-                and not any(under(a, e) for e in cfg["exclude"])]
+        deep = [a for a in cfg["allow"] if under(a, scan) and a not in sizes and os.path.isdir(a)]
         if deep:
-            sizes.update(du(["-s"] + deep, budget))
+            found, inaccessible = du(["-s"] + deep, budget)
+            sizes.update(found)
+            unmeasured.update(inaccessible)
+            unmeasured.update(path for path in deep if path not in found)
     return sizes
 
 
@@ -163,7 +154,7 @@ def allowed(path, allow):
 
 
 def flagged_paths(base, cur, allow, threshold_kib):
-    growth = {p: cur[p] - base.get(p, 0) for p in cur}
+    growth = {p: cur.get(p, 0) - base.get(p, 0) for p in set(base) | set(cur)}
     outer_allowed = [a for a in growth if allowed(a, allow)
                      and not any(a != b and under(a, b) for b in growth if allowed(b, allow))]
     over = {}
@@ -174,8 +165,10 @@ def flagged_paths(base, cur, allow, threshold_kib):
         if grew - excluded > threshold_kib:
             over[path] = grew - excluded
     deepest = [p for p in over if not any(q != p and under(q, p) for q in over)]
-    return sorted(({"path": p, "growth_kib": over[p], "before_kib": base.get(p, 0),
-                    "after_kib": cur[p]} for p in deepest), key=lambda row: -row["growth_kib"])
+    flagged = sorted(({"kind": "folder", "path": p, "growth_kib": over[p],
+                       "before_kib": base.get(p, 0), "after_kib": cur.get(p, 0)}
+                      for p in deepest), key=lambda row: -row["growth_kib"])
+    return flagged, sum(growth[path] for path in outer_allowed)
 
 
 def read_tsv(path):
@@ -209,6 +202,28 @@ def gib(kib):
     return f"{kib / GIB:.1f} GiB"
 
 
+def episode_key(row):
+    if row.get("kind") == "unmeasured":
+        return f"!unmeasured:{row['path']}"
+    if row.get("kind") == "unexplained-volume":
+        return "!unexplained-volume"
+    return row["path"]
+
+
+def alert_text(rows, unmeasured):
+    details = []
+    for row in rows:
+        if row.get("kind") == "unmeasured":
+            continue
+        if row.get("kind") == "unexplained-volume":
+            details.append(f"unexplained volume growth (+{gib(row['growth_kib'])})")
+        else:
+            details.append(f"{row['path']} (+{gib(row['growth_kib'])})")
+    if unmeasured:
+        details.append("UNMEASURED: " + ", ".join(unmeasured))
+    return "; ".join(details)
+
+
 def main():
     if len(sys.argv) not in (4, 5) or (len(sys.argv) == 5 and sys.argv[4] != "--dry-run"):
         print(__doc__, file=sys.stderr)
@@ -231,35 +246,50 @@ def main():
     # Backstop for a filesystem call that blocks outside du's own timeout.
     signal.signal(signal.SIGALRM, expired)
     signal.alarm(cfg["timeout_seconds"] + 60)
+    unmeasured = set()
+    budget = Budget(cfg["timeout_seconds"])
     try:
-        record["free_kib"] = free_kib(cfg["volume"])
-        record["unreadable"] = []
-        cur = measure(cfg, record["unreadable"])
+        record["used_kib"], record["free_kib"] = volume_usage(cfg["volume"], budget)
+        cur = measure(cfg, budget, unmeasured)
     except (OSError, RuntimeError) as error:
         record["error"] = str(error)
-        flagged = [{"path": "!measurement", "growth_kib": 0}]
+        flagged = [{"kind": "measurement", "path": "!measurement", "growth_kib": 0}]
         if "!measurement" not in episodes:
             alert = f"internal growth check could not measure: {error}"
         cur = None
     signal.alarm(0)
+    record["unmeasured"] = sorted(unmeasured)
+    if alert and unmeasured:
+        alert += "; UNMEASURED: " + ", ".join(sorted(unmeasured))
     if cur is not None:
         loaded = read_baseline(baseline_path)
         if loaded is None:
             record["baseline"] = "created"
-            flagged = []
+            growth_flagged = []
         else:
             header, base = loaded
             record["baseline_at"] = header["at"]
-            record["used_delta_kib"] = header["free_kib"] - record["free_kib"]
-            flagged = flagged_paths(base, cur, cfg["allow"], cfg["threshold_gib"] * GIB)
-            new = [row for row in flagged if row["path"] not in episodes]
-            if new:
-                listed = ", ".join(f"{row['path']} (+{gib(row['growth_kib'])})" for row in new)
-                alert = (f"internal growth over {cfg['threshold_gib']} GiB outside the allowed list since "
-                         f"{time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(header['at']))}: {listed}; "
-                         f"{cfg['volume']} free {gib(record['free_kib'])}; log {log_path}")
+            record["used_delta_kib"] = record["used_kib"] - header["used_kib"]
+            growth_flagged, allowed_growth = flagged_paths(
+                base, cur, cfg["allow"], cfg["threshold_gib"] * GIB)
+            record["allowed_growth_kib"] = allowed_growth
+            explained = sum(row["growth_kib"] for row in growth_flagged)
+            record["unexplained_growth_kib"] = record["used_delta_kib"] - allowed_growth - explained
+            if record["unexplained_growth_kib"] > cfg["threshold_gib"] * GIB:
+                growth_flagged.append({"kind": "unexplained-volume", "path": cfg["volume"],
+                                       "growth_kib": record["unexplained_growth_kib"]})
+        flagged = growth_flagged + [
+            {"kind": "unmeasured", "path": path, "growth_kib": 0}
+            for path in sorted(unmeasured)
+        ]
+        new = [row for row in flagged if episode_key(row) not in episodes]
+        if new:
+            since = (time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(loaded[0]["at"]))
+                     if loaded is not None else "the first measurement")
+            alert = (f"internal growth issue since {since}: {alert_text(new, sorted(unmeasured))}; "
+                     f"{cfg['volume']} free {gib(record['free_kib'])}; log {log_path}")
     record["flagged"] = flagged
-    record["new"] = [row["path"] for row in flagged if row["path"] not in episodes]
+    record["new"] = [episode_key(row) for row in flagged if episode_key(row) not in episodes]
     if dry:
         print(json.dumps(dict(record, alert=alert), sort_keys=True))
         return 0
@@ -270,8 +300,8 @@ def main():
         if not alerted:
             print("could not queue the internal-growth alert; it is retried next run", file=sys.stderr)
     # One alert per episode: an open episode stays silent until a run clears it.
-    still = {row["path"]: episodes.get(row["path"], str(now)) for row in flagged
-             if alerted or row["path"] in episodes}
+    still = {episode_key(row): episodes.get(episode_key(row), str(now)) for row in flagged
+             if alerted or episode_key(row) in episodes}
     if cur is None:
         # A failed measurement says nothing about folders already alerted on.
         still = dict(episodes, **still)
@@ -279,7 +309,8 @@ def main():
     if cur is not None:
         loaded = read_baseline(baseline_path)
         if loaded is None or now - loaded[0]["at"] >= cfg["min_baseline_hours"] * 3600:
-            header = json.dumps({"at": now, "free_kib": record["free_kib"]})
+            header = json.dumps({"at": now, "used_kib": record["used_kib"],
+                                 "free_kib": record["free_kib"]})
             atomic_write(baseline_path, f"# {header}\n" +
                          "".join(f"{size}\t{path}\n" for path, size in sorted(cur.items())))
             record["baseline_rolled"] = True
