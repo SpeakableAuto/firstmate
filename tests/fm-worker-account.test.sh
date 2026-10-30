@@ -545,9 +545,9 @@ JSON
   printf '%s\n' '{"claude_admission":{"max_concurrent":4}}' > "$HOME_DIR/config/crew-dispatch.json"
   out=$(check_admission); rc=$?
   expect_code 1 "$rc" "a looser concurrency override refuses: $out"
-  printf '%s\n' '{"claude_admission":{"min_session_percent":39}}' > "$HOME_DIR/config/crew-dispatch.json"
+  printf '%s\n' '{"claude_admission":{"min_session_percent":9}}' > "$HOME_DIR/config/crew-dispatch.json"
   out=$(check_admission); rc=$?
-  expect_code 1 "$rc" "a looser session override refuses: $out"
+  expect_code 1 "$rc" "a session override below the 10% reserve refuses: $out"
   rm "$HOME_DIR/config/crew-dispatch.json"
   printf '%s\n' '{"schemaVersion":6,"providers":[{"provider":"claude","accountKey":"default","quotaSemantics":{"status":"unknown","effectiveAvailability":[]}}]}' > "$FM_TEST_QUOTA"
   out=$(check_admission); rc=$?

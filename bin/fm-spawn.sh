@@ -659,6 +659,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-quota-pacing-lib.sh"
 # shellcheck source=bin/fm-placement-lib.sh
 . "$SCRIPT_DIR/fm-placement-lib.sh"
+# shellcheck source=bin/fm-quota-balance-lib.sh
+. "$SCRIPT_DIR/fm-quota-balance-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -3297,6 +3299,14 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
       exit 1
     fi
   fi
+fi
+# Quota balance: a crew starts only on the allowance the balanced pick names
+# (bin/fm-quota-balance-lib.sh), before any worktree is provisioned.
+if [ "$KIND" != secondmate ] && ! fm_quota_balance_gate "$ID" "$HARNESS" "$MODEL" "$EFFORT" "${PROJ_ABS:-${PROJ:-}}"; then
+  echo "error: $FM_QUOTA_BALANCE_REASON" >&2
+  FM_PLACEMENT_QUOTA_REASON=$FM_QUOTA_BALANCE_REASON
+  fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" fail || true
+  exit 1
 fi
 fm_placement_check "$HARNESS" "$MODEL" "$EFFORT" "$PLACEMENT_QUOTA" || exit 1
 [ -f "$BRIEF" ] || {

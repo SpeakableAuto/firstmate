@@ -63,15 +63,17 @@ fm_claude_admission_limits() {
     if type != "object" then error("invalid dispatch object") else . end |
     (if has("claude_admission") then .claude_admission else {} end) as $c |
     ($c | if has("max_concurrent") then .max_concurrent else 3 end) as $cap |
-    ($c | if has("min_session_percent") then .min_session_percent else 40 end) as $floor |
+    # Quota balance keeps only a small reserve for the supervisor'"'"'s own session.
+    (has("quota_balance")) as $balanced |
+    ($c | if has("min_session_percent") then .min_session_percent elif $balanced then 10 else 40 end) as $floor |
     (if $floor_min_percent == "" then null else (try ($floor_min_percent | tonumber) catch null) end) as $profile_min |
     if ($c | type) != "object" or ($cap | type) != "number" or $cap < 1 or $cap > 3 or $cap != ($cap | floor)
-      or ($floor | type) != "number" or $floor < 40 or $floor > 100
+      or ($floor | type) != "number" or $floor < 10 or $floor > 100
       then error("invalid claude_admission") else . end |
     (if $floor_scope == "" then [] else [{scope:$floor_scope,min_percent:$profile_min}] end) as $floors |
     {cap:$cap, floor:$floor, floors:$floors}
   ' 2>/dev/null || {
-    echo 'error: invalid Claude admission settings or selected profile floor; max_concurrent must be 1..3 and min_session_percent must be 40..100' >&2
+    echo 'error: invalid Claude admission settings or selected profile floor; max_concurrent must be 1..3 and min_session_percent must be 10..100' >&2
     return 1
   }
 }

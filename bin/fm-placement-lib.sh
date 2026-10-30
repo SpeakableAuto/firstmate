@@ -193,10 +193,15 @@ fm_placement_check() {
   fi
   memory=$(python3 "$SCRIPT_DIR/fm-placement.py" memory) || memory='{}'
   FM_PLACEMENT_QUOTA_DETAIL=$(jq -cn --arg status "$quota" --arg account "${CLAUDE_QUOTA_IDENTITY:-}" \
-    '{status:$status,reason:"selected account admission",account:$account}') || return 1
+    --arg reason "${FM_PLACEMENT_QUOTA_REASON:-selected account admission}" \
+    '{status:$status,reason:$reason,account:$account}') || return 1
   if [ "$quota" = unknown ]; then
     quota=fail
     if fm_placement_quota "$harness" "$model" "$effort"; then quota=pass; fi
+  fi
+  # The quota balance verdict, when that gate applies, is kept with the decision.
+  if [ "${FM_QUOTA_BALANCE_RECORD:-null}" != null ]; then
+    FM_PLACEMENT_QUOTA_DETAIL=$(printf '%s\n' "$FM_PLACEMENT_QUOTA_DETAIL" | jq -c --argjson balance "$FM_QUOTA_BALANCE_RECORD" '. + {balance: $balance}') || return 1
   fi
   evidence=$(jq -cn --argjson quota "$FM_PLACEMENT_QUOTA_DETAIL" --arg disk "$disk" --arg slots "$slots" --arg locks "$locks" --argjson count "$count" --arg liveness "$liveness" --argjson memory "$memory" \
     --arg project "${PROJ_ABS:-${PROJ:-}}" --arg reason "$slot_reason" '
