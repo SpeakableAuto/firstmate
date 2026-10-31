@@ -132,8 +132,11 @@ case "\${1:-}" in
   --version) printf '0.2.6\n' ;;
   update) printf '%s\n' '--archive-body' ;;
   mv) printf '%s\n' '[<id>...]' ;;
+  list)
+    printf '%s\n' 'count: 1' 'tasks[1]{id,state,kind,blocked,held,created,priority}:' '  fm-env-adapter-b15,queued,ship,no,no,-,3'
+    ;;
   show)
-    printf 'task:\n  state: queued\n  held: no\n  blocked: no\n'
+    printf 'task:\n  state: queued\n  held: no\n  blocked: no\n  priority: 3\n'
     ;;
   start)
     printf '%s\n' "\$*" > "$case_dir/env-backend-start"
@@ -193,6 +196,10 @@ case "\${1:-}" in
     [ "\${2:-}" = --help ] || exit 1
     printf '%s\n' 'usage: tasks-axi mv [<id>...]'
     ;;
+  list)
+    case " \$* " in *" --file "*) exit 1 ;; esac
+    printf '%s\n' 'count: 1' 'tasks[1]{id,state,kind,blocked,held,created,priority}:' '  $id,in_flight,ship,no,no,-,3'
+    ;;
   show)
     [ "\${2:-}" = "$id" ] || exit 1
     if [ "\${3:-}" = --file ]; then
@@ -202,7 +209,7 @@ case "\${1:-}" in
     fi
     printf '%s\n' 'task:'
     printf '  id: %s\n' "$id"
-    printf '%s\n' '  state: in_flight' '  held: no' '  blocked: no'
+    printf '%s\n' '  state: in_flight' '  held: no' '  blocked: no' '  priority: 3'
     ;;
   *)
     exit 1
@@ -332,14 +339,15 @@ make_fallback_bin() {  # <case-dir> <tasks-axi-stub-script>
 }
 
 run_bounded_fm_tasks_axi() {  # <fallback-bin> <bound> [args...]
-  local fb=$1 bound=$2 out rc=0
+  local fb=$1 bound=$2 out rc=0 fallback_timeout
   shift 2
+  fallback_timeout=$bound
   # The fallback shape itself: a PATH with no timeout variant on it, in force
   # for the bounded call only. The library is sourced first under the ordinary
   # PATH, as every real caller does.
   out=$(
     . "$ROOT/bin/fm-backlog-transition-lib.sh"
-    PATH="$fb" FM_TASKS_AXI_TIMEOUT="$bound" fm_tasks_axi "$@" 2>&1
+    PATH="$fb" FM_TASKS_AXI_TIMEOUT="$fallback_timeout" fm_tasks_axi "$@" 2>&1
   ) || rc=$?
   printf '%s' "$out"
   return "$rc"
@@ -865,7 +873,7 @@ case "\${1:-}" in
     esac
     printf '%s\n' 'task:'
     printf '  id: %s\n' "$id"
-    printf '%s\n' '  state: in_flight' '  held: no' '  blocked: no'
+    printf '%s\n' '  state: in_flight' '  held: no' '  blocked: no' '  priority: 3'
     ;;
   done)
     [ "\${2:-}" = "$id" ] || exit 1

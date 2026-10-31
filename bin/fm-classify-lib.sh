@@ -1942,6 +1942,47 @@ status_new_lines_since_cursor() {  # <status-file> [<captured-end-offset>]
   return "$rc"
 }
 
+# Fixed checkpoint wire form (shared by ship/scout brief renderers):
+# working|paused: checkpoint; done=<result>; next=<step>;
+# how_to_resume=<command or evidence>; branch=<branch or none>;
+# checkpoint_sha=<40-hex SHA or local>.
+# Ordinary waits and phase notifications are not checkpoints unless explicitly
+# marked with a leading "checkpoint" token or carrying a resume field.
+# This is advisory only: emit a warning, never change the lifecycle verb.
+status_checkpoint_warning() {  # <status-line>; stdout warning or empty
+  local line=$1 verb note field value missing='' sha
+  verb=$(status_line_verb "$line")
+  note=$(status_line_note "$line")
+  case "$verb" in
+    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|working)
+      case "$note" in
+        checkpoint|checkpoint\;*|checkpoint\ *|*done=*|*next=*|*how_to_resume=*|*branch=*) ;;
+        *) return 0 ;;
+      esac ;;
+    *) return 0 ;;
+  esac
+  for field in "done" next how_to_resume branch checkpoint_sha; do
+    value=$(printf '%s\n' "$note" | awk -v key="$field" '
+      BEGIN { FS=";" }
+      { for (i=1;i<=NF;i++) {
+          part=$i; sub(/^[[:space:]]+/, "", part)
+          if (index(part,key "=")==1) {
+            sub(/^[^=]*=/,"",part); sub(/[[:space:]]+$/, "", part)
+            if (part ~ /[^[:space:]]/) print part
+          }
+      }}')
+    if [ -z "$value" ]; then missing="${missing:+$missing, }$field"; fi
+    if [ "$field" = checkpoint_sha ] && [ -n "$value" ]; then
+      sha=$value
+      if [ "$sha" != local ] && ! [[ "$sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        missing="${missing:+$missing, }checkpoint_sha (40-hex SHA or local)"
+      fi
+    fi
+  done
+  [ -n "$missing" ] || return 0
+  printf 'warning: checkpoint missing or invalid %s; use the fixed resume-note fields\n' "$missing"
+}
+
 # 0 when a status line is an informational `note:` or a reserved-key
 # pending-reply resolution. Those lines never fold into OPEN DECISIONS, so the
 # drain's unread-status surface is their only guaranteed presentation.
@@ -1950,6 +1991,7 @@ status_line_is_unread_surface() {  # <status-line>
   [ -n "$line" ] || return 1
   verb=$(status_line_verb "$line")
   [ "$verb" = note ] && return 0
+  [ -z "$(status_checkpoint_warning "$line")" ] || return 0
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
   case "$verb" in

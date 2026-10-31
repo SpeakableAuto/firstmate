@@ -138,6 +138,9 @@ case "$1" in
   --version) echo 99.0.0 ;;
   update) echo --archive-body ;;
   mv) echo '[<id>...]' ;;
+  list)
+    printf '%s\n' 'count: 1' 'tasks[1]{id,state,kind,blocked,held,created,priority}:' '  task-one,queued,ship,no,no,-,3'
+    ;;
   show)
     for arg in "$@"; do
       [ ! -f "$FM_HOME/missing-$arg" ] || { echo 'code: NOT_FOUND'; exit 1; }
@@ -160,7 +163,7 @@ chmod +x "$BIN/"*
 # Start a separate ledger with only one queued request.
 rm -f "$STATE/capacity.json"
 printf '%s\n' "$blocked" | python3 "$TOOL" record "$STATE" task-one spawn >/dev/null
-printf '# Backlog\n' > "$DATA/backlog.md"
+printf '# Backlog\n## Queued\n- [ ] task-one - Ready work (kind: ship) (impact: P1)\n' > "$DATA/backlog.md"
 jq '.max_crew=1' "$CONFIG/crew-placement.json" > "$CONFIG/next"
 mv "$CONFIG/next" "$CONFIG/crew-placement.json"
 printf 'kind=ship\nharness=codex\nbackend=tmux\nwindow=fixture:occupant\n' > "$STATE/occupant.meta"
@@ -256,7 +259,7 @@ assert_equals null "$(jq -r '.waits["invalid-task"]' "$SPAWN_HOME/state/capacity
 assert_equals 'spawn ended before placement for a non-capacity reason' "$(jq -r '[.decisions[]|select(.task=="invalid-task")][-1].terminal' "$SPAWN_HOME/state/capacity.json")" 'non-capacity spawn exit records a terminal decision'
 pass 'real spawn refuses bad placement before allocating a worker'
 
-# Canonical impact wins conflicting legacy priority; missing impact defaults P2.
+# Canonical impact wins conflicting legacy priority; legacy numeric priority is the fallback.
 # shellcheck source=bin/fm-backlog-lib.sh
 . "$ROOT/bin/fm-backlog-lib.sh"
 cat > "$DATA/backlog.md" <<'BACKLOG'
@@ -268,7 +271,7 @@ parsed=$(backlog_json "$DATA/backlog.md")
 assert_equals P0 "$(jq -r '.records[0].impact' <<< "$parsed")" 'explicit impact is parsed'
 assert_equals 'Most urgent' "$(jq -r '.records[0].title' <<< "$parsed")" 'impact metadata stripped from display title'
 waits=$(printf '%s\n' "$parsed" | python3 "$TOOL" ordered "$STATE")
-assert_equals P2 "$(jq -r '.[]|select(.task=="task-one")|.impact' <<< "$waits")" 'missing impact ignores legacy priority'
+assert_equals P0 "$(jq -r '.[]|select(.task=="task-one")|.impact' <<< "$waits")" 'missing impact uses legacy priority'
 pass 'canonical impact and display title handling'
 
 python3 - "$TOOL" "$TMP_ROOT" <<'PY'

@@ -64,7 +64,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
     def links($rest): [$rest | scan(url_pattern)];
     def strip_trailing_metadata:
       reduce range(0; 20) as $_ (.;
-        sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority|impact|hold|hold-kind|hold-until):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
+        sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority|impact|serves|support|hold|hold-kind|hold-until):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
     def strip_title_artifacts:
       sub("[[:space:]]+-[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
       | sub("[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
@@ -123,7 +123,13 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
              repo:metadata($rest; "repo"),
              kind:kind_of($rest),
              priority:metadata($rest; "priority"),
-             impact:(metadata($rest; "impact") | if . != null and test("^P[0-3]$") then . else null end),
+             serves:metadata($rest; "serves"),
+             support:metadata($rest; "support"),
+             impact:(metadata($rest; "impact") as $impact
+               | metadata($rest; "priority") as $legacy
+               | if $impact != null and ($impact | test("^P[0-3]$")) then $impact
+                 elif $legacy != null and ($legacy | test("^[0-3]$")) then "P" + $legacy
+                 else "P2" end),
              hold_reason:hold_metadata($rest),
              hold_kind:metadata($rest; "hold-kind"),
              hold_until:metadata($rest; "hold-until"),

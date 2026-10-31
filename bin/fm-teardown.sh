@@ -3428,6 +3428,24 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
     echo "error: the pending backlog $BACKLOG_TRANSITION for $ID is not replayable; refusing destructive teardown" >&2
     exit 1
   }
+  FM_BACKLOG_FLOW_LANDING=none
+  if [ "$BACKLOG_TRANSITION" = close ] && [ "$FORCE" != --force ]; then
+    if [ "$KIND" = scout ] && [ -s "$DATA/$ID/report.md" ]; then
+      FM_BACKLOG_FLOW_LANDING=report
+    elif [ "$KIND" = ship ] && [ -d "$WT" ]; then
+      if [ "$MODE" = local-only ]; then
+        landed_head=$(sed -n 's/^local_landed_head=//p' "$META" | tail -1)
+        default=$(default_branch) || default=
+        if [ -n "$landed_head" ] && [ -n "$default" ] \
+          && [ "$landed_head" = "$(git -C "$WT" rev-parse HEAD)" ] \
+          && git -C "$WT" merge-base --is-ancestor "$landed_head" "refs/heads/$default"; then
+          FM_BACKLOG_FLOW_LANDING=local
+        fi
+      elif [ -n "$PR_URL" ] && ( pr_is_merged "$(git -C "$WT" rev-parse --abbrev-ref HEAD)" ) >/dev/null 2>&1; then
+        FM_BACKLOG_FLOW_LANDING=merge
+      fi
+    fi
+  fi
 # Roll the accepted legacy incarnation's stamp back to the record's exact
 # pre-stamp bytes. Uses perl - already in the teardown lifecycle's curated PATH
 # (truncate is not, and is absent on stock macOS) - and verifies the restored
