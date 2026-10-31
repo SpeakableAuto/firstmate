@@ -1,0 +1,4 @@
+tests/fm-control-relaunch.test.sh exit=0
+ok - fm-spawn --relaunch: refuses a slot claimed by another task or unreadable, relaunches its own
+ok - fm-spawn --relaunch: a Treehouse slot relaunch refuses the held project lock
+Note: the full suite log contains EXIT cleanup permission warnings from read-only generated hook fixtures; the exact temp root was made writable and removed after the successful run.

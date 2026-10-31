@@ -1,0 +1,58 @@
+LIVE LAB session=fm-lab-treehouse-slot-55383-13947 home=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.QEyWGI
+
+SCENARIO fresh worker exits but keeps its slot
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.QEyWGI
+notice: live-slot-a ships mode=local-only while the standing posture for project is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+A new version of treehouse is available: v2.1.1 → v3.1.8
+Run "treehouse update" to update
+
+🌳 Setting up worktree...
+🌳 Leased worktree at /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/1/project. Run 'treehouse return /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/1/project' to release it.
+spawned live-slot-a harness=bash kind=ship mode=local-only yolo=off window=fm-lab-treehouse-slot-55383-13947:w1:p2 worktree=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/1/project
+worker-a-agent-state={"code":"agent_not_found","message":"agent target w1:p2 not found"}
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.QEyWGI
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+notice: live-slot-b ships mode=local-only while the standing posture for project is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+A new version of treehouse is available: v2.1.1 → v3.1.8
+Run "treehouse update" to update
+
+🌳 Setting up worktree...
+🌳 Leased worktree at /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/2/project. Run 'treehouse return /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/2/project' to release it.
+spawned live-slot-b harness=bash kind=ship mode=local-only yolo=off window=fm-lab-treehouse-slot-55383-13947:w1:p3 worktree=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/2/project
+slot-a=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/1/project
+slot-b=/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/2/project
+A new version of treehouse is available: v2.1.1 → v3.1.8
+Run "treehouse update" to update
+
+1     leased       /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/1/project  (held by live-slot-a)
+                   zsh (57409)
+2     leased       /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/2/project  (held by live-slot-b)
+                   zsh (62315)
+PASS fresh worker exit retained slot and the next spawn used a different slot
+
+SCENARIO same task id claimed by another home refuses relaunch
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.QEyWGI
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+Claude quota: cached reading 136s old
+notice: live-slot-a ships mode=local-only while the standing posture for project is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+error: task live-slot-a's recorded worktree /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/treehouse/.treehouse/project-af9693/1/project is claimed by task live-slot-a from home /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/other-home, not relaunching home /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI; refusing to relaunch inside another home's copy
+endpoint-capture-sha-before=017638f905971522979ba41593e841bdaf9a6e06feb6a3c500fe505bdb224b87 endpoint-capture-sha-after=017638f905971522979ba41593e841bdaf9a6e06feb6a3c500fe505bdb224b87
+metadata-sha-before=2f4c165ed0433a19d98cd067a0005961e2f6a6faca53e8bb605590388d7eeff4 metadata-sha-after=2f4c165ed0433a19d98cd067a0005961e2f6a6faca53e8bb605590388d7eeff4
+PASS other-home claim refused with endpoint and metadata unchanged
+
+SCENARIO held shared project lock refuses relaunch
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.QEyWGI
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+Claude quota: cached reading 138s old
+error: another Treehouse slot allocation or return is in progress for /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.QEyWGI/project; refusing to race it
+endpoint-capture-sha-before=540caeb405faa76697eb038496a065cb82504b2933491d4870d40f6d3681a0ad endpoint-capture-sha-after=540caeb405faa76697eb038496a065cb82504b2933491d4870d40f6d3681a0ad
+metadata-sha-before=3332f02d0f595ec923d39d245eb22d0d5a611d2c0a96bb44d33fe3b51fc80c6b metadata-sha-after=3332f02d0f595ec923d39d245eb22d0d5a611d2c0a96bb44d33fe3b51fc80c6b
+PASS held project lock refused with endpoint and metadata unchanged
+
+ALL LIVE SCENARIOS PASSED

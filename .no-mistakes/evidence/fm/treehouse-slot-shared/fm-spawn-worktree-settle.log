@@ -1,0 +1,10 @@
+ok - slot cap refuses spawn before endpoint allocation and keeps recorded work
+ok - a single transient stale pane_current_path read is not accepted as the worktree
+ok - a leased spawn reads the pane cwd once, at the launch boundary
+ok - a transient primary-checkout pane read is not accepted as the worktree
+ok - a pane stuck on the primary checkout fails loudly at the launch boundary
+ok - an exited worker's slot stays its task's; the next spawn leases a different one
+ok - an unleased slot another task records stays leased and is skipped
+ok - an aborted spawn returns its clean, unrecorded lease
+ok - real Treehouse: leased spawns skip a recorded interactive slot and never share a slot
+# all fm-spawn-worktree-settle tests passed

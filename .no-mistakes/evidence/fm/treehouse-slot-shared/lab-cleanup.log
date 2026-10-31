@@ -1,0 +1,4 @@
+{"tested_lab_present":[],"default_session":[{"name":"default","default":true,"running":true}]}
+accidental setup pool restored: absent
+focused-test temp root cleaned: absent
+worktree transient test files: absent
