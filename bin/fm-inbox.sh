@@ -117,7 +117,7 @@ done
 unset _extra
 export PATH
 
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_ROOT="$(cd "$SELF_DIR/.." && pwd)"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -1039,8 +1039,12 @@ audio_seconds=$secs"
 # ---------------------------------------------------------------- status
 
 cmd_status() {
-  local pending=0
-  [ -d "$INBOX" ] && pending=$(find "$INBOX" -maxdepth 1 -name '*.note' 2>/dev/null | wc -l | tr -d ' ')
+  local pending=0 note
+  # Include hidden names as find did, without changing the caller's glob mode.
+  for note in "$INBOX"/*.note "$INBOX"/.*.note "$INBOX"/.note; do
+    [ -e "$note" ] || [ -L "$note" ] || continue
+    pending=$((pending + 1))
+  done
 
   printf '=== firstmate status (read-only, no wake sent) ===\n'
   printf 'home     %s\n' "$FM_HOME"
@@ -1059,12 +1063,27 @@ cmd_status() {
   for m in "$STATE"/*.meta; do
     [ -e "$m" ] || break
     if [ "$any" -eq 0 ]; then printf '\n--- workers ---\n'; any=1; fi
-    local id kind mode last
-    id=$(basename "$m" .meta)
-    kind=$(sed -n 's/^kind=//p' "$m" | head -1)
-    mode=$(sed -n 's/^mode=//p' "$m" | head -1)
+    local id kind mode last line kind_seen mode_seen
+    id=${m##*/}
+    id=${id%.meta}
+    kind='' mode='' kind_seen=0 mode_seen=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        kind=*)
+          if [ "$kind_seen" -eq 0 ]; then kind=${line#kind=}; kind_seen=1; fi ;;
+        mode=*)
+          if [ "$mode_seen" -eq 0 ]; then mode=${line#mode=}; mode_seen=1; fi ;;
+      esac
+      [ "$kind_seen:$mode_seen" != 1:1 ] || break
+    done < "$m"
     last=""
-    [ -f "$STATE/$id.status" ] && last=$(tail -1 "$STATE/$id.status" 2>/dev/null | cut -c1-100)
+    if [ -f "$STATE/$id.status" ]; then
+      # tail keeps the final unterminated line too; an empty final line must
+      # still replace the preceding event, rather than repeat stale history.
+      while IFS= read -r line || [ -n "$line" ]; do
+        last=${line:0:100}
+      done < "$STATE/$id.status"
+    fi
     printf '  %-42s %-6s %-10s %s\n' "$id" "${kind:-?}" "${mode:--}" "${last:-(no events yet)}"
   done
   [ "$any" -eq 1 ] || printf '\n(no workers on deck)\n'

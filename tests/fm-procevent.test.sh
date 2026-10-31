@@ -40,6 +40,45 @@ lavish_session() {  # <artifact> [session-url]
   ' "$LAVISH_AXI_STATE_DIR/state.json" "$1" "${2:-http://127.0.0.1:14387/session/0123456789abcdef}"
 }
 
+# Budget the real ownership probe used on every idle guard tick. Trace runtime
+# commands, not source text; a fresh stat is required, but repeated uname/id and
+# separate field probes must not return as the fleet grows.
+probe_home="$TMP_ROOT/probe-home"
+mkdir -p "$probe_home/state"
+chmod 700 "$probe_home/state"
+FM_HOME="$probe_home" bash -c '
+  . "$1/bin/fm-pr-lib.sh"
+  . "$1/bin/fm-wake-lib.sh"
+  . "$1/bin/fm-procevent-lib.sh"
+  IFS=$(printf "\t")
+  PS4="+ "
+  set -x
+  fm_procevent_claim_state_root_identity "$2"
+' _ "$ROOT" "$probe_home/state" > "$TMP_ROOT/probe.out" 2> "$TMP_ROOT/probe.trace" \
+  || fail "ownership probe must succeed"
+probe_starts=$(awk '
+  /^\++ (\/usr\/bin\/)?(stat|uname|id|cat|awk|sed|head|readlink|mktemp|cmp|rm|perl|python3)( |$)/ { n++ }
+  END { print n+0 }
+' "$TMP_ROOT/probe.trace")
+[ "$probe_starts" -le 1 ] || fail "idle ownership probe started $probe_starts external commands (budget 1)"
+pass "idle ownership probe starts at most one external command"
+
+# Classifying a normal board response requires no queue initialization or
+# external text parser. Fail if one is launched, through the public adapter.
+classify_tools="$TMP_ROOT/classify-tools"
+mkdir -p "$classify_tools"
+for tool in dirname uname mkdir awk; do
+  printf '#!/usr/bin/env bash\nprintf "unexpected %%s\\n" "%s" >&2\nexit 97\n' "$tool" > "$classify_tools/$tool"
+  chmod +x "$classify_tools/$tool"
+done
+printf 'session:\n  status: ended\n' > "$TMP_ROOT/classify-result"
+classify_out=$(PATH="$classify_tools:$PATH" "$ROOT/bin/fm-procevent-lavish.sh" classify \
+  "$TMP_ROOT/classify-result" 2> "$TMP_ROOT/classify.err") \
+  || fail "normal board classification must use shell builtins"
+[ ! -s "$TMP_ROOT/classify.err" ] || fail "classification launched an external utility"
+assert_equals ended "$classify_out" "classification keeps the lifecycle verdict"
+pass "normal board classification starts no external utilities"
+
 BLOCKER="$TMP_ROOT/blocker.sh"
 cat > "$BLOCKER" <<'SH'
 #!/usr/bin/env bash
@@ -4670,7 +4709,7 @@ done
 [ ! -e "$drain_claim" ] || fail "the first generation of the draining fixture never exited"
 # Stand the first generation's claim back up on a live process so the re-arm
 # meets it still held, then release it partway through the confirm window.
-setsid sleep 60 &
+perl -MPOSIX=setsid -e 'setsid() >= 0 or exit 1; exec @ARGV' sleep 60 &
 drain_holder=$!
 # Read the identity only once the holder has exec'd sleep: mid-exec its cmdline
 # can read empty, and a pre-exec identity would never match the live holder.
