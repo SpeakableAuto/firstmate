@@ -408,6 +408,27 @@ test_kind_changes_invalidate_folded_decisions() {
   pass "folded decisions are rebuilt when task-kind evidence changes"
 }
 
+# Count actual metadata utility launches in a warm, unchanged fleet drain.
+# Xtrace sees absolute /usr/bin/stat calls on macOS as well as PATH stat on Linux.
+test_unchanged_drain_has_bounded_metadata_processes() {
+  local dir state i trace launches
+  dir=$(make_case metadata-process-budget); state="$dir/state"; trace="$dir/drain.trace"
+  for i in 1 2 3; do
+    printf 'needs-decision [key=target]: choose target\nnote: context attached\n' > "$state/task$i.status"
+  done
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/first.out" || fail "budget bootstrap failed"
+  FM_STATE_OVERRIDE="$state" bash -x "$DRAIN" > "$dir/second.out" 2> "$trace" \
+    || fail "budget drain failed"
+  launches=$(awk '/^\++ (\/usr\/bin\/)?stat / { n++ } END { print n+0 }' "$trace")
+  [ "$launches" -le 60 ] || fail "unchanged three-task drain launched $launches metadata utilities (budget 60)"
+  for i in 1 2 3; do
+    assert_contains "$(cat "$dir/second.out")" "task$i [key=target] needs-decision: choose target" "open decision survives warm drain"
+  done
+  assert_not_contains "$(cat "$dir/second.out")" 'UNREAD STATUS' "handled notes stay acknowledged"
+  pass "unchanged fleet drain bounds metadata launches while preserving decisions and receipts"
+}
+
+test_unchanged_drain_has_bounded_metadata_processes
 test_terminal_supersession_reaches_cached_drains
 test_kind_changes_invalidate_folded_decisions
 test_truncated_log_falls_back_to_a_full_refold_not_a_dropped_decision
