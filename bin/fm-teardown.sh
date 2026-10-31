@@ -138,10 +138,12 @@
 # Firstmate home's state directory, as resolved by bin/fm-wake-lib.sh's
 # fm_firstmate_root_home; a home seeded from another machine is its own local
 # root, since a lock on this filesystem cannot be held or observed across that
-# boundary. Fresh Treehouse spawns for that project in
-# every local Firstmate home hold the same lock from before slot allocation
-# through metadata publication, closing the publication
-# gap; forced secondmate teardown takes it and runs the same checks for every
+# boundary. Fresh Treehouse spawns for that project in every local Firstmate
+# home hold the same lock from before slot allocation through metadata
+# publication, closing the publication gap. A relaunch of a recorded pool slot
+# holds it from before the owner-claim read through metadata publication, so it
+# cannot adopt the slot while allocation or return is changing its ownership.
+# Forced secondmate teardown takes it and runs the same checks for every
 # descendant Treehouse slot before touching any child.
 # These refusals are not relaxed by --force: --force authorizes discarding THIS
 # task's unlanded work, never another task's live work. Nothing of this task's

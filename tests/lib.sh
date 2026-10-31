@@ -395,7 +395,7 @@ fm_live_gate() {
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
 # shadow real tools with stubs. fm_fake_exit0 drops trivial exit-0 stubs for the
-# named tools into a fakebin dir. fm_fake_crash_injector drops the shim a fake
+# named tools into a fakebin dir (treehouse's also answers a lease, below). fm_fake_crash_injector drops the shim a fake
 # uses to crash the process under test deterministically. fm_fake_version_tool
 # drops a stub for a tool whose installed version bootstrap gates, so a fixture
 # cannot be reported as an unparseable build simply for answering `--version`
@@ -411,12 +411,37 @@ fm_fake_exit0() {
   local fakebin=$1 tool
   shift
   for tool in "$@"; do
+    if [ "$tool" = treehouse ]; then
+      fm_fake_treehouse_lease "$fakebin"
+      continue
+    fi
     cat > "$fakebin/$tool" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
     chmod +x "$fakebin/$tool"
   done
+}
+
+# fm_fake_treehouse_lease <fakebin>
+# The exit-0 treehouse stub, except that a spawn's durable
+# `treehouse get --lease` must print the leased path: it prints
+# FM_FAKE_TREEHOUSE_LEASE_PATH, else FM_FAKE_PANE_PATH (the copy the spawn
+# suites already stand up as the task's worktree). FM_FAKE_TREEHOUSE_LOG, when
+# set, records each invocation's arguments on one line.
+fm_fake_treehouse_lease() {
+  local fakebin=$1
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_TREEHOUSE_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_TREEHOUSE_LOG"
+if [ "${1:-}" = get ]; then
+  for a in "$@"; do
+    [ "$a" != --lease ] || { printf '%s\n' "${FM_FAKE_TREEHOUSE_LEASE_PATH:-${FM_FAKE_PANE_PATH:-}}"; break; }
+  done
+fi
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
 }
 
 # fm_fake_crash_injector <fakebin>

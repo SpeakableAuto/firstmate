@@ -682,7 +682,7 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" pi
+  fm_fake_exit0 "$fakebin" pi treehouse
   # BASE_PATH deliberately omits the developer's node, which the trust
   # registration below needs, so link the real one in rather than presenting a
   # node-less spawn host no real fleet member looks like.
@@ -1132,6 +1132,8 @@ SH
 #!/usr/bin/env bash
 if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
   printf '%s\n' 'Usage: treehouse get [--lease]'
+elif [ "${1:-}" = get ] && [ "${2:-}" = --lease ]; then
+  printf '%s\n' "${FM_FAKE_PANE_PATH:-}"
 fi
 exit 0
 SH
