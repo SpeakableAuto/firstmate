@@ -127,11 +127,13 @@ check "$(sent_count)" 3 'only three messages reached the sender so far'
 run send carve-out-blocked pr-83 'Firstmate: every priority task is waiting on your decision about the payments change.'
 check "$OUT" sent 'a different condition is not held back by another condition'
 run send machine-down m0002 'Firstmate: the 0002 machine has been unreachable for 20 minutes.'
-check "$OUT" skipped:daily-cap 'daily cap holds the fifth message in 24 hours'
-check "$(sent_count)" 4 'daily cap stops delivery'
+check "$OUT" sent 'a third condition is not held back by the other conditions'
+check "$(sent_count)" 5 'each condition keeps its own tries'
+FM_URGENT_ALERT_DAILY_CAP=5 FM_URGENT_ALERT_CONDITION_SECS=0 run send machine-down m0001 'Firstmate: the main machine has been unreachable for 20 minutes.'
+check "$OUT" skipped:daily-cap 'the shared daily ceiling holds every condition'
 at $((100000 + 86400 + 1))
-run send machine-down m0002 'Firstmate: the 0002 machine has been unreachable for 20 minutes.'
-check "$OUT" sent 'daily cap rolls after 24 hours'
+FM_URGENT_ALERT_DAILY_CAP=5 FM_URGENT_ALERT_CONDITION_SECS=0 run send machine-down m0001 'Firstmate: the main machine has been unreachable for 20 minutes.'
+check "$OUT" sent 'the shared daily ceiling rolls after 24 hours'
 
 # A delivery that never started is logged, retried only after the retry window.
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
@@ -175,8 +177,8 @@ for t in 1 2 3 4 5 6 7 8; do
 done
 check "$(sent_count)" 3 'id-less replies reach the phone at most once per condition window'
 
-# A timed-out send may never have left: the same key retries about an hour
-# later instead of reading as delivered, then slows to two-hour retries.
+# A timed-out send may never have left: the same key retries two hours later
+# instead of reading as delivered.
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 at 230000
 SENDER_MODE=hang FM_URGENT_ALERT_TIMEOUT_SECS=1 run send supervisor-down down-1 'Firstmate: supervisor stopped.'
@@ -186,8 +188,11 @@ run send supervisor-down down-1 'Firstmate: supervisor stopped.'
 check "$OUT" skipped:unconfirmed-backoff 'an unconfirmed key waits before retrying'
 at 233600
 run send supervisor-down down-1 'Firstmate: supervisor stopped.'
-check "$OUT" sent 'an unconfirmed key retries after an hour and is delivered'
-at 233700
+check "$OUT" skipped:unconfirmed-backoff 'an unconfirmed key still waits after an hour'
+at 237200
+run send supervisor-down down-1 'Firstmate: supervisor stopped.'
+check "$OUT" sent 'an unconfirmed key retries after two hours and is delivered'
+at 237300
 run send supervisor-down down-1 'Firstmate: supervisor stopped.'
 check "$OUT" skipped:duplicate 'only a confirmed send makes the key a duplicate'
 check "$(sent_count)" 2 'the timed-out attempt and its one retry reached the sender'
@@ -195,32 +200,61 @@ rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 for t in $(seq 240000 900 325500); do
   at "$t"; SENDER_MODE=hang FM_URGENT_ALERT_TIMEOUT_SECS=1 run send supervisor-down down-2 'Firstmate: supervisor stopped.'
 done
-check "$(sent_count)" 4 'a sender that always times out stays within the four-attempt daily cap'
-check "$OUT" skipped:daily-cap 'an unconfirmed key remains capped, never treated as delivered'
-check "$(jq -r 'select(.result=="unconfirmed") | .at' "$LOG" | tr '\n' ' ')" '240000 243600 247200 254400 ' 'three hourly tries are followed by a two-hour retry'
+check "$(sent_count)" 12 'a sender that always times out gets twelve tries in a day'
+check "$OUT" skipped:unconfirmed-backoff 'an unconfirmed key keeps waiting, never treated as delivered'
+check "$(jq -r 'select(.result=="unconfirmed") | .at' "$LOG" | head -3 | tr '\n' ' ')" '240000 247200 254400 ' 'unconfirmed tries are two hours apart'
 
-# An outage outlasting the quick attempts must not defer recovery for a day.
+# An outage of any length must not defer recovery for a day: the alert
+# reaches the phone within about two hours of service returning.
+# outage_case <outage-secs> <ticks-secs> -> prints delivered seconds after service returned
+outage_case() {
+  local t
+  rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+  for t in $(seq 600000 600 $((600000 + $2))); do
+    at "$t"
+    if [ "$t" -lt $((600000 + $1)) ]; then
+      SENDER_MODE=error run send supervisor-down outage 'Firstmate: supervisor stopped.'
+    else
+      run send supervisor-down outage 'Firstmate: supervisor stopped.'
+    fi
+  done
+  jq -r --argjson end $((600000 + $1)) 'select(.result=="sent") | .at - $end' "$LOG"
+}
+check "$(outage_case 12600 18000)" 1800 'delivery recovers half an hour after a 3.5-hour outage ends'
+check "$(tail -1 "$LOG" | jq -r .reason)" duplicate 'confirmed outage delivery stops further retries'
+check "$(outage_case 18000 30000)" 3600 'delivery recovers an hour after a 5-hour outage ends'
+check "$(outage_case 36000 50000)" 0 'delivery recovers as service returns after a 10-hour outage'
+
+# A machine-down alert during a long supervisor-down outage is not delayed
+# by the supervisor-down tries.
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
-for t in $(seq 350000 600 368000); do
+for t in $(seq 700000 600 743200); do
   at "$t"
-  if [ "$t" -lt 362600 ]; then
-    SENDER_MODE=error run send supervisor-down outage 'Firstmate: supervisor stopped.'
-  else
-    run send supervisor-down outage 'Firstmate: supervisor stopped.'
-  fi
+  SENDER_MODE=error run send supervisor-down long 'Firstmate: supervisor stopped.'
+  if [ "$t" -ge 732400 ]; then run send machine-down m0002 'Firstmate: 0002 unreachable.'; fi
 done
-check "$(sent_count)" 4 'a 3.5-hour outage gets a fourth attempt after the quick tries'
-check "$(jq -r 'select(.result=="sent") | .at' "$LOG")" 364400 'delivery recovers half an hour after the 3.5-hour outage ends'
-check "$OUT" skipped:duplicate 'confirmed outage delivery stops further retries'
+check "$(jq -r 'select(.result=="sent") | .at' "$LOG")" 732400 'machine-down is delivered at once during a 12-hour supervisor-down outage'
+check "$(jq -r 'select(.condition=="supervisor-down") | .result' "$LOG" | grep -c '^unconfirmed$')" 7 'the supervisor-down tries kept going every two hours'
 
 # A reply lost after Telegram accepted the message makes Hermes exit with an
 # error; that may have reached the phone, so the limits still hold.
+# rolling_max <jq-filter> -> the most matching attempts in any rolling 24 hours
+rolling_max() {
+  jq -s "[.[] | select(.result==\"sent\" or .result==\"unconfirmed\") | select($1) | .at] | . as \$a
+    | [0, (\$a[] as \$t | [\$a[] | select(. >= \$t and . < \$t + 86400)] | length)] | max" "$LOG"
+}
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 for t in $(seq 400000 900 486000); do
   at "$t"; SENDER_MODE=error run send supervisor-down lost-1 'Firstmate: supervisor stopped.'
 done
-check "$(sent_count)" 4 'a lost reply with an error exit stays within the daily cap for one key'
+check "$(sent_count)" 12 'a lost reply with an error exit gets twelve tries in a day for one key'
 check "$(jq -r 'select(.result=="unconfirmed") | .reason' "$LOG" | sort -u)" delivery-failed 'an error exit after Hermes ran is logged as unconfirmed'
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+for t in $(seq 400000 900 486000); do
+  at "$t"; SENDER_MODE=error FM_URGENT_ALERT_UNCONFIRMED_RETRY_SECS=900 run send supervisor-down lost-1 'Firstmate: supervisor stopped.'
+done
+check "$(sent_count)" 12 'a faster retry setting still stops at twelve tries per condition'
+check "$OUT" skipped:condition-daily-cap 'the per-condition cap holds the thirteenth try'
 rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
 n=0
 for t in $(seq 500000 1800 586000); do
@@ -229,7 +263,22 @@ for t in $(seq 500000 1800 586000); do
     SENDER_MODE=error run send "$c" "lost-$c-$n" 'Firstmate: still blocked.'
   done
 done
-check "$(sent_count)" 4 'lost replies on new keys across all conditions stay under the daily cap'
+check "$(sent_count)" 12 'lost replies on new keys are held to one try per condition window'
+rm -rf "$FM_HOME/state/urgent-alert" "$SENT_DIR"; mkdir -p "$SENT_DIR"
+for t in $(seq 800000 1200 1059200); do
+  at "$t"
+  for c in supervisor-down carve-out-blocked machine-down; do
+    SENDER_MODE=error run send "$c" "stuck-$c" 'Firstmate: still blocked.'
+  done
+done
+for c in supervisor-down carve-out-blocked machine-down; do
+  max=$(rolling_max ".condition==\"$c\"")
+  [ "$max" -le 12 ] || fail "$c made $max tries in 24 hours"
+done
+pass 'an always-failing sender stays within twelve tries per condition in any 24 hours'
+check "$(rolling_max true)" 24 'an always-failing sender stays within twenty-four tries in any 24 hours'
+[ "$(sent_count)" -gt 48 ] || fail 'the shared ceiling stopped retries for good'
+pass 'the shared ceiling rolls instead of stopping retries'
 
 # A text line before the JSON, or pretty-printed JSON, still yields the id.
 for mode in banner pretty; do
@@ -359,6 +408,6 @@ check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" false
 at 501801; run check-machine m0002 mac-mini-0002
 check "$OUT" skipped:unconfirmed-backoff 'an unconfirmed machine alert waits before retrying'
 check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" false 'an unconfirmed machine alert never closes the outage'
-at 504500; run check-machine m0002 mac-mini-0002
+at 508100; run check-machine m0002 mac-mini-0002
 check "$OUT" sent 'the open outage retries after the unconfirmed backoff'
 check "$(jq -r .alerted "$FM_HOME/state/urgent-alert/machine-m0002.json")" true 'confirmed delivery closes the outage alert episode'

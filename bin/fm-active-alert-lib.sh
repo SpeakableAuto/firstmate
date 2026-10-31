@@ -248,18 +248,21 @@ wedge_alarm_notify() {  # <summary> <marker>
 #     FM_URGENT_ALERT_CONDITION_SECS (default 21600, six hours);
 #   - the same condition and key are not re-sent within
 #     FM_URGENT_ALERT_DEDUPE_SECS (default 86400) once Hermes confirmed it;
-#   - at most FM_URGENT_ALERT_DAILY_CAP (default 4) messages that may have
-#     reached the phone in any rolling 24 hours, across all conditions;
+#   - at most FM_URGENT_ALERT_CONDITION_DAILY_CAP (default 12) attempts that
+#     may have reached the phone per condition in any rolling 24 hours, so
+#     one condition never uses up another condition's tries;
+#   - at most FM_URGENT_ALERT_DAILY_CAP (default 24) such attempts across all
+#     conditions in any rolling 24 hours, as the flood guard;
 #   - a delivery that never started may retry the same condition after
 #     FM_URGENT_ALERT_RETRY_SECS (default 900).
 # Once Hermes has run, a reply without a confirmed message id (a timeout, an
 # error exit, or no id) may still have reached the phone. It reports failed
-# and is logged as `unconfirmed`, which counts toward the daily cap and holds
-# the condition for other keys, but never makes its own key a duplicate: the
-# same key retries after FM_URGENT_ALERT_UNCONFIRMED_RETRY_SECS (default
-# 3600) for FM_URGENT_ALERT_UNCONFIRMED_TRIES (default 3) attempts within
-# the dedupe window. After that, supervisor-down retries every two hours,
-# still under the daily cap; other conditions stop until the window rolls.
+# and is logged as `unconfirmed`, which counts toward both caps and holds
+# the condition for other keys, but never makes its own key a duplicate:
+# while the caller keeps asking, the same key retries every
+# FM_URGENT_ALERT_UNCONFIRMED_RETRY_SECS (default 7200), so within the caps an
+# outage of any length delays delivery by at most that interval once service
+# returns.
 # Only a sender that never started (not found, not executable, a
 # usage error, or a runner that could not start) is a plain `failed` attempt.
 # Delivery is bounded by FM_URGENT_ALERT_TIMEOUT_SECS (default 60), which
@@ -334,7 +337,7 @@ fm_urgent_alert_result() {
 # FM_URGENT_ALERT_RESULT and, when sent, FM_URGENT_ALERT_MESSAGE_ID.
 fm_urgent_alert() {
   local condition=$1 key=${2:-} message=${3:-} dir log lock now sha out id rc reason
-  local cond_secs dedupe_secs cap retry_secs unconf_secs unconf_tries held verdict
+  local cond_secs dedupe_secs cap cond_cap retry_secs unconf_secs held verdict
   FM_URGENT_ALERT_MESSAGE_ID=
   fm_urgent_alert_condition_ok "$condition" || { fm_urgent_alert_result 'failed:unknown-condition'; return 2; }
   [ -n "$key" ] && [ -n "$message" ] || { fm_urgent_alert_result 'failed:empty'; return 2; }
@@ -346,10 +349,10 @@ fm_urgent_alert() {
   sha=$(printf '%s' "$message" | shasum -a 256 | awk '{print $1}')
   cond_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_CONDITION_SECS:-}" 21600)
   dedupe_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_DEDUPE_SECS:-}" 86400)
-  cap=$(fm_urgent_alert_int "${FM_URGENT_ALERT_DAILY_CAP:-}" 4)
+  cap=$(fm_urgent_alert_int "${FM_URGENT_ALERT_DAILY_CAP:-}" 24)
+  cond_cap=$(fm_urgent_alert_int "${FM_URGENT_ALERT_CONDITION_DAILY_CAP:-}" 12)
   retry_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_RETRY_SECS:-}" 900)
-  unconf_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_UNCONFIRMED_RETRY_SECS:-}" 3600)
-  unconf_tries=$(fm_urgent_alert_int "${FM_URGENT_ALERT_UNCONFIRMED_TRIES:-}" 3)
+  unconf_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_UNCONFIRMED_RETRY_SECS:-}" 7200)
   # A lock left by a killed sender is reclaimed after two minutes; a live one
   # means another sender is mid-delivery, so this attempt stands down.
   if ! mkdir "$lock" 2>/dev/null; then
@@ -363,22 +366,23 @@ fm_urgent_alert() {
   reason=
   verdict=$(jq -rRn --argjson now "$now" --arg c "$condition" --arg k "$key" \
     --argjson cs "$cond_secs" --argjson ds "$dedupe_secs" --argjson rs "$retry_secs" \
-    --argjson us "$unconf_secs" --argjson ut "$unconf_tries" '
+    --argjson us "$unconf_secs" --argjson cap "$cap" --argjson cc "$cond_cap" '
       [ inputs | fromjson? | select(type == "object" and (.at | type) == "number") ] as $r
       | [ $r[] | select(.result == "sent") ] as $s
       | [ $r[] | select(.result == "unconfirmed") ] as $u
-      | [ $u[] | select(.condition == $c and .key == $k and $now - .at < $ds) ] as $uk
+      | [ $s[], $u[] | select($now - .at < 86400) ] as $day
       | if any($s[]; .condition == $c and .key == $k and $now - .at < $ds) then "duplicate"
-        elif ($uk | length) >= $ut and $c != "supervisor-down" then "unconfirmed-exhausted"
-        elif any($uk[]; $now - .at < (if ($uk | length) >= $ut then 7200 else $us end)) then "unconfirmed-backoff"
+        elif any($u[]; .condition == $c and .key == $k and $now - .at < $us) then "unconfirmed-backoff"
         elif any($s[], ($u[] | select(.key != $k)); .condition == $c and $now - .at < $cs) then "condition-rate-limit"
         elif any($r[]; .result == "failed" and .condition == $c and $now - .at < $rs) then "retry-backoff"
-        else [$s[], $u[] | select($now - .at < 86400)] | length | tostring end' "$log" 2>/dev/null) \
+        elif ([ $day[] | select(.condition == $c) ] | length) >= $cc then "condition-daily-cap"
+        elif ($day | length) >= $cap then "daily-cap"
+        else "ok" end' "$log" 2>/dev/null) \
     || verdict=corrupt-log
   case "$verdict" in
-    duplicate|unconfirmed-exhausted|unconfirmed-backoff|condition-rate-limit|retry-backoff|corrupt-log) reason=$verdict ;;
-    ''|*[!0-9]*) reason='corrupt-log' ;;
-    *) [ "$verdict" -lt "$cap" ] || reason='daily-cap' ;;
+    ok) ;;
+    duplicate|unconfirmed-backoff|condition-rate-limit|retry-backoff|condition-daily-cap|daily-cap) reason=$verdict ;;
+    *) reason='corrupt-log' ;;
   esac
   if [ -n "$reason" ]; then
     fm_urgent_alert_record "$log" "$now" "$condition" "$key" skipped "$reason" "$sha"

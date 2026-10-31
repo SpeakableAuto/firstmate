@@ -36,7 +36,7 @@ An enabled restart records a durable `restarting` receipt before it stops only t
 If a tick ends during that restart, the next tick accepts an already proven Claude agent or retries the restart once under the same verified-empty-composer guard, while a second interruption or unproven retry sends the urgent supervisor-down alert.
 If automatic restart has since been turned off, a leftover restart record never stops or relaunches anything: a running Claude resumes normal watching, and a pane without one sends the urgent alert.
 An unproven restart or no progress for another interval after a proven one sends one urgent supervisor-down alert through the [urgent captain alert path](wedge-alarm.md#urgent-captain-alerts).
-The same incident retries delivery through the alert limiter until Hermes confirms it with a message id, with slower retries after the initial attempts and all attempts still subject to the daily cap.
+The same incident retries delivery through the alert limiter every two hours until Hermes confirms it with a message id, within the limiter's per-condition and shared daily caps.
 A send that may have reached the phone but was not confirmed never closes the incident.
 
 ## Claude version drift

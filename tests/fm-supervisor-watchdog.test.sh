@@ -635,7 +635,7 @@ check "$(wc -l < "$DIR/urgent" | tr -d ' ')" 2 'the default down incident retrie
 check "$(jq -r .alerted "$DIR/stall.json")" true 'successful default retry closes the alert episode'
 
 # The real limiter: a supervisor-down alert whose first send times out is
-# not delivered, so the incident stays open and retries about an hour later.
+# not delivered, so the incident stays open and retries two hours later.
 cat > "$TMP/urgent-sender" <<'SENDER'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
@@ -662,11 +662,11 @@ real_urgent_case hang-first
 for t in $(seq 1000 600 94600); do TICK=$t; watchdog_tick; done
 check "$(cat "$TMP/urgent-calls")" 2 'a timed-out supervisor-down alert is retried once Hermes recovers'
 check "$(jq -r .alerted "$DIR/stall.json")" true 'the retried alert closes the incident only after delivery'
-check "$(jq -r 'select(.result=="sent") | .at' "$FM_HOME/state/urgent-alert/sent.jsonl")" 8200 'the retry lands an hour after the timed-out send'
+check "$(jq -r 'select(.result=="sent") | .at' "$FM_HOME/state/urgent-alert/sent.jsonl")" 11800 'the retry lands two hours after the timed-out send'
 real_urgent_case hang
 for t in $(seq 1000 600 94600); do TICK=$t; watchdog_tick; done
-check "$(jq -s '[.[] | select(.result=="unconfirmed") | .at] | . as $a | [$a[] as $t | [$a[] | select(. >= $t and . < $t + 86400)] | length] | max' "$FM_HOME/state/urgent-alert/sent.jsonl")" 4 'a sender that keeps timing out stays under the four-attempt daily cap'
-check "$(jq -r 'select(.result=="unconfirmed") | .at' "$FM_HOME/state/urgent-alert/sent.jsonl" | head -3 | tr '\n' ' ')" '4600 8200 11800 ' 'timed-out alerts retry an hour apart'
+check "$(jq -s '[.[] | select(.result=="unconfirmed") | .at] | . as $a | [$a[] as $t | [$a[] | select(. >= $t and . < $t + 86400)] | length] | max' "$FM_HOME/state/urgent-alert/sent.jsonl")" 12 'a sender that keeps timing out stays within twelve tries a day'
+check "$(jq -r 'select(.result=="unconfirmed") | .at' "$FM_HOME/state/urgent-alert/sent.jsonl" | head -3 | tr '\n' ' ')" '4600 11800 19000 ' 'timed-out alerts retry two hours apart'
 check "$(jq -r .alerted "$DIR/stall.json")" false 'an alert never confirmed never reads as delivered'
 check "$(stage)" down 'an unconfirmed alert keeps the incident down'
 unset FM_URGENT_ALERT_EXEC FM_URGENT_ALERT_TIMEOUT_SECS
