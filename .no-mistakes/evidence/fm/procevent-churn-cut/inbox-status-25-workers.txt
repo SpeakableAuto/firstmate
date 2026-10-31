@@ -1,0 +1,35 @@
+=== firstmate status (read-only, no wake sent) ===
+home     /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M694M0DWJ4TDMW21N3BGAMKW/.nm-live-surface-lab
+time     2026-10-31T14:25:29Z
+inbox    0 note(s) waiting for firstmate
+
+(no backlog at /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M694M0DWJ4TDMW21N3BGAMKW/.nm-live-surface-lab/data/backlog.md)
+
+--- workers ---
+  worker-1                                   ship   normal     working: sample worker 1 is healthy
+  worker-10                                  ship   normal     working: sample worker 10 is healthy
+  worker-11                                  ship   normal     working: sample worker 11 is healthy
+  worker-12                                  ship   normal     working: sample worker 12 is healthy
+  worker-13                                  ship   normal     working: sample worker 13 is healthy
+  worker-14                                  ship   normal     working: sample worker 14 is healthy
+  worker-15                                  ship   normal     working: sample worker 15 is healthy
+  worker-16                                  ship   normal     working: sample worker 16 is healthy
+  worker-17                                  ship   normal     working: sample worker 17 is healthy
+  worker-18                                  ship   normal     working: sample worker 18 is healthy
+  worker-19                                  ship   normal     working: sample worker 19 is healthy
+  worker-2                                   ship   normal     working: sample worker 2 is healthy
+  worker-20                                  ship   normal     working: sample worker 20 is healthy
+  worker-21                                  ship   normal     working: sample worker 21 is healthy
+  worker-22                                  ship   normal     working: sample worker 22 is healthy
+  worker-23                                  ship   normal     working: sample worker 23 is healthy
+  worker-24                                  ship   normal     working: sample worker 24 is healthy
+  worker-25                                  ship   normal     working: sample worker 25 is healthy
+  worker-3                                   ship   normal     working: sample worker 3 is healthy
+  worker-4                                   ship   normal     working: sample worker 4 is healthy
+  worker-5                                   ship   normal     working: sample worker 5 is healthy
+  worker-6                                   ship   normal     working: sample worker 6 is healthy
+  worker-7                                   ship   normal     working: sample worker 7 is healthy
+  worker-8                                   ship   normal     working: sample worker 8 is healthy
+  worker-9                                   ship   normal     working: sample worker 9 is healthy
+
+Note: the last event line is history, not current state.

@@ -1,0 +1,9 @@
+scenario=representative 36-listener steady-state process-event lab
+reconcile=reconciled: published=0 started=36 stopped=0 uncertain=0 failed=0
+live_listeners_before_sample=36
+sample_seconds=20
+counted_guard_program_starts=sleep=94 ps=94 sed=94 stat=94 perl=94 total=470
+counted_guard_program_starts_per_second=23.50
+target_program_starts_per_second=well under 40
+remaining_sources_after_retire=0
+instrumentation=DEBUG trap on the real guard command stream; one non-executing command-substitution ps echo per tick excluded

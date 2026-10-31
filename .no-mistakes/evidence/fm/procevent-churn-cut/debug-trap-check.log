@@ -1,0 +1,9 @@
+TRACE	set -T
+TRACE	f
+TRACE	f
+TRACE	out=$(COLUMNS=10000 LC_ALL=C ps -p $$ -o lstart= -o command= 2>/dev/null | sed "s/x/x/")
+TRACE	COLUMNS=10000 LC_ALL=C ps -p $$ -o lstart= -o command= 2> /dev/null
+TRACE	sed "s/x/x/"
+TRACE	/usr/bin/stat -f %d . > /dev/null
+TRACE	perl -e "exit 0"
+TRACE	sleep 0.01

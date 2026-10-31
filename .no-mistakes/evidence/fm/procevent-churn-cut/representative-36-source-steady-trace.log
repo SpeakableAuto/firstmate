@@ -1,0 +1,470 @@
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+sleep	sleep "$half"
+sleep	sleep "$half"
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+sleep	sleep "$half"
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+sleep	sleep "$half"
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+sleep	sleep "$half"
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+sleep	sleep "$half"
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+sleep	sleep "$half"
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+sleep	sleep "$half"
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sleep	sleep "$half"
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+sleep	sleep "$half"
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+ps	ps -p "$pid" -o lstart= -o command= 2> /dev/null
+sed	sed 's/^[[:space:]]*//'
+sed	sed 's/^[[:space:]]*//'
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+stat	/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2> /dev/null
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+perl	perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e '
+sleep	sleep "$half"
+sleep	sleep "$half"

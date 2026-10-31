@@ -1,0 +1,7 @@
+UNREAD STATUS (new since last drain, not re-printed after this presentation):
+decision-a note: context attached
+decision-b note: context attached
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+decision-a [key=route] needs-decision: choose route
+decision-b [key=access] blocked: waiting for access
+OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'

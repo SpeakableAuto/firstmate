@@ -1,0 +1,4 @@
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+decision-a [key=route] needs-decision: choose route
+decision-b [key=access] blocked: waiting for access
+OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
