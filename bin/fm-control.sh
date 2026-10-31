@@ -82,9 +82,9 @@
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
 #              standing charter is never rewritten.
-#              Before the old agent stops, a ship copy whose HEAD has left
-#              the recorded ship branch refuses, and a Treehouse pool slot
-#              takes the shared project lock and passes its owner-claim check
+#              Before the old agent stops, a ship copy whose HEAD has moved
+#              away from the recorded ship branch tip refuses, and a Treehouse
+#              pool slot takes the shared project lock and passes its owner-claim check
 #              (bin/fm-wake-lib.sh owns both checks); that lock is held until
 #              the launch owner has published the record, so contention or a
 #              foreign claim refuses with the old agent still running.

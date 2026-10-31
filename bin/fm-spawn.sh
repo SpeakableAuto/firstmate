@@ -163,6 +163,8 @@
 #   task id until teardown returns it, so a task whose worker has exited keeps
 #   its copy; an offered slot that another local task record still names (one
 #   taken before crew spawns leased) stays leased and another is taken instead.
+#   FM_SPAWN_TREEHOUSE_LEASE_TIMEOUT bounds each lease attempt in positive
+#   integer seconds (default 300; an invalid value also uses 300).
 #   A spawn that aborts before metadata publication returns its own lease when
 #   the copy is clean and unrecorded, and otherwise prints the release command.
 #   Relaunch accepts an existing claim only when both its task id and its
@@ -170,8 +172,8 @@
 #   unresolvable claim home, or an unreadable claim refuses, while an absent
 #   claim preserves the legacy behavior for slots taken before claims existed
 #   (bin/fm-wake-lib.sh's fm_treehouse_relaunch_slot_check). A ship relaunch
-#   also refuses a copy whose HEAD has left the recorded ship branch
-#   (spawn_relaunch_branch_check). Both run before any endpoint is stopped,
+#   also refuses a copy whose HEAD has moved away from the recorded ship branch
+#   tip (spawn_relaunch_branch_check). Both run before any endpoint is stopped,
 #   created, or adopted, so a refusal leaves no rebound pane behind.
 #   Under that same lock fresh spawn writes the slot's owner claim, which is
 #   what lets teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh
@@ -4283,12 +4285,12 @@ spawn_send_key() { # <target> <key>
 # leased and the spawn refuses.
 # Runs under the Treehouse project lock taken before the room check and held
 # through metadata publication, so no other spawn or return interleaves.
-# Each lease call is bounded (FM_SPAWN_TREEHOUSE_LEASE_TIMEOUT seconds, default
-# 300), because it runs under the project lock that every spawn, relaunch, and
-# return of the project needs: an unbounded hang there would stall them all. A
-# call that hits the bound may already have leased a slot whose path it never
-# reported, so the spawn refuses, records nothing, and names how to find and
-# release such a lease rather than guessing at one.
+# Each lease call uses the bound documented in the script header because it
+# runs under the project lock that every spawn, relaunch, and return of the
+# project needs: an unbounded hang there would stall them all. A call that hits
+# the bound may already have leased a slot whose path it never reported, so the
+# spawn refuses, records nothing, and names how to find and release such a lease
+# rather than guessing at one.
 SPAWN_TREEHOUSE_LEASE_ATTEMPTS=16
 SPAWN_TREEHOUSE_LEASE_TIMEOUT=${FM_SPAWN_TREEHOUSE_LEASE_TIMEOUT:-300}
 case "$SPAWN_TREEHOUSE_LEASE_TIMEOUT" in ''|*[!0-9]*|0) SPAWN_TREEHOUSE_LEASE_TIMEOUT=300 ;; esac

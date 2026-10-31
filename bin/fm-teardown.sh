@@ -66,10 +66,11 @@
 # A gh lookup error falls back to the content check; if that is also inconclusive,
 # teardown refuses rather than risk discarding unlanded work.
 # Uncommitted changes are never landed.
-# Those proofs read HEAD, so a ship task's recorded branch must also hold no
-# commit outside HEAD and every remote (and, for local-only, the local default
-# branch): a copy whose HEAD has left that branch while it keeps such commits is
-# not the task's own work and refuses (validate_recorded_branch_teardown_safety).
+# Those proofs read HEAD, so a surviving recorded ship branch is checked too
+# when HEAD has moved away from it. Commits already in HEAD, on a remote, or on
+# the local default branch are safe; otherwise the branch must pass the same
+# merged-PR or content-in-default proof before teardown proceeds
+# (validate_recorded_branch_teardown_safety).
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
@@ -1948,10 +1949,10 @@ validate_worktree_teardown_safety() {
 # HEAD has left the recorded ship branch while that branch survives - a legacy
 # slot Treehouse reset to the default branch when it offered it to a later
 # spawn is exactly that (bin/fm-wake-lib.sh's fm_worktree_recorded_branch_state
-# owns the case). So the recorded branch itself must hold nothing that is in
-# neither HEAD nor a remote (nor, for a local-only project, the local default
-# branch); otherwise the copy is not the task's own work and returning it would
-# leave those commits to a branch nothing tracks.
+# owns the case). The recorded branch is therefore checked directly. Commits
+# already in HEAD, on a remote, or on the local default branch are safe; any
+# others must pass the same merged-PR or content-in-default proof before the
+# copy is returned.
 validate_recorded_branch_teardown_safety() {
   local branch landed=''
   [ "$KIND" = ship ] || return 0
