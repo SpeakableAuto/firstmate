@@ -2,7 +2,7 @@
 
 `config/wedge-alarm` configures the shared pane-independent channels for serious supervision failures.
 The away-mode sub-supervisor uses them when escalation injection cannot confirm a submit past `FM_MAX_DEFER_SECS`.
-The optional supervisor watchdog also uses them when a main-owned durable wake exceeds `FM_WATCHDOG_WAKE_AGE_SECS` while Claude is idle or done.
+The optional supervisor watchdog also uses them when a main-owned durable wake exceeds `FM_WATCHDOG_WAKE_AGE_SECS` while Claude is idle or done, when the installed Claude version drifts from its verified pin, and when a stalled supervisor enters the down stage.
 Each caller owns its condition, durable marker, and rate limit, and the away-mode caller retains its tmux status-line flash as an additional signal.
 
 ## Channels
@@ -20,7 +20,8 @@ It lists channel directives, one per non-empty, non-comment line, and every list
 
 An absent `config/wedge-alarm` behaves as `auto`, which is default-on on macOS.
 This is deliberate because both callers represent a supervision failure that should not remain silent.
-The away-mode caller alerts at most once per max-defer window, while the supervisor watchdog alerts once for each unchanged oldest-row episode and rearms when that row changes or the main-owned queue drains.
+The away-mode caller alerts at most once per max-defer window.
+The supervisor watchdog alerts once for each unchanged oldest-row episode, once per newly seen unverified Claude version, and once when a stall enters the down stage.
 
 Each channel is best-effort.
 A missing binary or non-zero exit logs a warning and continues to the next channel without aborting the caller.
@@ -29,7 +30,25 @@ On timeout or daemon shutdown, the notifier process group is terminated and the 
 AppleScript receives the summary as an argv item rather than interpolated source, so summary text cannot alter the script.
 See [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
+## Urgent captain alerts
+
+[`bin/fm-urgent-alert.sh`](../bin/fm-urgent-alert.sh) is a separate path that reaches the captain away from the machine through Hermes, for conditions that block all priority progress and that firstmate cannot repair itself.
+It accepts only `supervisor-down`, `carve-out-blocked` and `machine-down`, plus its own `test` subcommand, and never carries routine updates.
+It always sends to Hermes' Telegram home channel.
+Hermes keeps the platform login; firstmate only hands it the plain message.
+Delivery is rate limited to one message per condition per six hours and the same condition and key once per day after Hermes confirms it.
+Attempts that may have reached the phone are capped at 12 per condition in any rolling 24 hours, so one condition never uses up another's tries, plus a shared ceiling of 24 across all conditions as a flood guard.
+Every attempt is logged in `state/urgent-alert/sent.jsonl`, delivered attempts include the platform message id, and message text and Telegram chat ids are never logged.
+Once Hermes has run, a timeout, an error exit or a reply without a message id may still have reached the phone, so it is reported as failed and counts toward both caps instead of being treated as delivered.
+While the condition stays true, the same key retries every two hours, so after a Telegram or network outage of any length the alert arrives within about two hours of service returning, unless the shared ceiling of 24 has been reached.
+Delivery waits up to 60 seconds, enough for Hermes to start and finish its own Telegram retries, and an unreadable log line is skipped rather than muting later alerts.
+`fm_urgent_alert` in [`bin/fm-active-alert-lib.sh`](../bin/fm-active-alert-lib.sh) owns those limits and the log format, and the script header owns the commands, including the scheduled `check-machine` probe.
+`tests/fm-active-alert.test.sh` covers the allow-list, fixed Telegram hand-off, rate limits, retry, message-id log and machine probe with a recording sender.
+
 ## Test safety
+
+The urgent sender refuses automatic Hermes discovery in tests and no-mistakes gate agents; its marker and explicit sender override contract lives in [`bin/fm-active-alert-lib.sh`](../bin/fm-active-alert-lib.sh).
+The alert suite injects recording senders with an isolated home and executable search path, and proves that both automatic lookup routes are refused under test and gate markers.
 
 Every notifier routes through `FM_WEDGE_ALARM_EXEC` in `wedge_alarm_emit`.
 The daemon defaults that seam to `discard` when sourced as a library, and test callers otherwise replace the notifier or point the seam at a recorder before exercising an alert.

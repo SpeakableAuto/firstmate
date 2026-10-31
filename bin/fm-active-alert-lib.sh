@@ -224,3 +224,202 @@ wedge_alarm_notify() {  # <summary> <marker>
   done
   return 0
 }
+
+# --- urgent captain escalation ----------------------------------------------
+# The wedge alarm above is local and fires for every supervision failure. The
+# urgent path below reaches the captain away from the machine, so it accepts
+# only conditions that block all priority progress and that firstmate cannot
+# repair itself, never routine updates:
+#   supervisor-down    the supervisor still makes no progress after its nudge,
+#                      or an enabled restart failed or could not be proven
+#   carve-out-blocked  a captain-only decision is blocking every priority task
+#   machine-down       a fleet machine stayed unreachable
+#   test               the explicit setup test message only
+#
+# Delivery writes the plain message to a private file and runs
+# `hermes send --to telegram --json --file <file>`; Hermes owns the platform
+# login, so firstmate never reads it. FM_HERMES_BIN overrides the binary.
+# FM_URGENT_ALERT_EXEC, when set, REPLACES the sender for tests: it runs with
+# `telegram` as $1 and the message on stdin, and prints Hermes-shaped JSON
+# ({"success":true,"message_id":"..."} or {"error":"..."}).
+#
+# Rate limits, checked under one lock before any send:
+#   - at most one delivered message per condition per
+#     FM_URGENT_ALERT_CONDITION_SECS (default 21600, six hours);
+#   - the same condition and key are not re-sent within
+#     FM_URGENT_ALERT_DEDUPE_SECS (default 86400) once Hermes confirmed it;
+#   - at most FM_URGENT_ALERT_CONDITION_DAILY_CAP (default 12) attempts that
+#     may have reached the phone per condition in any rolling 24 hours, so
+#     one condition never uses up another condition's tries;
+#   - at most FM_URGENT_ALERT_DAILY_CAP (default 24) such attempts across all
+#     conditions in any rolling 24 hours, as the flood guard;
+#   - a delivery that never started may retry the same condition after
+#     FM_URGENT_ALERT_RETRY_SECS (default 900).
+# Once Hermes has run, a reply without a confirmed message id (a timeout, an
+# error exit, or no id) may still have reached the phone. It reports failed
+# and is logged as `unconfirmed`, which counts toward both caps and holds
+# the condition for other keys, but never makes its own key a duplicate:
+# while the caller keeps asking, the same key retries every
+# FM_URGENT_ALERT_UNCONFIRMED_RETRY_SECS (default 7200), so within the caps an
+# outage of any length delays delivery by at most that interval once service
+# returns.
+# Only a sender that never started (not found, not executable, a
+# usage error, or a runner that could not start) is a plain `failed` attempt.
+# Delivery is bounded by FM_URGENT_ALERT_TIMEOUT_SECS (default 60), which
+# covers Hermes startup and its own Telegram retries.
+# The message id comes from the whole reply as JSON, else from its last JSON
+# line, so a text banner before the JSON does not hide it.
+# Every attempt appends one JSON line to state/urgent-alert/sent.jsonl with its
+# time, condition, key, result, reason, message hash and, when delivered, the
+# platform message id. Message text and platform chat ids are never logged.
+# Limits are read line by line, so an unreadable (torn) line is ignored rather
+# than muting every later alert, and a new record never joins a torn line.
+
+fm_urgent_alert_condition_ok() {  # <condition>
+  case "$1" in supervisor-down|carve-out-blocked|machine-down|test) return 0 ;; esac
+  return 1
+}
+
+fm_urgent_alert_int() {  # <value> <default>
+  case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac
+}
+
+fm_urgent_alert_record() {  # <log> <now> <condition> <key> <result> <reason> <sha> [message-id]
+  if [ -s "$1" ] && [ "$(tail -c 1 "$1" | od -An -c | tr -d ' ')" != '\n' ]; then printf '\n' >> "$1"; fi
+  jq -cn --argjson at "$2" --arg condition "$3" --arg key "$4" --arg result "$5" \
+    --arg reason "$6" --arg sha "$7" --arg id "${8:-}" \
+    '{at:$at,condition:$condition,key:$key,result:$result,reason:$reason,message_sha:$sha}
+     + (if $id == "" then {} else {message_id:$id} end)' >> "$1"
+}
+
+# Automatic Hermes discovery is refused under FM_TEST_SEAM=1 or any set
+# NO_MISTAKES_GATE. Tests must inject FM_URGENT_ALERT_EXEC or FM_HERMES_BIN
+# explicitly; they are trusted sender overrides, not automatic discovery.
+# The bounded runner starts a background job, which does not reliably inherit
+# a pipe on stdin, so the message travels through a private file instead.
+fm_urgent_alert_deliver() {  # <message-file>  -> prints Hermes JSON
+  local file=$1 hermes timeout
+  timeout=$(fm_urgent_alert_int "${FM_URGENT_ALERT_TIMEOUT_SECS:-}" 60)
+  [ "$timeout" -gt 0 ] || timeout=60
+  if [ -n "${FM_URGENT_ALERT_EXEC:-}" ]; then
+    # shellcheck disable=SC2016 # Positional parameters expand in the child.
+    FM_WEDGE_ALARM_TIMEOUT_SECS=$timeout wedge_alarm_run_bounded urgent \
+      bash -c 'exec "$1" "$2" < "$3"' fm-urgent-alert "$FM_URGENT_ALERT_EXEC" telegram "$file"
+    return
+  fi
+  hermes=${FM_HERMES_BIN:-}
+  # Tests/gate agents must explicitly inject a sender; never discover a login.
+  if [ -z "$hermes" ] && { [ "${FM_TEST_SEAM:-}" = 1 ] || [ "${NO_MISTAKES_GATE+x}" = x ]; }; then return 123; fi
+  [ -n "$hermes" ] || hermes=$(command -v hermes 2>/dev/null) || hermes=
+  [ -n "$hermes" ] || [ ! -x "$HOME/.local/bin/hermes" ] || hermes="$HOME/.local/bin/hermes"
+  [ -n "$hermes" ] || return 127
+  FM_WEDGE_ALARM_TIMEOUT_SECS=$timeout wedge_alarm_run_bounded urgent \
+    "$hermes" send --to telegram --json --file "$file"
+}
+
+fm_urgent_alert_mtime() {  # <path>
+  /usr/bin/stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+}
+
+# Record and print one fm_urgent_alert result; FM_URGENT_ALERT_RESULT lets a
+# caller read it without a subshell that would lose FM_URGENT_ALERT_MESSAGE_ID.
+fm_urgent_alert_result() {
+  # Callers inspect this result after the helper returns.
+  # shellcheck disable=SC2034
+  FM_URGENT_ALERT_RESULT=$1
+  printf '%s\n' "$1"
+}
+
+# fm_urgent_alert <condition> <key> <message>
+# Prints one result: sent, skipped:<reason>, or failed:<reason>. Returns 0 for
+# sent or a rate-limited skip, 1 for a failed delivery, 2 for
+# a condition outside the urgent list or an empty key or message. Also sets
+# FM_URGENT_ALERT_RESULT and, when sent, FM_URGENT_ALERT_MESSAGE_ID.
+fm_urgent_alert() {
+  local condition=$1 key=${2:-} message=${3:-} dir log lock now sha out id rc reason
+  local cond_secs dedupe_secs cap cond_cap retry_secs unconf_secs held verdict
+  FM_URGENT_ALERT_MESSAGE_ID=
+  fm_urgent_alert_condition_ok "$condition" || { fm_urgent_alert_result 'failed:unknown-condition'; return 2; }
+  [ -n "$key" ] && [ -n "$message" ] || { fm_urgent_alert_result 'failed:empty'; return 2; }
+  dir="${FM_STATE_OVERRIDE:-$FM_HOME/state}/urgent-alert"
+  log="$dir/sent.jsonl"
+  lock="$dir/lock"
+  mkdir -p "$dir" || { fm_urgent_alert_result 'failed:state'; return 1; }
+  now=$(date +%s)
+  sha=$(printf '%s' "$message" | shasum -a 256 | awk '{print $1}')
+  cond_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_CONDITION_SECS:-}" 21600)
+  dedupe_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_DEDUPE_SECS:-}" 86400)
+  cap=$(fm_urgent_alert_int "${FM_URGENT_ALERT_DAILY_CAP:-}" 24)
+  cond_cap=$(fm_urgent_alert_int "${FM_URGENT_ALERT_CONDITION_DAILY_CAP:-}" 12)
+  retry_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_RETRY_SECS:-}" 900)
+  unconf_secs=$(fm_urgent_alert_int "${FM_URGENT_ALERT_UNCONFIRMED_RETRY_SECS:-}" 7200)
+  # A lock left by a killed sender is reclaimed after two minutes; a live one
+  # means another sender is mid-delivery, so this attempt stands down.
+  if ! mkdir "$lock" 2>/dev/null; then
+    held=$(fm_urgent_alert_mtime "$lock") || held=$now
+    if [ "$((now - held))" -lt 120 ] || ! rm -rf "$lock" || ! mkdir "$lock" 2>/dev/null; then
+      fm_urgent_alert_result 'skipped:busy'
+      return 0
+    fi
+  fi
+  [ -f "$log" ] || : > "$log"
+  reason=
+  verdict=$(jq -rRn --argjson now "$now" --arg c "$condition" --arg k "$key" \
+    --argjson cs "$cond_secs" --argjson ds "$dedupe_secs" --argjson rs "$retry_secs" \
+    --argjson us "$unconf_secs" --argjson cap "$cap" --argjson cc "$cond_cap" '
+      [ inputs | fromjson? | select(type == "object" and (.at | type) == "number") ] as $r
+      | [ $r[] | select(.result == "sent") ] as $s
+      | [ $r[] | select(.result == "unconfirmed") ] as $u
+      | [ $s[], $u[] | select($now - .at < 86400) ] as $day
+      | if any($s[]; .condition == $c and .key == $k and $now - .at < $ds) then "duplicate"
+        elif any($u[]; .condition == $c and .key == $k and $now - .at < $us) then "unconfirmed-backoff"
+        elif any($s[], ($u[] | select(.key != $k)); .condition == $c and $now - .at < $cs) then "condition-rate-limit"
+        elif any($r[]; .result == "failed" and .condition == $c and $now - .at < $rs) then "retry-backoff"
+        elif ([ $day[] | select(.condition == $c) ] | length) >= $cc then "condition-daily-cap"
+        elif ($day | length) >= $cap then "daily-cap"
+        else "ok" end' "$log" 2>/dev/null) \
+    || verdict=corrupt-log
+  case "$verdict" in
+    ok) ;;
+    duplicate|unconfirmed-backoff|condition-rate-limit|retry-backoff|condition-daily-cap|daily-cap) reason=$verdict ;;
+    *) reason='corrupt-log' ;;
+  esac
+  if [ -n "$reason" ]; then
+    fm_urgent_alert_record "$log" "$now" "$condition" "$key" skipped "$reason" "$sha"
+    rm -rf "$lock"
+    fm_urgent_alert_result "skipped:$reason"
+    return 0
+  fi
+  ( umask 077; printf '%s\n' "$message" > "$lock/message" )
+  if out=$(fm_urgent_alert_deliver "$lock/message" 2>/dev/null); then rc=0; else rc=$?; fi
+  id=$(printf '%s' "$out" | jq -rRs '
+    (try fromjson catch null) as $whole
+    | (if $whole != null then [$whole] else [split("\n")[] | fromjson?] end)
+    | map(select(type == "object" and .success == true and .error == null and .message_id != null))
+    | last | .message_id // empty | tostring' 2>/dev/null) || id=
+  if [ "$rc" -eq 0 ] && [ -n "$id" ]; then
+    fm_urgent_alert_record "$log" "$now" "$condition" "$key" sent '' "$sha" "$id"
+    rm -rf "$lock"
+    # shellcheck disable=SC2034 # Read by callers after a send.
+    FM_URGENT_ALERT_MESSAGE_ID=$id
+    fm_urgent_alert_result 'sent'
+    return 0
+  fi
+  # Only a sender that never started is a plain failure; once Hermes ran,
+  # the message may have reached the phone.
+  verdict=unconfirmed
+  case "$rc" in
+    0) reason='no-message-id' ;;
+    123) reason='real-send-refused'; verdict=failed ;;
+    124) reason='delivery-timeout' ;;
+    2) reason='hermes-usage-error'; verdict=failed ;;
+    125) reason='runner-not-started'; verdict=failed ;;
+    126) reason='hermes-not-executable'; verdict=failed ;;
+    127) reason='hermes-not-found'; verdict=failed ;;
+    *) reason='delivery-failed' ;;
+  esac
+  fm_urgent_alert_record "$log" "$now" "$condition" "$key" "$verdict" "$reason" "$sha"
+  rm -rf "$lock"
+  fm_urgent_alert_result "failed:$reason"
+  return 1
+}

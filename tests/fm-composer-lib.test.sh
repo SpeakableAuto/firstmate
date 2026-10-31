@@ -189,6 +189,22 @@ test_matrix_claude_bare_nbsp_row() {
   pass "matrix: claude's ❯+NBSP row reads empty on every profile in both locales (#1988)"
 }
 
+test_claude_2295_unstyled_try_text_is_pending() {
+  local idle typed screen claude_idle claude_done claude_working
+  claude_idle=$(printf 'claude\tidle')
+  claude_done=$(printf 'claude\tdone')
+  claude_working=$(printf 'claude\tworking')
+  idle=$'────────────────────────\n❯'"$NBSP"$'Try "review this?"\n────────────────────────'
+  assert_screen "Claude 2.1.295 unstyled Try text while idle" pending "$CAPS_STYLED" "$idle" '' "$claude_idle"
+  assert_screen "Claude 2.1.295 unstyled Try text while done" pending "$CAPS_STYLED" "$idle" '' "$claude_done"
+  assert_screen "Claude 2.1.295 unstyled Try text while working" pending "$CAPS_STYLED" "$idle" '' "$claude_working"
+  typed=$'────────────────────────\n❯ a typed draft\n────────────────────────'
+  assert_screen "Claude 2.1.295 ordinary typed draft" pending "$CAPS_STYLED" "$typed" '' "$claude_idle"
+  screen=$'❯'"$NBSP"$'Try "review this?"'
+  assert_screen "Claude Try text without a proven pair" pending "$CAPS_STYLED" "$screen" '' "$claude_idle"
+  pass "Claude 2.1.295 unstyled Try text is conservatively pending"
+}
+
 test_matrix_claude_titled_rule_live_herdr_capture() {
   # The last four ANSI rows of an idle Claude pane read through Herdr on
   # 2026-10-21. Earlier viewport transcript content was omitted from the
@@ -1009,6 +1025,7 @@ test_idle_placeholder_is_empty
 test_idle_placeholder_case_mode_is_explicit
 test_real_text_is_pending
 test_matrix_claude_bare_nbsp_row
+test_claude_2295_unstyled_try_text_is_pending
 test_matrix_claude_titled_rule_live_herdr_capture
 test_matrix_claude_arrow_statusline_footer
 test_claude_2295_slash_menu_keeps_the_typed_composer_selected

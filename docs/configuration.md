@@ -585,7 +585,7 @@ Selecting any other supervisor backend, including `zellij`, `orca`, or `cmux`, r
 
 ## Supervision active-alert channels (config/wedge-alarm)
 
-`config/wedge-alarm` provides the shared active-alert channels for an away-mode injection wedge and the supervisor watchdog's aged durable-wake alarm.
+`config/wedge-alarm` configures the shared supervision active-alert channels.
 See [`wedge-alarm.md`](wedge-alarm.md) for the authoritative channel and caller behavior, [`verification/supervision.md`](verification/supervision.md#wedge-alarm-channels) for active evidence, and [`examples/wedge-alarm`](examples/wedge-alarm) for a copyable config.
 
 ## Trace context propagation (config/trace-context / FM_TRACE_CONTEXT)

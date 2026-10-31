@@ -642,6 +642,7 @@ ANSI capture preserves de-emphasized placeholder style.
 
 If the ANSI capture ever fails, the plain fallback declares itself unstyled.
 The classifier then degrades a glyph row carrying trailing text to `unknown` instead of misreading ghost suggestions as typed input.
+An unstyled Claude `Try "..."` suggestion is not excepted: it cannot be told apart from a typed draft, so it holds as pending input.
 That safely defers injection and eventually raises the wedge alarm.
 
 ### Away-mode injection

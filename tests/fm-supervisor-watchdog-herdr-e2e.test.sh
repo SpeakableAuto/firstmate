@@ -178,4 +178,80 @@ for mode in queue queue-draft; do
   fi
 done
 unset FM_WAKE_QUEUE
+# Controlled stall: a hung supervisor that ignores input and only ticks its
+# spinner is nudged (withheld while busy), then restarted in its own pane from
+# the newest handoff, while a neighbouring worker pane keeps running.
+CASE_DIR="$LAB/stall"
+mkdir -p "$CASE_DIR/data"
+cat > "$CASE_DIR/hung.sh" <<'HUNG'
+#!/usr/bin/env bash
+helper=$1 session=$2 pane=$3
+"$helper" run "$session" pane report-agent "$pane" --source watchdog-fixture --agent claude --state working >/dev/null
+n=0
+while :; do
+  printf '\033[2J\033[H❯ supervise the fleet\n✻ Thinking… (%ss · esc to interrupt)\n\n────────────────────\n❯ \n────────────────────' "$n"
+  n=$((n + 1))
+  sleep 1
+done
+HUNG
+cat > "$CASE_DIR/restarted.sh" <<'RESTARTED'
+#!/usr/bin/env bash
+# Stands in for the relaunched Claude: records its prompt, reports idle.
+helper=$1 session=$2 pane=$3 directory=$4
+shift 4
+printf '%s\n' "$*" > "$directory/restart-prompt"
+"$helper" run "$session" pane report-agent "$pane" --source watchdog-fixture --agent claude --state idle >/dev/null
+printf '\033[2J\033[H● Restarted supervisor\n────────────────────\n❯ \n────────────────────'
+exec -a claude sleep 600
+RESTARTED
+printf 'handoff\n' > "$CASE_DIR/data/supervisor-handoff-1030.md"
+h workspace create --cwd "$CASE_DIR" --label watchdog-stall > "$CASE_DIR/workspace.json"
+PANE_ID=$(h pane list | jq -er '.result.panes[-1].pane_id')
+h workspace create --cwd "$CASE_DIR" --label watchdog-worker > "$CASE_DIR/worker.json"
+WORKER_PANE=$(h pane list | jq -er '.result.panes[-1].pane_id')
+h pane run "$WORKER_PANE" "sleep 600" >/dev/null
+printf -v command_line 'bash %q %q %q %q' "$CASE_DIR/hung.sh" "$HERDR_LAB_HELPER" "$HERDR_LAB_SESSION" "$PANE_ID"
+h pane run "$PANE_ID" "$command_line" >/dev/null
+DIR="$CASE_DIR/state"
+STATE="$CASE_DIR/state"
+mkdir -p "$DIR"
+FM_DATA_OVERRIDE="$CASE_DIR/data"
+FM_WAKE_QUEUE="$DIR/.wake-queue"
+STALL_SECS=10 FM_WATCHDOG_STALL_RESTART=1 STALL_RESTART=1 RESTART_CWD=$CASE_DIR WATCHDOG_RESTART_POLLS=20
+printf -v RESTART_COMMAND 'bash %q %q %q %q %q' "$CASE_DIR/restarted.sh" "$HERDR_LAB_HELPER" "$HERDR_LAB_SESSION" "$PANE_ID" "$CASE_DIR"
+watchdog_under_way() { return 0; }
+fm_urgent_alert() { printf '%s\n' "$*" >> "$CASE_DIR/urgent"; }
+for _ in {1..40}; do
+  watchdog_observe 2>/dev/null
+  [ "$VERDICT" = not-idle ] && break
+  sleep 0.2
+done
+[ "$VERDICT" = not-idle ] || fail "hung stub not ready: $VERDICT"
+hung_pid=$(h pane process-info --pane "$PANE_ID" | jq -r '.result.process_info.foreground_processes[0].pid')
+watchdog_tick
+sleep 10
+watchdog_tick
+[ "$(jq -r .stage "$DIR/stall.json")" = nudged ] || fail "ticking spinner counted as progress: $(jq -c . "$DIR/stall.json")"
+pass 'real Herdr transport: a ticking spinner on a hung supervisor is not progress'
+[ "$(jq -r 'select(.event=="withheld") | .detail' "$DIR/events.jsonl")" = stall-nudge-not-idle ] || fail 'busy supervisor was nudged'
+pass 'real Herdr transport: a busy hung supervisor is never typed into'
+sleep 10
+watchdog_tick
+[ "$(tail -1 "$DIR/events.jsonl" | jq -c '[.event,.detail]')" = '["restarted","supervisor"]' ] \
+  || fail "restart not proven (events: $(tail -3 "$DIR/events.jsonl" | tr '\n' ' '))"
+! kill -0 "$hung_pid" 2>/dev/null || fail 'hung supervisor process survived the restart'
+grep -q "supervisor-handoff-1030.md" "$CASE_DIR/restart-prompt" || fail 'restart prompt lacks the handoff'
+pass 'real Herdr transport: a stalled supervisor is restarted in its own pane from the latest handoff'
+[ "$(h pane process-info --pane "$WORKER_PANE" | jq -r '.result.process_info.foreground_processes[0].name')" = sleep ] \
+  || fail 'worker pane was disturbed by the restart'
+pass 'real Herdr transport: the neighbouring worker pane is untouched'
+[ ! -e "$CASE_DIR/urgent" ] || fail 'a proven restart paged the captain'
+sleep 10
+watchdog_tick
+sleep 10
+watchdog_tick
+[ "$(jq -r .stage "$DIR/stall.json")" = down ] || fail "no-progress after restart not detected: $(jq -c . "$DIR/stall.json")"
+grep -q '^supervisor-down ' "$CASE_DIR/urgent" || fail 'supervisor-down alert not raised'
+pass 'real Herdr transport: no progress after a restart raises one urgent alert'
+unset FM_DATA_OVERRIDE FM_WAKE_QUEUE
 printf 'verification: Herdr %s; stub supervisor only, real Claude/operator check remains required\n' "$(h status --json | jq -r .server.version)"

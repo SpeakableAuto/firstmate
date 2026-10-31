@@ -1,8 +1,9 @@
 # Supervisor watchdog
 
 The optional watchdog runs outside the supervisor session and nudges an idle Claude supervisor on Herdr after a network error and restored provider connectivity, or when queued wakes sit undelivered.
+It also detects a supervisor that stops making progress while work is under way, nudges it once, and sends an urgent alert when it remains stalled.
 Its state machine, guards, supported configuration, and residual input race are owned by [`bin/fm-supervisor-watchdog.sh`](../bin/fm-supervisor-watchdog.sh), whose `--help` prints the operator contract.
-It does not restart a process, repair a dead shell, or manage workers.
+It never touches worker panes or repairs a dead shell.
 Other primary harnesses and tmux, Zellij, Orca, cmux, and Codex App are unsupported and must not be configured as targets.
 
 Recovery requires two continuous, semantically unchanged terminal-network-error observations with an empty prompt at least ten seconds apart, followed by fresh checks immediately before sending one short resume line.
@@ -15,14 +16,61 @@ The watchdog never clears mixed input or retries an ambiguous submission, and it
 Separately, a main-owned wake older than `FM_WATCHDOG_WAKE_AGE_SECS` (600 seconds by default) while Claude is idle or done queues a `check: supervisor-watchdog` row and uses the [configured active-alert channels](wedge-alarm.md).
 That alarm fires once for each unchanged oldest-row episode, rearming when the oldest row changes or the queue drains.
 Because an idle supervisor wakes only on new input, the watchdog then rings it with one short drain line when the prompt stays empty and unchanged for the idle interval, which covers a turn that ended without its Stop hook and so left no watcher running.
-The ring uses the network nudge's guards: native idle or done, no busy footer or usage-limit notice, a dim suggestion counted as empty, fresh checks before typing, and exactly its own line before Enter.
+The ring uses the network nudge's guards: native idle or done, no busy footer or usage-limit notice, a proven empty composer (an unstyled Claude suggestion such as `Try "..."` reads as pending, so the ring waits), fresh checks before typing, and exactly its own line before Enter.
 A confirmed ring repeats after another stable idle interval and the backoff while the same row stays undelivered; an ambiguous ring holds and alerts until the oldest row changes or the queue drains.
+
+## Stall recovery
+
+While the home needs supervision, the watchdog treats a newer watcher beacon only while Claude is natively idle or done, and it also treats an acknowledged wake, a newer supervisor transcript file, or a semantic screen change as progress.
+For the progress fingerprint, spinner rows, elapsed durations, token counters, Claude's rotating hint row below the prompt and a composer row containing only an unstyled `Try "..."` suggestion are normalized away, while other numbers remain semantic progress.
+That unstyled suggestion still reads as pending input under every typing guard, so its rotation cannot hide a stall and the watchdog does not type over it.
+A visible usage-limit notice counts as progress for one quiet interval after it first appears, because Claude resumes by itself and typing would cancel that.
+If the notice still shows and nothing else progressed for another interval, the watchdog sends one urgent alert that the supervisor is stopped by a usage limit, without typing or restarting.
+After the watchdog types a nudge or ring, or restarts the supervisor, a screen or transcript change no longer counts until an idle watcher beacon, an acknowledged wake or a usage-limit notice shows real progress, because a supervisor that fails every turn (for example after its login expires) changes the screen without recovering.
+After `FM_WATCHDOG_STALL_SECS` (1800 seconds by default) without progress it sends one guarded nudge, which is withheld when the supervisor is busy or its version is unverified.
+By default, a second quiet interval never stops the supervisor and sends one urgent alert that it did not recover after the nudge and needs restarting by hand.
+Set `FM_WATCHDOG_STALL_RESTART=1` to opt into automatic restart from the latest handoff after that second interval.
+The opt-in restart reads a fresh frame and proceeds only when the installed version is verified and the composer is explicitly empty.
+A pending, unknown or unreadable composer, an unsupported harness, or version drift holds an enabled restart and sends one urgent alert that says unsent input may be in the box.
+An enabled restart records a durable `restarting` receipt before it stops only the target pane's foreground processes, relaunches `FM_WATCHDOG_RESTART_COMMAND` in `FM_WATCHDOG_RESTART_CWD` with a prompt naming the newest `data/supervisor-handoff-*.md`, and proves a real Claude agent process started in that pane.
+If a tick ends during that restart, the next tick accepts an already proven Claude agent or retries the restart once under the same verified-empty-composer guard, while a second interruption or unproven retry sends the urgent supervisor-down alert.
+If automatic restart has since been turned off, a leftover restart record never stops or relaunches anything: a running Claude resumes normal watching, and a pane without one sends the urgent alert.
+An unproven restart or no progress for another interval after a proven one sends one urgent supervisor-down alert through the [urgent captain alert path](wedge-alarm.md#urgent-captain-alerts).
+The same incident retries delivery through the alert limiter every two hours until Hermes confirms it with a message id, within the limiter's per-condition and shared daily caps.
+A send that may have reached the phone but was not confirmed never closes the incident.
+
+## Claude version drift
+
+The job pins the complete `claude --version` output that passed the live check.
+A different installed version raises one check wake and one active alert per newly seen version and switches the watchdog to a degraded mode rather than disabling it.
+In that mode nothing is typed into the supervisor, because the network nudge, queue ring and stall nudge depend on verified screen reading, and an enabled restart is held.
+Semantic pane changes do not count as progress during drift, while idle or done watcher beacons, wake acknowledgements and transcript movement still do.
+The wake-age alert and stall timer keep running, and after the second quiet interval one urgent supervisor-down alert is sent.
+
+After every Claude upgrade, run the live guard and move the pin only when it passes:
+
+```sh
+FM_LIVE_WATCHDOG_CLAUDE=1 bash bin/fm-test-run.sh tests/fm-supervisor-watchdog-claude-live-e2e.test.sh
+```
+
+It runs the installed Claude in a guarded named Herdr lab with its API base URL pointed at a closed local port, so it spends no tokens, and its last line prints the exact pin.
+Apply that pin to the installed job and reload it:
+
+```sh
+P="$HOME/Library/LaunchAgents/local.firstmate.supervisor-watchdog.plist"
+launchctl bootout "gui/$(id -u)/local.firstmate.supervisor-watchdog"
+plutil -replace EnvironmentVariables.FM_WATCHDOG_CLAUDE_VERSION -string "$(claude --version)" "$P"
+plutil -lint "$P"
+launchctl bootstrap "gui/$(id -u)" "$P"
+```
+
+Keep one Claude install on the job's `PATH`, the same binary the supervisor runs, so the pinned version is the version in use.
 
 ## Local launchd setup
 
 Use a stable installed checkout, not a task worktree, and choose the exact supervisor session and pane explicitly.
-Pin the complete output of `claude --version` in the job and perform a supervised real-harness acceptance check after installation before relying on unattended recovery.
-A version change disables recovery until that operator verification is repeated.
+Pin the complete output of `claude --version` in the job after the live guard above passes.
+A version change degrades recovery as described above until the guard is repeated and the pin moved.
 Choose an HTTPS endpoint on the actual provider's API host that answers without credentials; a 401 or 404 is sufficient to prove transport reachability, while 429, server errors, TLS failures, and timeouts defer the action.
 This probe checks connectivity, not account access or model availability.
 
@@ -48,6 +96,9 @@ Set `PATH` to include the actual installed locations of Bash, Herdr, Claude, jq,
     <key>FM_SUPERVISOR_TARGET</key><string>chosen-session:w1:p1</string>
     <key>FM_WATCHDOG_CLAUDE_VERSION</key><string>REPLACE WITH VERIFIED VERSION OUTPUT</string>
     <key>FM_WATCHDOG_PROBE_URL</key><string>https://api.anthropic.com/</string>
+    <key>FM_WATCHDOG_STALL_RESTART</key><string>0</string>
+    <key>FM_WATCHDOG_RESTART_COMMAND</key><string>claude</string>
+    <key>FM_WATCHDOG_TRANSCRIPT_DIR</key><string>/absolute/.claude/projects/encoded-supervisor-cwd</string>
   </dict>
   <key>StartInterval</key><integer>15</integer>
   <key>RunAtLoad</key><true/>
@@ -83,8 +134,8 @@ Retain or rotate the local logs according to the home's normal operational polic
 
 Run the portable regression with `bin/fm-test-run.sh tests/fm-supervisor-watchdog.test.sh`.
 Run the isolated transport test with `bin/fm-test-run.sh tests/fm-supervisor-watchdog-herdr-e2e.test.sh`.
-It uses a guarded, named Herdr lab and a stub supervisor that prints fixture pane text.
+It uses a guarded, named Herdr lab and a stub supervisor that prints fixture pane text, including a controlled stall that exercises the opt-in restart in its own pane while a neighbouring worker pane keeps running.
 It exercises real terminal delivery and native state reporting without contacting any model provider.
 This is transport evidence, not certification of the installed Claude renderer or provider credentials.
-The operator must verify the real supervisor after installation, including the visible error shape, unchanged empty prompt, provider probe, and one confirmed resume turn.
+The live guard `tests/fm-supervisor-watchdog-claude-live-e2e.test.sh` certifies the installed Claude renderer: the visible error shape, the empty and drafted prompt, and one confirmed resume turn.
 Current version-specific results belong in [runtime backend verification](verification/runtime-backends.md).

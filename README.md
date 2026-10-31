@@ -223,7 +223,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/fleet-ledger.md](docs/fleet-ledger.md) - the opt-in activity ledger outside tools can read to follow a home's tasks, and its record contract.
 - [docs/disk-guard.md](docs/disk-guard.md) - configure, verify, and install the optional local low-disk cache guard.
 - [docs/work-drive.md](docs/work-drive.md) - move build output and caches to a dedicated work drive and check daily for internal-disk growth.
-- [docs/supervisor-watchdog.md](docs/supervisor-watchdog.md) - install optional external network and aged-wake recovery for an idle Claude supervisor.
+- [docs/supervisor-watchdog.md](docs/supervisor-watchdog.md) - install optional external network, aged-wake and stall recovery for a Claude supervisor.
 - [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure shared active-alert channels for serious supervision failures.
 - [docs/tmux-backend.md](docs/tmux-backend.md) - current setup and limits for the tmux reference backend.
 - [docs/herdr-backend.md](docs/herdr-backend.md) - current setup, CI coverage, safety boundaries, and limits for the Herdr backend.
