@@ -150,18 +150,24 @@
 #   even when they select different backends. A fresh spawn first takes the
 #   per-home task-set lock and refuses rather than waits when forced teardown owns
 #   it; relaunch is exempt because the existing task's control lock covers it.
-#   A fresh Treehouse-backed spawn also takes the project-identity lock in the local
-#   root Firstmate home's state directory before slot allocation and holds it through
+#   A fresh Treehouse-backed spawn and a relaunch whose recorded worktree is a
+#   Treehouse pool slot also take the project-identity lock in the local root
+#   Firstmate home's state directory. Fresh spawn takes it before slot allocation;
+#   relaunch takes it before reading the slot-owner claim; both hold it through
 #   task metadata publication. Teardown holds that same lock while proving and
 #   returning a slot, so allocation cannot reuse a slot before its owner record
-#   is published. The slot is a durable `treehouse get --lease` held under the
+#   is published and relaunch cannot race an allocation or return. The fresh
+#   spawn's slot is a durable `treehouse get --lease` held under the
 #   task id until teardown returns it, so a task whose worker has exited keeps
 #   its copy; an offered slot that another local task record still names (one
 #   taken before crew spawns leased) stays leased and another is taken instead.
 #   A spawn that aborts before metadata publication returns its own lease when
 #   the copy is clean and unrecorded, and otherwise prints the release command.
-#   Relaunch refuses a recorded slot whose owner claim names another task.
-#   Under that same lock it writes the slot's owner claim, which is
+#   Relaunch accepts an existing claim only when both its task id and its
+#   canonical home match the relaunching home; a conflicting task or home, an
+#   unresolvable claim home, or an unreadable claim refuses, while an absent
+#   claim preserves the legacy behavior for slots taken before claims existed.
+#   Under that same lock fresh spawn writes the slot's owner claim, which is
 #   what lets teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh
 #   owns the claim and bin/fm-teardown.sh owns what it protects. A slot that
 #   cannot be claimed refuses the spawn rather than launching a worker whose slot

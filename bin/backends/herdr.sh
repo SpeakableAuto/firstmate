@@ -2249,12 +2249,13 @@ EOF
 #                 proves the pane is shell-only: the registered agent's process
 #                 has exited and Herdr kept its registration (issue #4115;
 #                 Herdr does not release a Pi registration on TUI shutdown when
-#                 a nested shell sits under the pane's top shell, the crew
-#                 shape). This is the explicit agent-free reason: the pane is
-#                 recoverable, and the record it carries is not evidence of a
-#                 running agent. No registered status outranks the process
-#                 view, because a killed mid-turn agent leaves `working`
-#                 behind just as a quit one leaves `idle`.
+#                 a nested shell sits under the pane's top shell, the legacy
+#                 crew shape left by interactive `treehouse get` before durable
+#                 crew leases). This is the explicit agent-free reason: the
+#                 pane is recoverable, and the record it carries is not
+#                 evidence of a running agent. No registered status outranks
+#                 the process view, because a killed mid-turn agent leaves
+#                 `working` behind just as a quit one leaves `idle`.
 #   live        - `agent get` succeeds with a registered agent_status and the
 #                 process-level view is `agent` or `other`: a harness process
 #                 is running, or something that is not a bare shell is, so the
