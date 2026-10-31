@@ -869,6 +869,29 @@ test_copy_reset_off_its_pushed_recorded_branch_allows() {
   pass "a copy off its recorded branch tears down once that branch is fully pushed"
 }
 
+test_copy_reset_off_its_squash_merged_branch_allows() {
+  local case_dir rc pr_head
+  case_dir=$(make_case reset-off-squash-merged)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'branch=fm/task-x1' >> "$case_dir/state/task-x1.meta"
+  wt_commit_file "$case_dir" feature.txt hello "merged branch work"
+  append_pr_meta_for_current_head "$case_dir"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  land_on_origin_main "$case_dir" feature.txt hello
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  git -C "$case_dir/project" fetch -q origin
+  git -C "$case_dir/wt" checkout -q --detach origin/main
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "reset-off-squash-merged: a recorded branch proved by its merged PR is safe to tear down"$'\n'"$(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "reset-off-squash-merged: teardown printed a REFUSED line"
+  pass "a copy reset off its squash-merged recorded branch tears down"
+}
+
 test_squash_merged_branch_deleted_allows() {
   local case_dir rc pr_head
   case_dir=$(make_case squash-merged)
@@ -4578,6 +4601,7 @@ test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_copy_reset_off_its_recorded_branch_refuses
 test_copy_reset_off_its_pushed_recorded_branch_allows
+test_copy_reset_off_its_squash_merged_branch_allows
 test_local_only_force_overrides_unpushed
 test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses

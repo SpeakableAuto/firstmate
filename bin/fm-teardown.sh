@@ -1513,8 +1513,8 @@ patch_id_for_commit() {
 }
 
 unpushed_patches_are_in_pr_head() {
-  local pr_head=$1 current base pr_patch_ids commit patch_id unpushed
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  local pr_head=$1 work_ref=${2:-HEAD} current base pr_patch_ids commit patch_id unpushed
+  current=$(git -C "$WT" rev-parse --verify "$work_ref" 2>/dev/null) || return 1
   base=$(git -C "$WT" merge-base "$current" "$pr_head" 2>/dev/null) || return 1
   pr_patch_ids=$(
     git -C "$WT" log --format=%H "$base..$pr_head" -- 2>/dev/null \
@@ -1525,7 +1525,7 @@ unpushed_patches_are_in_pr_head() {
       | sort -u
   ) || return 1
   [ -n "$pr_patch_ids" ] || return 1
-  unpushed=$(git -C "$WT" log --format=%H HEAD --not --remotes -- 2>/dev/null) || return 1
+  unpushed=$(git -C "$WT" log --format=%H "$work_ref" --not --remotes -- 2>/dev/null) || return 1
   [ -n "$unpushed" ] || return 1
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -1543,7 +1543,7 @@ EOF
 # current work is not contained in the PR head, no PR is found, or any gh error
 # occurs - the caller then falls back to the content check.
 pr_is_merged() {
-  local branch=$1 target view state remainder head resolved_url current landed=0
+  local branch=$1 work_ref=${2:-HEAD} target view state remainder head resolved_url current landed=0
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
   else
@@ -1563,10 +1563,10 @@ pr_is_merged() {
   esac
   [ -n "$head" ] || return 1
   ensure_commit_object "$target" "$head" || return 1
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  current=$(git -C "$WT" rev-parse --verify "$work_ref" 2>/dev/null) || return 1
   if git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null; then
     landed=1
-  elif unpushed_patches_are_in_pr_head "$head"; then
+  elif unpushed_patches_are_in_pr_head "$head" "$work_ref"; then
     landed=1
   fi
   [ "$landed" = 1 ] || return 1
@@ -1585,7 +1585,7 @@ pr_is_merged() {
 # "added". Returns non-zero when inconclusive (no default ref, or a merge conflict),
 # so the caller refuses rather than guesses.
 content_in_default() {
-  local name ref default_tree merged_tree
+  local work_ref=${1:-HEAD} name ref default_tree merged_tree
   name=$(default_branch) || return 1
   if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
     git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
@@ -1597,7 +1597,7 @@ content_in_default() {
   fi
   default_tree=$(git -C "$WT" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
   [ -n "$default_tree" ] || return 1
-  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" "$work_ref" 2>/dev/null) || return 1
   merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
   [ "$merged_tree" = "$default_tree" ]
 }
@@ -1608,9 +1608,9 @@ content_in_default() {
 # default branch (fallback, which also covers the no-PR and gh-error paths). False
 # only for genuinely unlanded work.
 work_is_landed() {
-  local branch=$1
-  pr_is_merged "$branch" && return 0
-  content_in_default
+  local branch=$1 work_ref=${2:-HEAD}
+  pr_is_merged "$branch" "$work_ref" && return 0
+  content_in_default "$work_ref"
 }
 
 # The completion links this teardown already holds locally. A scout's
@@ -1963,6 +1963,7 @@ validate_recorded_branch_teardown_safety() {
   case "$FM_WORKTREE_BRANCH_STATE" in
     match|moved) return 0 ;;
     stranded)
+      work_is_landed "$branch" "refs/heads/$branch" && return 0
       echo "REFUSED: worktree $WT is on $FM_WORKTREE_BRANCH_HEAD, not task $ID's recorded branch $branch, which has commits on no remote:" >&2
       printf '%s\n' "$FM_WORKTREE_BRANCH_STRANDED" >&2
       echo "This copy is not the task's own work, so its checks cannot prove that work landed. Once inspected, check out $branch in $WT and re-run, push $branch, or get the captain's explicit OK to discard, then --force." >&2
