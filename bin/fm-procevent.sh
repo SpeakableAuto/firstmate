@@ -239,7 +239,7 @@
 # about the source side of the handoff.
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -407,7 +407,10 @@ adapter_self_announcing() {  # <adapter>
 
 source_file()  { printf '%s/%s.source\n' "$REG" "$1"; }
 source_field() {  # <source-id> <field>
-  sed -n "s/^$2=//p" "$(source_file "$1")" | head -1
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in "$2="*) printf '%s\n' "${line#*=}"; return 0 ;; esac
+  done < "$REG/$1.source"
 }
 source_kind() { source_field "$1" kind; }
 source_owner_task() { source_field "$1" owner_task; }

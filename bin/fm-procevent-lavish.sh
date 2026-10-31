@@ -132,16 +132,12 @@
 # runner's own: output that reached the runner is stored before it is announced.
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
-# shellcheck source=bin/fm-pr-lib.sh
-. "$SCRIPT_DIR/fm-pr-lib.sh"
-# shellcheck source=bin/fm-wake-lib.sh
-. "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-procevent-lib.sh
-. "$SCRIPT_DIR/fm-procevent-lib.sh"
+# This adapter invokes the generic runner through its public command only.
+# Result reads and blocking polls need none of its queue/lock initialization.
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2; }
@@ -440,12 +436,18 @@ cmd_poll() {
 # leading block is also what stops prompt payload text from forging a session
 # field. <field> is a fixed field name supplied by this adapter, never by input.
 session_field() {  # <result-file> <field>
-  awk -v field="$2" '
-    $0 == "session:" { in_s=1; next }
-    in_s && $0 !~ /^[[:space:]]/ { exit }
-    in_s && $0 ~ "^[[:space:]]+" field ":[[:space:]]*[A-Za-z_]+[[:space:]]*$" {
-      sub("^[[:space:]]+" field ":[[:space:]]*", ""); sub(/[[:space:]]*$/, ""); print; exit }
-  ' "$1"
+  local line in_session=0 value pattern
+  pattern="^[[:space:]]+$2:[[:space:]]*([A-Za-z_]+)[[:space:]]*$"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$line" = session: ]; then in_session=1; continue; fi
+    [ "$in_session" -eq 1 ] || continue
+    case "$line" in [[:space:]]*) ;; *) break ;; esac
+    if [[ "$line" =~ $pattern ]]; then
+      value=${BASH_REMATCH[1]}
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done < "$1"
 }
 
 # Classify a completed result into a lifecycle state for the handler.

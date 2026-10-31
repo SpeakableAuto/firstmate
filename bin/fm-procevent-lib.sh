@@ -617,13 +617,21 @@ fm_procevent_claim_state_root_field_valid() {  # <canonical-state-root>
 }
 
 fm_procevent_claim_state_root_identity() {  # <state-root>
-  local state=$1 canonical device inode owner mode
-  canonical=$(fm_procevent_state_root_resolve "$state") || return 1
+  local state=$1 canonical fields device inode owner mode
+  # Resolve afresh on every guard tick: retaining a previous identity would
+  # miss replacement or permission changes. One stat supplies all four fields.
+  canonical=$(CDPATH='' cd -P -- "$state" 2>/dev/null && pwd -P) || return 1
   fm_procevent_claim_state_root_field_valid "$canonical" || return 1
-  device=$(fm_pr_file_device "$canonical") || return 1
-  inode=$(fm_pr_file_inode "$canonical") || return 1
-  owner=$(id -u) || return 1
-  mode=$(fm_pr_file_mode "$canonical") || return 1
+  [ -d "$canonical" ] && [ ! -L "$canonical" ] || return 1
+  if [ "$_FM_UNAME" = Darwin ]; then
+    fields=$(/usr/bin/stat -f '%d %i %u %Lp' "$canonical" 2>/dev/null) || return 1
+  else
+    fields=$(stat -c '%d %i %u %a' "$canonical" 2>/dev/null) || return 1
+  fi
+  IFS=' ' read -r device inode owner mode <<< "$fields"
+  [ "$owner" = "$EUID" ] || return 1
+  case "$mode" in ''|*[!0-7]*) return 1 ;; esac
+  [ $((8#$mode & 8#022)) -eq 0 ] || return 1
   printf '%s\t%s\t%s\t%s\t%s\n' "$canonical" "$device" "$inode" "$owner" "$mode"
 }
 
@@ -999,13 +1007,8 @@ fm_procevent_path_normalize() {
 }
 
 fm_procevent_directory_owned_by_current_user() {
-  local owner
-  if [ "$(uname)" = Darwin ]; then
-    owner=$(/usr/bin/stat -f %u "$1" 2>/dev/null)
-  else
-    owner=$(stat -c %u "$1" 2>/dev/null)
-  fi
-  [ "$owner" = "$(id -u)" ]
+  # Bash tests ownership against the effective uid, just like id -u.
+  [ -O "$1" ]
 }
 
 # fm_procevent_state_root_resolve <state-root>

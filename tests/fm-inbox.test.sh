@@ -58,6 +58,25 @@ count_wakes() {
   fi
 }
 
+# A status refresh must not launch tools per worker. The PATH sentinels catch
+# the old sed/head/tail/basename/cut pipeline through the public status command.
+status_home=$(make_home status-budget)
+status_tools="$TMP_ROOT/status-tools"
+mkdir -p "$status_tools"
+for tool in sed head tail basename cut; do
+  printf '#!/usr/bin/env bash\nprintf "unexpected %%s\\n" "%s" >&2\nexit 97\n' "$tool" > "$status_tools/$tool"
+  chmod +x "$status_tools/$tool"
+done
+printf 'mode=first\nkind=ship\nkind=scout\nmode=second\n' > "$status_home/state/worker.meta"
+printf 'working: old\nworking: final' > "$status_home/state/worker.status"
+status_out=$(PATH="$status_tools:$PATH" run_inbox "$status_home" status 2> "$TMP_ROOT/status.err") \
+  || fail "status must not spawn per-worker text tools"
+[ ! -s "$TMP_ROOT/status.err" ] || fail "status launched per-worker text tools"
+assert_contains "$status_out" 'ship' "status keeps first metadata value"
+assert_contains "$status_out" 'first' "status keeps first mode"
+assert_contains "$status_out" 'working: final' "status keeps unterminated last event"
+pass "status reads worker metadata and final event without per-worker programs"
+
 # --- human note path is unchanged without the new flags ---------------------
 
 home=$(make_home human)
