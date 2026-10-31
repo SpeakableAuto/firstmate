@@ -1,0 +1,51 @@
+SCENARIO 1 SETUP: spawn a real Codex worker through production fm-spawn, real Treehouse, and the named Herdr lab.
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg
+warning: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg/data/live-owner/launch-brief.md records no ship branch; defaulting to legacy branch fm/live-owner
+warning: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg/data/live-owner/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode local-only - confirm its definition of done matches
+notice: live-owner ships mode=local-only while the standing posture for project is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+🌳 Setting up worktree...
+🌳 Leased worktree at ~/.treehouse/project-ee4229/1/project. Run 'treehouse return ~/.treehouse/project-ee4229/1/project' to release it.
+spawned live-owner harness=codex kind=ship mode=local-only yolo=off window=fm-lab-slot-preflight-73951-14379:w1:p2 worktree=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M6A08SV9F9D2Z0J4QRCPXTHX/.nm-live-slot-runtime/treehouse-home/.treehouse/project-ee4229/1/project
+LIVE_AGENT_BEFORE={"agent":"codex","status":null}
+LOCK_REFUSAL=fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg
+error: another Treehouse slot allocation or return is in progress for /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M6A08SV9F9D2Z0J4QRCPXTHX/.nm-live-slot-runtime/project; refusing to relaunch live-owner before its agent is touched - retry once it finishes
+LIVE_AGENT_AFTER_LOCK={"agent":"codex","status":null}
+CLAIM_REFUSAL=fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg
+error: task live-owner's recorded worktree /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M6A08SV9F9D2Z0J4QRCPXTHX/.nm-live-slot-runtime/treehouse-home/.treehouse/project-ee4229/1/project is now claimed by task successor-task (home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg/other-home); refusing to relaunch live-owner inside another task's copy - its pushed work lives on its branch, so dispatch it afresh from there
+LIVE_AGENT_AFTER_CLAIM={"agent":"codex","status":null}
+SCENARIO 1 PASS: both contention and a foreign claim refused before the live worker or record changed.
+SCENARIO 2 SETUP: stop and remove the recorded endpoint, then attempt a Herdr rebind while another home claims the slot.
+REBIND_REFUSAL=fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg
+error: task live-owner's recorded worktree /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M6A08SV9F9D2Z0J4QRCPXTHX/.nm-live-slot-runtime/treehouse-home/.treehouse/project-ee4229/1/project is claimed by task live-owner from home /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.IsiZjg/other-home, not relaunching home /private/var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T/fm-lab.IsiZjg; refusing to relaunch inside another home's copy
+PANES_UNCHANGED=[]
+SCENARIO 2 PASS: missing-endpoint rebind refused without minting a pane.
+SCENARIO 3 SETUP: spawn a second real task, create branch-only work, and move its Treehouse copy back to main.
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg
+warning: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg/data/live-branch/launch-brief.md records no ship branch; defaulting to legacy branch fm/live-branch
+warning: /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg/data/live-branch/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode local-only - confirm its definition of done matches
+notice: live-branch ships mode=local-only while the standing posture for project is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+🌳 Setting up worktree...
+🌳 Leased worktree at ~/.treehouse/project-ee4229/2/project. Run 'treehouse return ~/.treehouse/project-ee4229/2/project' to release it.
+spawned live-branch harness=sh kind=ship mode=local-only yolo=off window=fm-lab-slot-preflight-73951-14379:w2:p2 worktree=/Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M6A08SV9F9D2Z0J4QRCPXTHX/.nm-live-slot-runtime/treehouse-home/.treehouse/project-ee4229/2/project
+TEARDOWN_REFUSAL=fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no live watcher process holds this home lock (last beat: 9s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair missing watcher supervision according to the session-start block for this harness; do not use shell &.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REFUSED: worktree /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M6A08SV9F9D2Z0J4QRCPXTHX/.nm-live-slot-runtime/treehouse-home/.treehouse/project-ee4229/2/project is on a detached HEAD at 042b7a925b99, not task live-branch's recorded branch fm/live-branch, which has commits on no remote:
+84e6bf5 live unpushed branch proof
+This copy is not the task's own work, so its checks cannot prove that work landed. Once inspected, check out fm/live-branch in /Users/maxverstappen/.no-mistakes/worktrees/02f7ed18429b/01M6A08SV9F9D2Z0J4QRCPXTHX/.nm-live-slot-runtime/treehouse-home/.treehouse/project-ee4229/2/project and re-run, push fm/live-branch, or get the captain's explicit OK to discard, then --force.
+PRESERVED_BRANCH_TIP=84e6bf5
+SCENARIO 3 PASS: teardown preserved the task, endpoint, and recorded branch-only commit.
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg
+WARNING: watcher still down (same stale episode; last beat: 10s ago, grace 300s) - full banner already printed this episode.
+teardown: reaping leaked worktree process(es) for live-branch: 83617 87542 87546
+teardown: force-killing leaked worktree process(es) for live-branch: 83617
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/vv/kd1wysfd2b92rzhw2y_sh_sm0000gn/T//fm-lab.IsiZjg
+WARNING: watcher still down (same stale episode; last beat: 14s ago, grace 300s) - full banner already printed this episode.
+HERDR_VERSION=0.9.3
+HERDR_PROTOCOL=22
+LAB_TEARDOWN_PASS: named lab removed and default-session tripwire remained intact.
