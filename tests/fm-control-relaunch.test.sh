@@ -1229,6 +1229,58 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one() {
   pass "fm-spawn --relaunch: with no explicit harness it reuses the task's recorded one, never the crew default"
 }
 
+# add_pool_slot_task <case-dir> <id> <claim-task|unreadable|none>: the ship task,
+# but recorded in a Treehouse-shaped pool slot (<pool>/1/repo beside the pool
+# state file), with that slot's owner claim naming <claim-task>, unreadable, or
+# absent.
+add_pool_slot_task() {
+  local dir=$1 id=$2 claim=$3 slot marker
+  add_ship_task "$dir" "$id" claude
+  slot="$dir/pool/1/repo"
+  git -C "$dir/proj" worktree add --quiet --detach "$slot"
+  printf '{"worktrees":[]}\n' > "$dir/pool/treehouse-state.json"
+  sed -i.bak "s|^worktree=.*|worktree=$slot|" "$dir/home/state/$id.meta" && rm -f "$dir/home/state/$id.meta.bak"
+  printf '%s' "$slot" > "$dir/fake/cwd"
+  marker="$dir/pool/1/.fm-slot-owner"
+  case "$claim" in
+    none) ;;
+    unreadable) mkdir -p "$marker" ;;
+    *) printf 'task=%s\nhome=%s\n' "$claim" "$dir/home" > "$marker" ;;
+  esac
+}
+
+# A task whose worker exited before crew spawns leased their slots may have had
+# its copy handed to another task, which then claimed it. Relaunching would
+# start the replacement inside that other task's copy, so relaunch refuses
+# before touching the endpoint; an unreadable claim proves nothing and refuses
+# too, while the task's own claim relaunches normally.
+test_spawn_relaunch_refuses_a_slot_claimed_by_another_task() {
+  local dir out rc
+  dir=$(new_case slotother rl60)
+  add_pool_slot_task "$dir" rl60 rl60-successor
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rl60 --relaunch); rc=$?
+  [ "$rc" -ne 0 ] || fail "relaunch started a replacement inside another task's claimed slot: $out"
+  assert_contains "$out" "now claimed by task rl60-successor" "the refusal should name the task that holds the slot"
+  [ ! -s "$dir/fake/literal" ] || fail "a refused relaunch typed into the endpoint: $(cat "$dir/fake/literal")"
+  assert_grep "worktree=$dir/pool/1/repo" "$dir/home/state/rl60.meta" "a refused relaunch changed the task record"
+
+  dir=$(new_case slotunreadable rl61)
+  add_pool_slot_task "$dir" rl61 unreadable
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rl61 --relaunch); rc=$?
+  [ "$rc" -ne 0 ] || fail "relaunch proceeded past an unreadable slot claim: $out"
+  assert_contains "$out" "unreadable slot claim" "the refusal should name the unreadable claim"
+
+  dir=$(new_case slotmine rl62)
+  add_pool_slot_task "$dir" rl62 rl62
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rl62 --relaunch); rc=$?
+  expect_code 0 "$rc" "relaunch of a task in its own claimed slot should proceed"$'\n'"$out"
+  assert_contains "$out" "spawned rl62" "the task's own slot should relaunch"
+  pass "fm-spawn --relaunch: refuses a slot claimed by another task or unreadable, relaunches its own"
+}
+
 # A promoted scout records kind=ship and a custom ship branch in its meta, but
 # its brief is the scout scaffold: it never gained a Ship branch line, and a
 # relaunch cannot regenerate the brief (--branch-prefix is refused there). The
@@ -2630,6 +2682,7 @@ test_explicit_secondmate_harness_ignores_configured_profile_axes
 test_ship_relaunch_ignores_the_crew_harness_config
 test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
 test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch
+test_spawn_relaunch_refuses_a_slot_claimed_by_another_task
 test_promoted_scout_relaunch_receives_the_current_delivery_contract
 test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch
