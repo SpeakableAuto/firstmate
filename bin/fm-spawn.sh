@@ -3304,7 +3304,10 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ "$KIND" != secondmate ] && {
+  { [ "$RELAUNCH" -eq 0 ] && [ "$BACKEND" != orca ]; } ||
+    { [ "$RELAUNCH" -eq 1 ] && fm_treehouse_pool_slot "$PROJ_ABS" "$RELAUNCH_WT"; }
+}; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
     exit 1
@@ -3315,19 +3318,21 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
     exit 1
   fi
   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
-  # The task-set lock already serializes fresh allocations across this home.
-  # Keep the room seam read-only; reclamation is an explicit spawn action under
-  # the existing locks, followed by a fresh count before treehouse get.
-  # shellcheck source=bin/fm-worktree-slots-lib.sh
-  . "$SCRIPT_DIR/fm-worktree-slots-lib.sh"
-  if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
-    if [ "$FM_WORKTREE_SLOT_RECLAIMABLE" -gt 0 ]; then
-      fm_worktree_slots_reclaim "$STATE" "$SPAWN_TREEHOUSE_PROJECT_LOCK" apply \
-        "$((FM_WORKTREE_SLOT_HELD - FM_WORKTREE_SLOT_CAP + 1))" || true
-    fi
-    if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE" && [ "$FM_PLACEMENT_ACTIVE" != 1 ]; then
-      echo "error: refusing spawn: $FM_WORKTREE_SLOT_ROOM_REASON" >&2
-      exit 1
+  if [ "$RELAUNCH" -eq 0 ]; then
+    # The task-set lock already serializes fresh allocations across this home.
+    # Keep the room seam read-only; reclamation is an explicit spawn action under
+    # the existing locks, followed by a fresh count before treehouse get.
+    # shellcheck source=bin/fm-worktree-slots-lib.sh
+    . "$SCRIPT_DIR/fm-worktree-slots-lib.sh"
+    if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
+      if [ "$FM_WORKTREE_SLOT_RECLAIMABLE" -gt 0 ]; then
+        fm_worktree_slots_reclaim "$STATE" "$SPAWN_TREEHOUSE_PROJECT_LOCK" apply \
+          "$((FM_WORKTREE_SLOT_HELD - FM_WORKTREE_SLOT_CAP + 1))" || true
+      fi
+      if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE" && [ "$FM_PLACEMENT_ACTIVE" != 1 ]; then
+        echo "error: refusing spawn: $FM_WORKTREE_SLOT_ROOM_REASON" >&2
+        exit 1
+      fi
     fi
   fi
 fi
@@ -4588,28 +4593,48 @@ agy_spawn_fail() {  # <detail>
   rovo_endpoint_cleanup
 }
 
-if [ "$RELAUNCH" -eq 1 ] && [ "$BACKEND" = orca ]; then
-  [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
-elif [ "$RELAUNCH" -eq 1 ]; then
+if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ] && fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
   # A slot whose owner claim names another task was handed to that task while
   # this one's worker was gone (before crew spawns leased their slots), so the
   # recorded copy is no longer this task's and a replacement started there
-  # would work inside the other task's copy. An unreadable claim proves nothing
-  # either way. Both refuse before the endpoint is touched; an absent claim is a
-  # slot taken before claims existed and keeps its earlier behaviour.
-  if [ "$KIND" != secondmate ] && fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
-    fm_treehouse_slot_owner_state "$WT" "$ID"
-    case "$FM_TREEHOUSE_SLOT_OWNER" in
-      other)
-        echo "error: task $ID's recorded worktree $WT is now claimed by task $FM_TREEHOUSE_SLOT_OWNER_ID (home ${FM_TREEHOUSE_SLOT_OWNER_HOME:-unrecorded}); refusing to relaunch $ID inside another task's copy - its pushed work lives on its branch, so dispatch it afresh from there" >&2
+  # would work inside the other task's copy. A same-id claim from another home
+  # is also another task identity. An unreadable claim proves nothing either
+  # way. All refuse before the endpoint is touched; an absent claim is a slot
+  # taken before claims existed and keeps its earlier behaviour.
+  [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ] || {
+    echo "error: task $ID's Treehouse slot claim cannot be checked without the shared project lock; refusing to relaunch" >&2
+    exit 1
+  }
+  fm_treehouse_slot_owner_state "$WT" "$ID"
+  case "$FM_TREEHOUSE_SLOT_OWNER" in
+    mine)
+      if [ -z "$FM_TREEHOUSE_SLOT_OWNER_HOME" ] ||
+        ! claim_home_real=$(CDPATH='' cd -- "$FM_TREEHOUSE_SLOT_OWNER_HOME" 2>/dev/null && pwd -P); then
+        echo "error: task $ID's recorded worktree $WT has a slot claim for this task whose home '${FM_TREEHOUSE_SLOT_OWNER_HOME:-unrecorded}' cannot be resolved; refusing to relaunch" >&2
         exit 1
-        ;;
-      unsafe)
-        echo "error: task $ID's recorded worktree $WT has an unreadable slot claim at $(fm_treehouse_slot_owner_marker "$WT" || echo "<unresolvable>"); refusing to relaunch until it is inspected" >&2
+      fi
+      relaunch_home_real=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) || {
+        echo "error: relaunching home $FM_HOME cannot be resolved while checking task $ID's Treehouse slot claim; refusing to relaunch" >&2
         exit 1
-        ;;
-    esac
-  fi
+      }
+      if [ "$claim_home_real" != "$relaunch_home_real" ]; then
+        echo "error: task $ID's recorded worktree $WT is claimed by task $ID from home $claim_home_real, not relaunching home $relaunch_home_real; refusing to relaunch inside another home's copy" >&2
+        exit 1
+      fi
+      ;;
+    other)
+      echo "error: task $ID's recorded worktree $WT is now claimed by task $FM_TREEHOUSE_SLOT_OWNER_ID (home ${FM_TREEHOUSE_SLOT_OWNER_HOME:-unrecorded}); refusing to relaunch $ID inside another task's copy - its pushed work lives on its branch, so dispatch it afresh from there" >&2
+      exit 1
+      ;;
+    unsafe)
+      echo "error: task $ID's recorded worktree $WT has an unreadable slot claim at $(fm_treehouse_slot_owner_marker "$WT" || echo "<unresolvable>"); refusing to relaunch until it is inspected" >&2
+      exit 1
+      ;;
+  esac
+fi
+if [ "$RELAUNCH" -eq 1 ] && [ "$BACKEND" = orca ]; then
+  [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
+elif [ "$RELAUNCH" -eq 1 ]; then
   # No worktree is acquired: the recorded one is reused as-is. What must be
   # proven instead is that the adopted endpoint's shell is actually sitting in
   # that worktree, so the replacement agent starts where the work is rather

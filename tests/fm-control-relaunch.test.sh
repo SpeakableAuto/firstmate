@@ -1234,7 +1234,7 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one() {
 # state file), with that slot's owner claim naming <claim-task>, unreadable, or
 # absent.
 add_pool_slot_task() {
-  local dir=$1 id=$2 claim=$3 slot marker
+  local dir=$1 id=$2 claim=$3 claim_home=${4:-"$1/home"} slot marker
   add_ship_task "$dir" "$id" claude
   slot="$dir/pool/1/repo"
   git -C "$dir/proj" worktree add --quiet --detach "$slot"
@@ -1245,7 +1245,7 @@ add_pool_slot_task() {
   case "$claim" in
     none) ;;
     unreadable) mkdir -p "$marker" ;;
-    *) printf 'task=%s\nhome=%s\n' "$claim" "$dir/home" > "$marker" ;;
+    *) printf 'task=%s\nhome=%s\n' "$claim" "$claim_home" > "$marker" ;;
   esac
 }
 
@@ -1278,7 +1278,56 @@ test_spawn_relaunch_refuses_a_slot_claimed_by_another_task() {
   out=$(run_spawn "$dir" rl62 --relaunch); rc=$?
   expect_code 0 "$rc" "relaunch of a task in its own claimed slot should proceed"$'\n'"$out"
   assert_contains "$out" "spawned rl62" "the task's own slot should relaunch"
+
+  dir=$(new_case slototherhome rl63)
+  mkdir -p "$dir/other-home"
+  add_pool_slot_task "$dir" rl63 rl63 "$dir/other-home"
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rl63 --relaunch); rc=$?
+  [ "$rc" -ne 0 ] || fail "relaunch accepted the same task id claimed from another home: $out"
+  assert_contains "$out" "not relaunching home" "the refusal should identify the conflicting home"
+  [ ! -s "$dir/fake/literal" ] || fail "an other-home claim refusal typed into the endpoint: $(cat "$dir/fake/literal")"
+
+  dir=$(new_case slotunresolvedhome rl64)
+  add_pool_slot_task "$dir" rl64 rl64 "$dir/missing-home"
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rl64 --relaunch); rc=$?
+  [ "$rc" -ne 0 ] || fail "relaunch accepted a same-task claim whose home could not be resolved: $out"
+  assert_contains "$out" "cannot be resolved" "the refusal should identify the unresolvable claim home"
   pass "fm-spawn --relaunch: refuses a slot claimed by another task or unreadable, relaunches its own"
+}
+
+test_spawn_relaunch_refuses_a_held_treehouse_project_lock() {
+  local dir out rc lock holder i=0
+  dir=$(new_case slothold rl65)
+  add_pool_slot_task "$dir" rl65 rl65
+  printf 'zsh' > "$dir/fake/command"
+  lock=$(FM_HOME="$dir/home" bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$dir/proj")
+  (
+    FM_HOME="$dir/home"
+    export FM_HOME
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    sleep 30
+  ) &
+  holder=$!
+  while [ ! -e "$lock" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$lock" ] || { kill "$holder" 2>/dev/null; fail "could not stage a held Treehouse project lock"; }
+  out=$(run_spawn "$dir" rl65 --relaunch); rc=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  expect_code 1 "$rc" "a Treehouse slot relaunch should refuse the held project lock"
+  assert_contains "$out" "another Treehouse slot allocation or return is in progress" \
+    "the refusal should name the contending Treehouse operation"
+  [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] \
+    || fail "a project-lock refusal touched the endpoint"
+  assert_grep "worktree=$dir/pool/1/repo" "$dir/home/state/rl65.meta" \
+    "a project-lock refusal changed the task record"
+  pass "fm-spawn --relaunch: a Treehouse slot relaunch refuses the held project lock"
 }
 
 # A promoted scout records kind=ship and a custom ship branch in its meta, but
@@ -2683,6 +2732,7 @@ test_ship_relaunch_ignores_the_crew_harness_config
 test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
 test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch
 test_spawn_relaunch_refuses_a_slot_claimed_by_another_task
+test_spawn_relaunch_refuses_a_held_treehouse_project_lock
 test_promoted_scout_relaunch_receives_the_current_delivery_contract
 test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch
