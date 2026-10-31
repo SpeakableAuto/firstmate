@@ -848,9 +848,21 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  make_lease_treehouse "$fb" "$wt"
   fm_test_fake_healthy_claude_quota "$fb"
   printf '%s\n' "$fb"
+}
+
+# make_lease_treehouse <fakebin> <worktree>: a treehouse whose durable
+# `get --lease` reports <worktree>, the slot a fresh spawn records.
+make_lease_treehouse() {
+  local fb=$1 wt=$2
+  cat > "$fb/treehouse" <<SH
+#!/usr/bin/env bash
+[ "\${1:-}" = get ] && [ "\${2:-}" = --lease ] && printf '%s\\n' "$wt"
+exit 0
+SH
+  chmod +x "$fb/treehouse"
 }
 
 run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> -- <spawn args...>
@@ -888,10 +900,12 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 # (tmux, herdr) reports the OS-level PHYSICALLY-resolved cwd. When the project
 # itself lives under a symlinked prefix (e.g. macOS's /tmp -> /private/tmp),
 # fm-spawn.sh's PROJ_ABS - a logical `cd && pwd` - differs string-for-string
-# from that physical read even before treehouse moves the pane at all, so the
-# worktree-discovery poll used to mistake an UNMOVED pane for one that had
-# already left the project, handing validate_spawn_worktree the project's own
-# directory as "the worktree" and tripping its false isolation refusal.
+# from that physical read even before the pane moves at all, so a cwd poll
+# used to mistake an UNMOVED pane for one that had already left the project,
+# handing validate_spawn_worktree the project's own directory as "the
+# worktree" and tripping its false isolation refusal. The worktree now comes
+# from the durable lease, and the launch-boundary check must still wait out
+# the unmoved first read rather than refuse.
 # make_spawn_symlink_fakebin's tmux stub returns an unmoved project path on the
 # first pane_current_path poll, then the real worktree path from the second poll
 # onward, so this test fails loudly if the PROJ_ABS/PROJ_ABS_REAL
@@ -921,7 +935,9 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  # The durable lease reports the real worktree; the pane reads above are what
+  # the launch-boundary cwd check compares against it.
+  make_lease_treehouse "$fb" "$wt"
   fm_test_fake_healthy_claude_quota "$fb"
   printf '%s\n' "$fb"
 }
