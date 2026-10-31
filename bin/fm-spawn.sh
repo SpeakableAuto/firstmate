@@ -172,8 +172,8 @@
 #   unresolvable claim home, or an unreadable claim refuses, while an absent
 #   claim preserves the legacy behavior for slots taken before claims existed
 #   (bin/fm-wake-lib.sh's fm_treehouse_relaunch_slot_check). A ship relaunch
-#   also refuses a copy whose HEAD has moved away from the recorded ship branch
-#   tip (spawn_relaunch_branch_check). Both run before any endpoint is stopped,
+#   also refuses a copy whose HEAD is not attached to the recorded ship branch
+#   (spawn_relaunch_branch_check). Both run before any endpoint is stopped,
 #   created, or adopted, so a refusal leaves no rebound pane behind.
 #   Under that same lock fresh spawn writes the slot's owner claim, which is
 #   what lets teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh
