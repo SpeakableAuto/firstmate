@@ -66,6 +66,10 @@
 # A gh lookup error falls back to the content check; if that is also inconclusive,
 # teardown refuses rather than risk discarding unlanded work.
 # Uncommitted changes are never landed.
+# Those proofs read HEAD, so a ship task's recorded branch must also hold no
+# commit outside HEAD and every remote (and, for local-only, the local default
+# branch): a copy whose HEAD has left that branch while it keeps such commits is
+# not the task's own work and refuses (validate_recorded_branch_teardown_safety).
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
@@ -141,8 +145,9 @@
 # boundary. Fresh Treehouse spawns for that project in every local Firstmate
 # home hold the same lock from before slot allocation through metadata
 # publication, closing the publication gap. A relaunch of a recorded pool slot
-# holds it from before the owner-claim read through metadata publication, so it
-# cannot adopt the slot while allocation or return is changing its ownership.
+# holds it from before the owner-claim read - taken by bin/fm-control.sh before
+# it stops the old agent - through metadata publication, so it cannot adopt the
+# slot while allocation or return is changing its ownership.
 # Forced secondmate teardown takes it and runs the same checks for every
 # descendant Treehouse slot before touching any child.
 # These refusals are not relaxed by --force: --force authorizes discarding THIS
@@ -1133,6 +1138,7 @@ if [ "${FM_TEARDOWN_GUARD_DONE:-0}" != 1 ]; then
 fi
 HOME_PATH=$(grep '^home=' "$META" | cut -d= -f2- || true)
 PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
+RECORDED_BRANCH=$(fm_meta_get "$META" branch)
 # tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
 # (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
@@ -1935,6 +1941,38 @@ validate_worktree_teardown_safety() {
       return 1
     fi
   fi
+  validate_recorded_branch_teardown_safety
+}
+
+# Every check above reads HEAD, which proves nothing about the task's work once
+# HEAD has left the recorded ship branch while that branch survives - a legacy
+# slot Treehouse reset to the default branch when it offered it to a later
+# spawn is exactly that (bin/fm-wake-lib.sh's fm_worktree_recorded_branch_state
+# owns the case). So the recorded branch itself must hold nothing that is in
+# neither HEAD nor a remote (nor, for a local-only project, the local default
+# branch); otherwise the copy is not the task's own work and returning it would
+# leave those commits to a branch nothing tracks.
+validate_recorded_branch_teardown_safety() {
+  local branch landed=''
+  [ "$KIND" = ship ] || return 0
+  branch=${RECORDED_BRANCH:-fm/$ID}
+  if [ "$MODE" = local-only ]; then
+    landed=$(default_branch) || landed=''
+  fi
+  fm_worktree_recorded_branch_state "$WT" "$branch" "$landed"
+  case "$FM_WORKTREE_BRANCH_STATE" in
+    match|moved) return 0 ;;
+    stranded)
+      echo "REFUSED: worktree $WT is on $FM_WORKTREE_BRANCH_HEAD, not task $ID's recorded branch $branch, which has commits on no remote:" >&2
+      printf '%s\n' "$FM_WORKTREE_BRANCH_STRANDED" >&2
+      echo "This copy is not the task's own work, so its checks cannot prove that work landed. Once inspected, check out $branch in $WT and re-run, push $branch, or get the captain's explicit OK to discard, then --force." >&2
+      ;;
+    *)
+      echo "REFUSED: cannot compare worktree $WT with task $ID's recorded branch $branch." >&2
+      echo "Restore the repository state, or get the captain's explicit OK to discard, then --force." >&2
+      ;;
+  esac
+  return 1
 }
 
 # Fix 1 (see script header): does the active-or-most-recent no-mistakes run in

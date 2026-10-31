@@ -153,10 +153,12 @@
 #   A fresh Treehouse-backed spawn and a relaunch whose recorded worktree is a
 #   Treehouse pool slot also take the project-identity lock in the local root
 #   Firstmate home's state directory. Fresh spawn takes it before slot allocation;
-#   relaunch takes it before reading the slot-owner claim; both hold it through
-#   task metadata publication. Teardown holds that same lock while proving and
-#   returning a slot, so allocation cannot reuse a slot before its owner record
-#   is published and relaunch cannot race an allocation or return. The fresh
+#   relaunch takes it before reading the slot-owner claim, or inherits it from
+#   the bin/fm-control.sh transaction that took it and checked the claim before
+#   stopping the old agent; both hold it through task metadata publication.
+#   Teardown holds that same lock while proving and returning a slot, so
+#   allocation cannot reuse a slot before its owner record is published and
+#   relaunch cannot race an allocation or return. The fresh
 #   spawn's slot is a durable `treehouse get --lease` held under the
 #   task id until teardown returns it, so a task whose worker has exited keeps
 #   its copy; an offered slot that another local task record still names (one
@@ -166,7 +168,11 @@
 #   Relaunch accepts an existing claim only when both its task id and its
 #   canonical home match the relaunching home; a conflicting task or home, an
 #   unresolvable claim home, or an unreadable claim refuses, while an absent
-#   claim preserves the legacy behavior for slots taken before claims existed.
+#   claim preserves the legacy behavior for slots taken before claims existed
+#   (bin/fm-wake-lib.sh's fm_treehouse_relaunch_slot_check). A ship relaunch
+#   also refuses a copy whose HEAD has left the recorded ship branch
+#   (spawn_relaunch_branch_check). Both run before any endpoint is stopped,
+#   created, or adopted, so a refusal leaves no rebound pane behind.
 #   Under that same lock fresh spawn writes the slot's owner claim, which is
 #   what lets teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh
 #   owns the claim and bin/fm-teardown.sh owns what it protects. A slot that
@@ -3310,6 +3316,32 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
+# The relaunch boundary's branch check: a replacement starts only on the copy
+# that is the task's own work. HEAD can have moved off the recorded ship branch
+# while the branch and its commits survive (bin/fm-wake-lib.sh's
+# fm_worktree_recorded_branch_state owns how), and a replacement started there
+# would build on the wrong base while its progress note promises the copy is
+# exactly as the previous worker left it. Refuses any divergence before an
+# endpoint is touched; bin/fm-control.sh runs the same check before it stops
+# the old agent.
+spawn_relaunch_branch_check() {
+  fm_worktree_recorded_branch_state "$RELAUNCH_WT" "$BRANCH"
+  case "$FM_WORKTREE_BRANCH_STATE" in
+    match) return 0 ;;
+    moved)
+      echo "error: task $ID's recorded worktree $RELAUNCH_WT is on $FM_WORKTREE_BRANCH_HEAD, not its recorded branch $BRANCH; refusing to relaunch a replacement on a copy that is not the task's own work - once inspected, check out $BRANCH there and relaunch" >&2
+      ;;
+    stranded)
+      echo "error: task $ID's recorded worktree $RELAUNCH_WT is on $FM_WORKTREE_BRANCH_HEAD, not its recorded branch $BRANCH, which holds commits on no remote:" >&2
+      printf '%s\n' "$FM_WORKTREE_BRANCH_STRANDED" >&2
+      echo "refusing to relaunch a replacement on a copy that is not the task's own work - once inspected, check out $BRANCH there and relaunch" >&2
+      ;;
+    *)
+      echo "error: cannot compare task $ID's recorded worktree $RELAUNCH_WT with its recorded branch $BRANCH; refusing to relaunch until the copy can be inspected" >&2
+      ;;
+  esac
+  return 1
+}
 if [ "$KIND" != secondmate ] && {
   { [ "$RELAUNCH" -eq 0 ] && [ "$BACKEND" != orca ]; } ||
     { [ "$RELAUNCH" -eq 1 ] && fm_treehouse_pool_slot "$PROJ_ABS" "$RELAUNCH_WT"; }
@@ -3318,12 +3350,25 @@ if [ "$KIND" != secondmate ] && {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
     exit 1
   }
-  if ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
+  if [ "$RELAUNCH" -eq 1 ] && [ "$SPAWN_CONTROL_PARENT" = 1 ] &&
+    [ "$(cat "$SPAWN_TREEHOUSE_PROJECT_LOCK/pid" 2>/dev/null || true)" = "$PPID" ]; then
+    # bin/fm-control.sh took this lock and checked the slot claim before it
+    # stopped the old agent, and holds it until this launch returns; it, not
+    # this process, releases it, so SPAWN_TREEHOUSE_PROJECT_LOCK_HELD stays 0.
+    :
+  elif ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
     FM_PLACEMENT_REFUSAL="Treehouse project lock held for $PROJ_ABS"
     echo "error: another Treehouse slot allocation or return is in progress for $PROJ_ABS; refusing to race it" >&2
     exit 1
+  else
+    SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
   fi
-  SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
+  if [ "$RELAUNCH" -eq 1 ]; then
+    # The relaunch boundary: under the lock and before any endpoint is
+    # stopped, created, or adopted, so a refusal - including a Herdr rebind
+    # that would otherwise mint a pane first - leaves the task as found.
+    fm_treehouse_relaunch_slot_check "$RELAUNCH_WT" "$ID" "$FM_HOME" || exit 1
+  fi
   if [ "$RELAUNCH" -eq 0 ]; then
     # The task-set lock already serializes fresh allocations across this home.
     # Keep the room seam read-only; reclamation is an explicit spawn action under
@@ -3341,6 +3386,9 @@ if [ "$KIND" != secondmate ] && {
       fi
     fi
   fi
+fi
+if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" = ship ] && ! spawn_relaunch_branch_check; then
+  exit 1
 fi
 # Quota balance: a crew starts only on the allowance the balanced pick names
 # (bin/fm-quota-balance-lib.sh), before any worktree is provisioned.
@@ -4235,17 +4283,30 @@ spawn_send_key() { # <target> <key>
 # leased and the spawn refuses.
 # Runs under the Treehouse project lock taken before the room check and held
 # through metadata publication, so no other spawn or return interleaves.
+# Each lease call is bounded (FM_SPAWN_TREEHOUSE_LEASE_TIMEOUT seconds, default
+# 300), because it runs under the project lock that every spawn, relaunch, and
+# return of the project needs: an unbounded hang there would stall them all. A
+# call that hits the bound may already have leased a slot whose path it never
+# reported, so the spawn refuses, records nothing, and names how to find and
+# release such a lease rather than guessing at one.
 SPAWN_TREEHOUSE_LEASE_ATTEMPTS=16
+SPAWN_TREEHOUSE_LEASE_TIMEOUT=${FM_SPAWN_TREEHOUSE_LEASE_TIMEOUT:-300}
+case "$SPAWN_TREEHOUSE_LEASE_TIMEOUT" in ''|*[!0-9]*|0) SPAWN_TREEHOUSE_LEASE_TIMEOUT=300 ;; esac
 spawn_treehouse_lease_slot() {
   local attempt=0 leased rc
   local -a env_args=(env -u TREEHOUSE_WORKTREE_PATH)
   [ -z "${FM_PLACEMENT_ROOT:-}" ] || env_args+=("TREEHOUSE_ROOT=$FM_PLACEMENT_ROOT")
   while [ "$attempt" -lt "$SPAWN_TREEHOUSE_LEASE_ATTEMPTS" ]; do
     attempt=$((attempt + 1))
-    leased=$(cd "$PROJ_ABS" && "${env_args[@]}" treehouse get --lease --lease-holder "$ID" </dev/null) || {
+    rc=0
+    leased=$(cd "$PROJ_ABS" && fm_run_timed "$SPAWN_TREEHOUSE_LEASE_TIMEOUT" "${env_args[@]}" treehouse get --lease --lease-holder "$ID" </dev/null) || rc=$?
+    if fm_timed_out "$rc"; then
+      echo "error: treehouse get --lease did not finish within ${SPAWN_TREEHOUSE_LEASE_TIMEOUT}s for $ID from $PROJ_ABS; refusing the spawn. It may have leased a slot it never reported: check 'treehouse status' from $PROJ_ABS for a slot leased to $ID and, once inspected, release it with 'treehouse return --if-lease-holder $ID <path>'" >&2
+      exit 1
+    elif [ "$rc" -ne 0 ]; then
       echo "error: treehouse get --lease failed to lease a worktree for $ID from $PROJ_ABS" >&2
       exit 1
-    }
+    fi
     if [ -z "$leased" ]; then
       echo "error: treehouse get --lease did not report a worktree for $ID from $PROJ_ABS" >&2
       exit 1
@@ -4599,45 +4660,6 @@ agy_spawn_fail() {  # <detail>
   rovo_endpoint_cleanup
 }
 
-if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ] && fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
-  # A slot whose owner claim names another task was handed to that task while
-  # this one's worker was gone (before crew spawns leased their slots), so the
-  # recorded copy is no longer this task's and a replacement started there
-  # would work inside the other task's copy. A same-id claim from another home
-  # is also another task identity. An unreadable claim proves nothing either
-  # way. All refuse before the endpoint is touched; an absent claim is a slot
-  # taken before claims existed and keeps its earlier behaviour.
-  [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ] || {
-    echo "error: task $ID's Treehouse slot claim cannot be checked without the shared project lock; refusing to relaunch" >&2
-    exit 1
-  }
-  fm_treehouse_slot_owner_state "$WT" "$ID"
-  case "$FM_TREEHOUSE_SLOT_OWNER" in
-    mine)
-      if [ -z "$FM_TREEHOUSE_SLOT_OWNER_HOME" ] ||
-        ! claim_home_real=$(CDPATH='' cd -- "$FM_TREEHOUSE_SLOT_OWNER_HOME" 2>/dev/null && pwd -P); then
-        echo "error: task $ID's recorded worktree $WT has a slot claim for this task whose home '${FM_TREEHOUSE_SLOT_OWNER_HOME:-unrecorded}' cannot be resolved; refusing to relaunch" >&2
-        exit 1
-      fi
-      relaunch_home_real=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) || {
-        echo "error: relaunching home $FM_HOME cannot be resolved while checking task $ID's Treehouse slot claim; refusing to relaunch" >&2
-        exit 1
-      }
-      if [ "$claim_home_real" != "$relaunch_home_real" ]; then
-        echo "error: task $ID's recorded worktree $WT is claimed by task $ID from home $claim_home_real, not relaunching home $relaunch_home_real; refusing to relaunch inside another home's copy" >&2
-        exit 1
-      fi
-      ;;
-    other)
-      echo "error: task $ID's recorded worktree $WT is now claimed by task $FM_TREEHOUSE_SLOT_OWNER_ID (home ${FM_TREEHOUSE_SLOT_OWNER_HOME:-unrecorded}); refusing to relaunch $ID inside another task's copy - its pushed work lives on its branch, so dispatch it afresh from there" >&2
-      exit 1
-      ;;
-    unsafe)
-      echo "error: task $ID's recorded worktree $WT has an unreadable slot claim at $(fm_treehouse_slot_owner_marker "$WT" || echo "<unresolvable>"); refusing to relaunch until it is inspected" >&2
-      exit 1
-      ;;
-  esac
-fi
 if [ "$RELAUNCH" -eq 1 ] && [ "$BACKEND" = orca ]; then
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$RELAUNCH" -eq 1 ]; then

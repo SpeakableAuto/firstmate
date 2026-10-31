@@ -83,6 +83,9 @@ case "${1:-}" in
           ;;
         *'encode launch-brief'* | *'Firstmate operational input waiting: read'*)
           cat "$D/becomes" > "$D/command"
+          if [ -n "${FM_FAKE_LOCK_PROBE:-}" ]; then
+            if [ -e "$FM_FAKE_LOCK_PROBE" ]; then echo held; else echo free; fi > "$D/lock-probe"
+          fi
           [ -z "${FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START:-}" ] || exit 1
           ;;
       esac
@@ -1234,8 +1237,14 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one() {
 # state file), with that slot's owner claim naming <claim-task>, unreadable, or
 # absent.
 add_pool_slot_task() {
+  add_ship_task "$1" "$2" claude
+  move_task_to_pool_slot "$@"
+}
+
+# move_task_to_pool_slot <case-dir> <id> <claim-task|unreadable|none> [claim-home]:
+# re-record an existing task's worktree as that pool slot, with that claim.
+move_task_to_pool_slot() {
   local dir=$1 id=$2 claim=$3 claim_home=${4:-"$1/home"} slot marker
-  add_ship_task "$dir" "$id" claude
   slot="$dir/pool/1/repo"
   git -C "$dir/proj" worktree add --quiet --detach "$slot"
   printf '{"worktrees":[]}\n' > "$dir/pool/treehouse-state.json"
@@ -1328,6 +1337,112 @@ test_spawn_relaunch_refuses_a_held_treehouse_project_lock() {
   assert_grep "worktree=$dir/pool/1/repo" "$dir/home/state/rl65.meta" \
     "a project-lock refusal changed the task record"
   pass "fm-spawn --relaunch: a Treehouse slot relaunch refuses the held project lock"
+}
+
+# stage_treehouse_project_lock <case-dir>: hold the case project's shared
+# Treehouse lock from a background process; echoes that process's pid.
+stage_treehouse_project_lock() {
+  local dir=$1 lock i=0
+  lock=$(FM_HOME="$dir/home" bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$dir/proj")
+  (
+    FM_HOME="$dir/home"
+    export FM_HOME
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    /bin/sleep 30
+  ) >/dev/null 2>&1 &
+  while [ ! -e "$lock/pid" ] && [ "$i" -lt 100 ]; do
+    /bin/sleep 0.1
+    i=$((i + 1))
+  done
+  printf '%s\n' "$!"
+}
+
+# The relaunch boundary runs before the old agent is touched. The launch owner
+# used to take the Treehouse project lock and read the slot claim only after
+# fm-control had stopped the agent, so a contended lock or a foreign claim left
+# the task with no agent running.
+test_control_relaunch_refuses_a_held_treehouse_project_lock_before_stopping() {
+  local dir out rc holder
+  dir=$(new_case ctlslothold rl90)
+  add_pool_slot_task "$dir" rl90 rl90
+  holder=$(stage_treehouse_project_lock "$dir")
+  out=$(run_control "$dir" rl90 relaunch --note "retry once the pool is free"); rc=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  expect_code 1 "$rc" "a contended Treehouse project lock should refuse the relaunch"$'\n'"$out"
+  assert_contains "$out" "another Treehouse slot allocation or return is in progress" \
+    "the refusal should name the contending Treehouse operation"
+  assert_contains "$out" "before its agent is touched" "the refusal should say the agent was not touched"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a project-lock refusal stopped the old agent"
+  assert_no_grep "/exit" "$dir/fake/literal" "a project-lock refusal typed the exit command"
+  [ ! -e "$dir/home/state/rl90.control-relaunch" ] || fail "a refusal before the stop opened a relaunch journal"
+  assert_grep "worktree=$dir/pool/1/repo" "$dir/home/state/rl90.meta" "a project-lock refusal changed the task record"
+  pass "fm-control relaunch: a held Treehouse project lock refuses before the old agent stops"
+}
+
+test_control_relaunch_refuses_a_foreign_slot_claim_before_stopping() {
+  local dir out rc
+  dir=$(new_case ctlslotother rl91)
+  add_pool_slot_task "$dir" rl91 rl91-successor
+  out=$(run_control "$dir" rl91 relaunch --note "the slot moved on"); rc=$?
+  expect_code 1 "$rc" "a slot claimed by another task should refuse the relaunch"$'\n'"$out"
+  assert_contains "$out" "now claimed by task rl91-successor" "the refusal should name the claimant"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a foreign-claim refusal stopped the old agent"
+  assert_no_grep "/exit" "$dir/fake/literal" "a foreign-claim refusal typed the exit command"
+  pass "fm-control relaunch: a slot claimed by another task refuses before the old agent stops"
+}
+
+# The launch owner inherits the transaction's lock instead of contending with
+# it, and the lock is still held when the replacement is delivered.
+test_control_relaunch_holds_the_project_lock_through_the_launch() {
+  local dir out rc lock
+  dir=$(new_case ctlslotmine rl92)
+  add_pool_slot_task "$dir" rl92 rl92
+  lock=$(FM_HOME="$dir/home" bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$dir/proj")
+  out=$(FM_FAKE_LOCK_PROBE="$lock" run_control "$dir" rl92 relaunch --note "same slot, new agent"); rc=$?
+  expect_code 0 "$rc" "a relaunch in the task's own claimed slot should succeed"$'\n'"$out"
+  assert_contains "$out" "relaunched rl92" "the relaunch should report its outcome"
+  assert_grep "held" "$dir/fake/lock-probe" "the project lock was not held when the replacement was delivered"
+  [ ! -e "$lock" ] && [ ! -L "$lock" ] || fail "the relaunch left the Treehouse project lock behind"
+  pass "fm-control relaunch: the project lock is held through the launch and released after"
+}
+
+# A ship copy whose HEAD left its recorded branch while the branch kept its
+# commits (a legacy slot Treehouse reset to the default branch) is not the
+# task's own work: the transaction refuses before stopping the old agent, and
+# the launch owner refuses on its own before touching the endpoint.
+test_relaunch_refuses_a_copy_off_its_recorded_branch() {
+  local dir out rc
+  dir=$(new_case offbranch rl94)
+  add_ship_task "$dir" rl94 claude
+  printf 'branch=task-rl94\n' >> "$dir/home/state/rl94.meta"
+  git -C "$dir/wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "unpushed work"
+  git -C "$dir/wt" checkout -q --detach main
+  out=$(run_control "$dir" rl94 relaunch --note "continue the work"); rc=$?
+  expect_code 1 "$rc" "a copy off its recorded branch should refuse the relaunch"$'\n'"$out"
+  assert_contains "$out" "not its recorded branch task-rl94" "the refusal should name the recorded branch"
+  assert_contains "$out" "unpushed work" "the refusal should list the branch's commits on no remote"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "an off-branch refusal stopped the old agent"
+  assert_no_grep "/exit" "$dir/fake/literal" "an off-branch refusal typed the exit command"
+
+  # Pushed, the branch has nothing to lose, but the copy is still not the
+  # task's work; the launch owner refuses before typing anything.
+  git -C "$dir/wt" push -q origin task-rl94
+  printf 'zsh' > "$dir/fake/command"
+  : > "$dir/fake/literal"
+  : > "$dir/fake/keys"
+  out=$(run_spawn "$dir" rl94 --relaunch); rc=$?
+  [ "$rc" -ne 0 ] || fail "the launch owner relaunched a copy off its recorded branch: $out"
+  assert_contains "$out" "not its recorded branch task-rl94" "the launch owner should name the recorded branch"
+  [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "an off-branch refusal touched the endpoint"
+
+  git -C "$dir/wt" checkout -q task-rl94
+  out=$(run_spawn "$dir" rl94 --relaunch); rc=$?
+  expect_code 0 "$rc" "a copy back on its recorded branch should relaunch"$'\n'"$out"
+  pass "relaunch: a copy off its recorded branch refuses before the agent or endpoint is touched"
 }
 
 # A promoted scout records kind=ship and a custom ship branch in its meta, but
@@ -2698,6 +2813,27 @@ SH
 }
 test_balance_refusal_preserves_agent
 
+# A Herdr rebind mints a fresh pane, so the slot-claim refusal must come before
+# it: refusing afterwards left that pane behind as an orphan nothing records.
+test_herdr_rebind_refuses_a_foreign_home_claim_before_minting_a_pane() {
+  local dir out rc=0
+  herdr_case_or_skip rebind-claim rl93 fmlab '%none' || {
+    echo "skip - herdr rebind needs jq (the herdr adapter parses JSON with it)"
+    return 0
+  }
+  dir=$HERDR_CASE_DIR
+  mkdir -p "$dir/other-home"
+  move_task_to_pool_slot "$dir" rl93 rl93 "$dir/other-home"
+  out=$(run_spawn "$dir" rl93 --relaunch --harness claude) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a rebind proceeded into a slot claimed from another home: $out"
+  assert_contains "$out" "not relaunching home" "the refusal should identify the conflicting home"
+  [ ! -s "$dir/fake/herdr-created-tabs" ] \
+    || fail "a refused rebind minted a pane: $(cat "$dir/fake/herdr-created-tabs")"
+  assert_not_contains "$(cat "$dir/fake/herdr-log")" "tab create" "a refused rebind must not create a tab"
+  [ "$(meta_field "$dir" rl93 herdr_pane_id)" = '%7' ] || fail "a refused rebind changed the task record"
+  pass "reclaim: a Herdr rebind refuses a foreign-home slot claim before minting a pane"
+}
+
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
@@ -2733,6 +2869,10 @@ test_spawn_relaunch_without_a_harness_reuses_the_recorded_one
 test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch
 test_spawn_relaunch_refuses_a_slot_claimed_by_another_task
 test_spawn_relaunch_refuses_a_held_treehouse_project_lock
+test_control_relaunch_refuses_a_held_treehouse_project_lock_before_stopping
+test_control_relaunch_refuses_a_foreign_slot_claim_before_stopping
+test_control_relaunch_holds_the_project_lock_through_the_launch
+test_relaunch_refuses_a_copy_off_its_recorded_branch
 test_promoted_scout_relaunch_receives_the_current_delivery_contract
 test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch
@@ -2771,6 +2911,7 @@ test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
 test_herdr_exit_xtrace_preserves_the_submit_failure_verdict
 test_herdr_rebind_stays_in_the_recorded_session
+test_herdr_rebind_refuses_a_foreign_home_claim_before_minting_a_pane
 test_herdr_reclaim_refuses_an_agent_that_came_back
 test_herdr_reclaim_keeps_the_task_whole
 test_herdr_reclaim_of_a_secondmate_names_its_own_owner

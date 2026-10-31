@@ -1529,6 +1529,127 @@ fm_treehouse_slot_owner_release() {  # <worktree> <task-id>
   rm -f "$marker" 2>/dev/null || true
 }
 
+# The relaunch boundary's slot-claim check: may <task-id>, relaunching from
+# <home>, start a replacement in the pool slot <worktree> it records?
+# A claim naming another task means the slot was handed to that task while this
+# one's worker was gone (before crew spawns leased their slots), so a
+# replacement there would work inside the other task's copy. A same-id claim
+# from another home is another task identity too, and one whose home cannot be
+# resolved proves nothing. An unreadable claim proves nothing either way. All
+# of those print the refusal and return 1; an absent claim is a slot taken
+# before claims existed and passes, keeping its earlier behaviour.
+# The caller must hold the Treehouse project lock across this check and every
+# step through metadata publication, and must run it before any endpoint is
+# stopped, created, or adopted, so a refusal leaves the task exactly as found.
+# bin/fm-control.sh runs it before stopping the old agent and bin/fm-spawn.sh
+# repeats it before touching any endpoint.
+fm_treehouse_relaunch_slot_check() {  # <worktree> <task-id> <home>
+  local worktree=$1 id=$2 home=$3 claim_home_real relaunch_home_real
+  fm_treehouse_slot_owner_state "$worktree" "$id"
+  case "$FM_TREEHOUSE_SLOT_OWNER" in
+    absent) return 0 ;;
+    mine)
+      if [ -z "$FM_TREEHOUSE_SLOT_OWNER_HOME" ] ||
+        ! claim_home_real=$(CDPATH='' cd -- "$FM_TREEHOUSE_SLOT_OWNER_HOME" 2>/dev/null && pwd -P); then
+        echo "error: task $id's recorded worktree $worktree has a slot claim for this task whose home '${FM_TREEHOUSE_SLOT_OWNER_HOME:-unrecorded}' cannot be resolved; refusing to relaunch" >&2
+        return 1
+      fi
+      relaunch_home_real=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || {
+        echo "error: relaunching home $home cannot be resolved while checking task $id's Treehouse slot claim; refusing to relaunch" >&2
+        return 1
+      }
+      if [ "$claim_home_real" != "$relaunch_home_real" ]; then
+        echo "error: task $id's recorded worktree $worktree is claimed by task $id from home $claim_home_real, not relaunching home $relaunch_home_real; refusing to relaunch inside another home's copy" >&2
+        return 1
+      fi
+      return 0
+      ;;
+    other)
+      echo "error: task $id's recorded worktree $worktree is now claimed by task $FM_TREEHOUSE_SLOT_OWNER_ID (home ${FM_TREEHOUSE_SLOT_OWNER_HOME:-unrecorded}); refusing to relaunch $id inside another task's copy - its pushed work lives on its branch, so dispatch it afresh from there" >&2
+      return 1
+      ;;
+  esac
+  echo "error: task $id's recorded worktree $worktree has an unreadable slot claim at $(fm_treehouse_slot_owner_marker "$worktree" || echo "<unresolvable>"); refusing to relaunch until it is inspected" >&2
+  return 1
+}
+
+# Is the copy at <worktree> still on the task's recorded ship <branch>?
+#
+# A task's copy can stop being its own work without any claim changing: when a
+# legacy slot (taken before crew spawns leased) is offered to a later spawn,
+# Treehouse resets it to the default branch before that spawn can see whose it
+# is and skip it. HEAD moves while the branch and its commits survive, so every
+# check that reads only HEAD - teardown's landed-work proof, relaunch's
+# checkpoint - would then inspect a clean default-branch copy and miss the
+# task's unpushed commits entirely.
+# Sets FM_WORKTREE_BRANCH_STATE to one of:
+#   match      - the branch does not exist in this repository yet (the worker
+#                never created it), or HEAD is that branch or detached at its tip
+#   moved      - HEAD is elsewhere, but every commit on the branch is also in
+#                HEAD, on a remote-tracking branch, or in <landed-ref>
+#   stranded   - HEAD is elsewhere and the branch holds commits found nowhere
+#                else; FM_WORKTREE_BRANCH_STRANDED lists up to five of them
+#   unreadable - git could not answer, which proves nothing
+# FM_WORKTREE_BRANCH_HEAD describes where HEAD actually is, for refusals.
+# <landed-ref> is an extra ref that counts as landed, such as a local-only
+# project's default branch.
+fm_worktree_recorded_branch_state() {  # <worktree> <branch> [<landed-ref>]
+  local wt=$1 branch=$2 landed=${3:-} ref tip head head_ref rc stranded
+  local -a excluded
+  FM_WORKTREE_BRANCH_STATE=unreadable
+  FM_WORKTREE_BRANCH_HEAD=
+  FM_WORKTREE_BRANCH_STRANDED=
+  if [ -z "$branch" ]; then
+    FM_WORKTREE_BRANCH_STATE=match
+    return 0
+  fi
+  ref="refs/heads/$branch"
+  rc=0
+  git -C "$wt" show-ref --verify --quiet "$ref" 2>/dev/null || rc=$?
+  case "$rc" in
+    0) ;;
+    1)
+      FM_WORKTREE_BRANCH_STATE=match
+      return 0
+      ;;
+    *) return 0 ;;
+  esac
+  tip=$(git -C "$wt" rev-parse --verify --quiet "$ref^{commit}" 2>/dev/null) || return 0
+  head=$(git -C "$wt" rev-parse --verify --quiet HEAD 2>/dev/null || true)
+  rc=0
+  head_ref=$(git -C "$wt" symbolic-ref -q HEAD 2>/dev/null) || rc=$?
+  case "$rc" in
+    0)
+      if [ "$head_ref" = "$ref" ]; then
+        FM_WORKTREE_BRANCH_STATE=match
+        return 0
+      fi
+      FM_WORKTREE_BRANCH_HEAD="branch ${head_ref#refs/heads/}"
+      ;;
+    1)
+      [ -n "$head" ] || return 0
+      if [ "$head" = "$tip" ]; then
+        FM_WORKTREE_BRANCH_STATE=match
+        return 0
+      fi
+      FM_WORKTREE_BRANCH_HEAD="a detached HEAD at ${head:0:12}"
+      ;;
+    *) return 0 ;;
+  esac
+  excluded=(--not --remotes)
+  [ -z "$head" ] || excluded+=("$head")
+  [ -z "$landed" ] || excluded+=("$landed")
+  stranded=$(git -C "$wt" log --oneline "$ref" "${excluded[@]}" -- 2>/dev/null) || return 0
+  if [ -n "$stranded" ]; then
+    # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+    FM_WORKTREE_BRANCH_STRANDED=$(printf '%s\n' "$stranded" | head -5)
+    FM_WORKTREE_BRANCH_STATE=stranded
+  else
+    FM_WORKTREE_BRANCH_STATE=moved
+  fi
+  return 0
+}
+
 fm_failure_episode_reset() {
   local state=$1 mode=${2:-acquire} lock current pid acquired=0 path
   lock="$state/.turnend-claude-blocks.lock"
