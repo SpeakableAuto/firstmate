@@ -3330,7 +3330,7 @@ spawn_relaunch_branch_check() {
   fm_worktree_recorded_branch_state "$RELAUNCH_WT" "$BRANCH"
   case "$FM_WORKTREE_BRANCH_STATE" in
     match) return 0 ;;
-    moved)
+    moved|detached)
       echo "error: task $ID's recorded worktree $RELAUNCH_WT is on $FM_WORKTREE_BRANCH_HEAD, not its recorded branch $BRANCH; refusing to relaunch a replacement on a copy that is not the task's own work - once inspected, check out $BRANCH there and relaunch" >&2
       ;;
     stranded)

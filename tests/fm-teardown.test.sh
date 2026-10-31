@@ -892,6 +892,24 @@ test_copy_reset_off_its_squash_merged_branch_allows() {
   pass "a copy reset off its squash-merged recorded branch tears down"
 }
 
+# A copy detached at exactly the recorded branch tip holds everything on that
+# branch, so teardown loses nothing and accepts it (relaunch refuses it).
+test_copy_detached_at_its_recorded_branch_tip_allows() {
+  local case_dir rc
+  case_dir=$(make_case detached-tip)
+  write_meta "$case_dir" no-mistakes ship
+  git -C "$case_dir/wt" checkout -q --detach fm/task-x1
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "detached-tip: a copy detached at its recorded branch tip loses nothing"$'\n'"$(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "detached-tip: teardown printed a REFUSED line"
+  pass "a copy detached at its recorded branch tip tears down"
+}
+
 test_squash_merged_branch_deleted_allows() {
   local case_dir rc pr_head
   case_dir=$(make_case squash-merged)
@@ -4601,6 +4619,7 @@ test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_copy_reset_off_its_recorded_branch_refuses
 test_copy_reset_off_its_pushed_recorded_branch_allows
+test_copy_detached_at_its_recorded_branch_tip_allows
 test_copy_reset_off_its_squash_merged_branch_allows
 test_local_only_force_overrides_unpushed
 test_secondmate_pr_registration_publishes_ready_line

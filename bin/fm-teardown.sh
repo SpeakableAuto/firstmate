@@ -1962,7 +1962,7 @@ validate_recorded_branch_teardown_safety() {
   fi
   fm_worktree_recorded_branch_state "$WT" "$branch" "$landed"
   case "$FM_WORKTREE_BRANCH_STATE" in
-    match|moved) return 0 ;;
+    match|moved|detached) return 0 ;;
     stranded)
       work_is_landed "$branch" "refs/heads/$branch" && return 0
       echo "REFUSED: worktree $WT is on $FM_WORKTREE_BRANCH_HEAD, not task $ID's recorded branch $branch, which has commits on no remote:" >&2

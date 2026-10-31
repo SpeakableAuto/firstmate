@@ -1584,7 +1584,10 @@ fm_treehouse_relaunch_slot_check() {  # <worktree> <task-id> <home>
 # task's unpushed commits entirely.
 # Sets FM_WORKTREE_BRANCH_STATE to one of:
 #   match      - the branch does not exist in this repository yet (the worker
-#                never created it), or HEAD is that branch or detached at its tip
+#                never created it), or HEAD is that branch
+#   detached   - HEAD is detached at exactly the branch's tip: nothing on the
+#                branch can be lost, but commits made there would not advance it,
+#                so teardown may accept this while relaunch must not
 #   moved      - HEAD is elsewhere, but every commit on the branch is also in
 #                HEAD, on a remote-tracking branch, or in <landed-ref>
 #   stranded   - HEAD is elsewhere and the branch holds commits found nowhere
@@ -1628,11 +1631,12 @@ fm_worktree_recorded_branch_state() {  # <worktree> <branch> [<landed-ref>]
       ;;
     1)
       [ -n "$head" ] || return 0
+      FM_WORKTREE_BRANCH_HEAD="a detached HEAD at ${head:0:12}"
       if [ "$head" = "$tip" ]; then
-        FM_WORKTREE_BRANCH_STATE=match
+        FM_WORKTREE_BRANCH_HEAD="$FM_WORKTREE_BRANCH_HEAD (the tip of $branch, not the branch itself)"
+        FM_WORKTREE_BRANCH_STATE=detached
         return 0
       fi
-      FM_WORKTREE_BRANCH_HEAD="a detached HEAD at ${head:0:12}"
       ;;
     *) return 0 ;;
   esac

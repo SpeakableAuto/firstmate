@@ -1445,6 +1445,33 @@ test_relaunch_refuses_a_copy_off_its_recorded_branch() {
   pass "relaunch: a copy off its recorded branch refuses before the agent or endpoint is touched"
 }
 
+# A task that created its branch but made no commit of its own reads the same
+# commit as the default branch, so a reset legacy slot sits detached at exactly
+# the branch tip. Nothing can be lost, but a replacement started detached would
+# make commits that never reach the delivery branch, so relaunch refuses it
+# before stopping the old agent, and the launch owner refuses it on its own.
+test_relaunch_refuses_a_detached_head_at_the_recorded_branch_tip() {
+  local dir out rc
+  dir=$(new_case detachedtip rl95)
+  add_ship_task "$dir" rl95 claude
+  printf 'branch=task-rl95\n' >> "$dir/home/state/rl95.meta"
+  git -C "$dir/wt" checkout -q --detach task-rl95
+  out=$(run_control "$dir" rl95 relaunch --note "continue the work"); rc=$?
+  expect_code 1 "$rc" "a detached HEAD at the branch tip should refuse the relaunch"$'\n'"$out"
+  assert_contains "$out" "the tip of task-rl95, not the branch itself" "the refusal should say the copy is detached at the branch tip"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a detached-tip refusal stopped the old agent"
+  assert_no_grep "/exit" "$dir/fake/literal" "a detached-tip refusal typed the exit command"
+
+  printf 'zsh' > "$dir/fake/command"
+  : > "$dir/fake/literal"
+  : > "$dir/fake/keys"
+  out=$(run_spawn "$dir" rl95 --relaunch); rc=$?
+  [ "$rc" -ne 0 ] || fail "the launch owner relaunched a copy detached at its branch tip: $out"
+  assert_contains "$out" "the tip of task-rl95, not the branch itself" "the launch owner should name the detached tip"
+  [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "a detached-tip refusal touched the endpoint"
+  pass "relaunch: a copy detached at its recorded branch tip refuses before the agent or endpoint is touched"
+}
+
 # A promoted scout records kind=ship and a custom ship branch in its meta, but
 # its brief is the scout scaffold: it never gained a Ship branch line, and a
 # relaunch cannot regenerate the brief (--branch-prefix is refused there). The
@@ -2873,6 +2900,7 @@ test_control_relaunch_refuses_a_held_treehouse_project_lock_before_stopping
 test_control_relaunch_refuses_a_foreign_slot_claim_before_stopping
 test_control_relaunch_holds_the_project_lock_through_the_launch
 test_relaunch_refuses_a_copy_off_its_recorded_branch
+test_relaunch_refuses_a_detached_head_at_the_recorded_branch_tip
 test_promoted_scout_relaunch_receives_the_current_delivery_contract
 test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch

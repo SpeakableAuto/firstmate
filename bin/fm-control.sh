@@ -1033,7 +1033,7 @@ safe_checkpoint() {
     fm_worktree_recorded_branch_state "$WT" "$SHIP_BRANCH"
     case "$FM_WORKTREE_BRANCH_STATE" in
       match) ;;
-      moved)
+      moved|detached)
         die "task $ID's recorded worktree $WT is on $FM_WORKTREE_BRANCH_HEAD, not its recorded branch $SHIP_BRANCH; refusing to relaunch a replacement on a copy that is not the task's own work - once inspected, check out $SHIP_BRANCH there and relaunch"
         ;;
       stranded)
