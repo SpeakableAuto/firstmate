@@ -1157,7 +1157,7 @@ FM_OPEN_DECISIONS_FOLD_VERSION=9
 # Output globals avoid another shell for each field on fleet-wide scans.
 _fm_status_file_metadata() {  # <file> -> FM_STATUS_META_{IDENT,SIZE,MTIME}
   local f=$1 fields ident epoch birth
-  FM_STATUS_META_IDENT= FM_STATUS_META_SIZE= FM_STATUS_META_MTIME=
+  FM_STATUS_META_IDENT='' FM_STATUS_META_SIZE='' FM_STATUS_META_MTIME=''
   if [ "$_FM_CLASSIFY_UNAME_S" = Darwin ]; then
     fields=$(LC_ALL=C /usr/bin/stat -f $'%d:%i\t%B\t%FB\t%z\t%m' "$f" 2>/dev/null) || return 1
   else
