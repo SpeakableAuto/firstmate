@@ -82,6 +82,12 @@
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
 #              standing charter is never rewritten.
+#              Before the old agent stops, a ship copy whose HEAD is not attached
+#              to the recorded ship branch refuses, and a Treehouse
+#              pool slot takes the shared project lock and passes its owner-claim check
+#              (bin/fm-wake-lib.sh owns both checks); that lock is held until
+#              the launch owner has published the record, so contention or a
+#              foreign claim refuses with the old agent still running.
 #              Records a durable checkpoint and that note, exits the old agent,
 #              then delegates the launch to its single owner,
 #              bin/fm-spawn.sh --relaunch. A failure before publication keeps
@@ -193,6 +199,8 @@ die() {  # <message>
 
 CONTROL_LOCK=
 CONTROL_LOCK_HELD=0
+TREEHOUSE_PROJECT_LOCK=
+TREEHOUSE_PROJECT_LOCK_HELD=0
 RELAUNCH_ACTIVE=0
 RELAUNCH_PHASE=start
 
@@ -201,6 +209,10 @@ control_cleanup() {
   if [ "$RELAUNCH_ACTIVE" = 1 ] \
      && declare -F relaunch_rollback >/dev/null 2>&1; then
     relaunch_rollback || true
+  fi
+  if [ "$TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
+    TREEHOUSE_PROJECT_LOCK_HELD=0
+    fm_lock_release "$TREEHOUSE_PROJECT_LOCK" || true
   fi
   if [ "$CONTROL_LOCK_HELD" = 1 ]; then
     CONTROL_LOCK_HELD=0
@@ -1012,6 +1024,26 @@ safe_checkpoint() {
     dirty=no
   fi
   CHECKPOINT_LINES+=("worktree_head=$head" "worktree_dirty=$dirty")
+  if [ "$KIND" = ship ]; then
+    # The copy must still be the task's own work: HEAD can leave the recorded
+    # ship branch while the branch and its commits survive
+    # (bin/fm-wake-lib.sh's fm_worktree_recorded_branch_state owns how), and a
+    # replacement started there would build on the wrong base. The launch
+    # owner repeats this; checking here keeps the old agent running.
+    fm_worktree_recorded_branch_state "$WT" "$SHIP_BRANCH"
+    case "$FM_WORKTREE_BRANCH_STATE" in
+      match) ;;
+      moved|detached)
+        die "task $ID's recorded worktree $WT is on $FM_WORKTREE_BRANCH_HEAD, not its recorded branch $SHIP_BRANCH; refusing to relaunch a replacement on a copy that is not the task's own work - once inspected, check out $SHIP_BRANCH there and relaunch"
+        ;;
+      stranded)
+        die "task $ID's recorded worktree $WT is on $FM_WORKTREE_BRANCH_HEAD, not its recorded branch $SHIP_BRANCH, which holds commits on no remote:"$'\n'"$FM_WORKTREE_BRANCH_STRANDED"$'\n'"refusing to relaunch a replacement on a copy that is not the task's own work - once inspected, check out $SHIP_BRANCH there and relaunch"
+        ;;
+      *)
+        die "cannot compare task $ID's recorded worktree $WT with its recorded branch $SHIP_BRANCH; refusing to relaunch until the copy can be inspected"
+        ;;
+    esac
+  fi
   if [ "$KIND" = secondmate ]; then
     # A secondmate's own crewmates outlive its relaunch: they run in their own
     # endpoints, and the relaunched secondmate reconciles them from its home's
@@ -1078,6 +1110,30 @@ record_note() {
   esac
 }
 
+# relaunch_slot_preflight: the relaunch boundary for a Treehouse pool slot,
+# run before the old agent is touched. It takes the shared Treehouse project
+# lock and checks the slot's owner claim (bin/fm-wake-lib.sh's
+# fm_treehouse_relaunch_slot_check), then keeps holding the lock through the
+# launch owner's adoption and metadata publication; bin/fm-spawn.sh inherits
+# it from this process rather than taking it again. Taking it only inside the
+# launch owner, after the stop, let a contended lock or a refused claim leave
+# the task with no agent running.
+relaunch_slot_preflight() {
+  local project
+  [ "$KIND" != secondmate ] || return 0
+  project=$(fm_meta_get "$META" project)
+  case "$project" in
+    projects/*) project="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/${project#projects/}" ;;
+  esac
+  [ -n "$project" ] && fm_treehouse_pool_slot "$project" "$WT" || return 0
+  TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$project") \
+    || die "could not resolve the shared Treehouse project lock for $project; refusing to relaunch $ID before its agent is touched"
+  fm_lock_try_acquire "$TREEHOUSE_PROJECT_LOCK" \
+    || die "another Treehouse slot allocation or return is in progress for $project; refusing to relaunch $ID before its agent is touched - retry once it finishes"
+  TREEHOUSE_PROJECT_LOCK_HELD=1
+  fm_treehouse_relaunch_slot_check "$WT" "$ID" "$FM_HOME" || exit 1
+}
+
 do_relaunch() {
   local exit_result state note_line
   local -a spawn_args
@@ -1110,6 +1166,7 @@ do_relaunch() {
   fi
   safe_checkpoint
   preflight_relaunch_admission
+  relaunch_slot_preflight
   cp -p "$META" "$META_PRIOR" || die "could not preserve task $ID's durable record before relaunching"
   RELAUNCH_ACTIVE=1
   journal_write checkpoint "${CHECKPOINT_LINES[@]}" "$note_line"
@@ -1133,6 +1190,13 @@ do_relaunch() {
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1
+    # The launch owner has published the record, so the slot's ownership is
+    # settled; waiting for the replacement need not hold every other
+    # allocation and return of the project.
+    if [ "$TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
+      TREEHOUSE_PROJECT_LOCK_HELD=0
+      fm_lock_release "$TREEHOUSE_PROJECT_LOCK" || true
+    fi
     # $T was resolved from the record before the launch. When the recorded
     # endpoint was gone, the launch owner created a fresh one and republished
     # the record pointing at it, so every postcondition below must be read from

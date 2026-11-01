@@ -308,6 +308,8 @@ case "$cmd" in
       n=$((n + 1))
       if [ ! -e "$D/leases/$n" ] && [ ! -e "$D/process/$n" ]; then
         printf '%s\n' "$holder" > "$D/leases/$n"
+        # A get that hangs after taking its lease, before reporting it.
+        [ ! -e "$D/hang" ] || exec /bin/sleep 30
         printf '%s\n' "$slot"
         exit 0
       fi
@@ -452,6 +454,32 @@ test_aborted_spawn_returns_its_lease() {
   pass "an aborted spawn returns its clean, unrecorded lease"
 }
 
+# The lease runs under the project lock every spawn, relaunch, and return of
+# the project needs, so a hung `treehouse get --lease` is bounded: the spawn
+# refuses within the bound, records nothing, names how to find a lease it may
+# have taken, and leaves the lock free for the next spawn.
+test_hung_lease_is_bounded_and_refuses() {
+  local rec out status started elapsed
+  rec=$(make_pool_case lease-hang 2)
+  read_pool_record "$rec"
+  : > "$TH_DIR/hang"
+  started=$SECONDS
+  out=$(FM_SPAWN_TREEHOUSE_LEASE_TIMEOUT=2 run_pool_spawn lease-task-h)
+  status=$?
+  elapsed=$((SECONDS - started))
+  [ "$status" -ne 0 ] || fail "spawn launched although its lease never reported a slot"$'\n'"$out"
+  [ "$elapsed" -lt 25 ] || fail "the hung lease was not bounded: the spawn took ${elapsed}s"
+  assert_contains "$out" "did not finish within 2s" "the refusal should name the bound"
+  assert_contains "$out" "treehouse return --if-lease-holder lease-task-h" "the refusal should name how to release a lease it may have taken"
+  [ ! -e "$HOME_DIR/state/lease-task-h.meta" ] || fail "a timed-out lease published task metadata"
+
+  rm -f "$TH_DIR/hang"
+  out=$(run_pool_spawn lease-task-i)
+  status=$?
+  expect_code 0 "$status" "the next spawn should find the project lock free"$'\n'"$out"
+  pass "a hung treehouse get --lease is bounded, refuses, and frees the project lock"
+}
+
 # Real Treehouse, when installed: an interactive slot whose process exited (the
 # old crew shape) is still recorded by its task, then two leased spawns run.
 # Neither may take the recorded slot, and the two must differ.
@@ -504,6 +532,7 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline
 test_exited_worker_keeps_its_slot_from_the_next_spawn
 test_unleased_recorded_slot_is_kept_and_skipped
 test_aborted_spawn_returns_its_lease
+test_hung_lease_is_bounded_and_refuses
 test_real_treehouse_leases_skip_recorded_and_leased_slots
 
 echo "# all fm-spawn-worktree-settle tests passed"

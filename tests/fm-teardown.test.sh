@@ -822,6 +822,94 @@ test_no_mistakes_truly_unpushed_refuses() {
   pass "no-mistakes worktree with genuinely unlanded work is refused (safety preserved)"
 }
 
+# A legacy slot (taken before crew spawns leased) that Treehouse offers to a
+# later spawn is reset to the default branch before that spawn can skip it:
+# HEAD moves while the task's branch and its commits survive. Every HEAD-based
+# check then reads a clean, pushed copy, so the recorded branch itself must
+# refuse teardown while it holds commits on no remote.
+test_copy_reset_off_its_recorded_branch_refuses() {
+  local case_dir rc
+  case_dir=$(make_case reset-off-branch)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'branch=fm/task-x1' >> "$case_dir/state/task-x1.meta"
+  wt_commit_file "$case_dir" feature.txt hello "unpushed branch work"
+  git -C "$case_dir/wt" checkout -q --detach origin/main
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "reset-off-branch: teardown should refuse while the recorded branch has unpushed commits"
+  grep -q "not task task-x1's recorded branch fm/task-x1" "$case_dir/stderr" \
+    || fail "reset-off-branch: refusal did not name the recorded branch: $(cat "$case_dir/stderr")"
+  grep -q "unpushed branch work" "$case_dir/stderr" || fail "reset-off-branch: refusal did not list the stranded commit"
+  [ -f "$case_dir/state/task-x1.meta" ] || fail "reset-off-branch: a refusal removed the task record"
+  git -C "$case_dir/project" show-ref --verify --quiet refs/heads/fm/task-x1 \
+    || fail "reset-off-branch: a refusal deleted the recorded branch"
+  pass "a copy reset off its recorded branch refuses while that branch has unpushed commits"
+}
+
+test_copy_reset_off_its_pushed_recorded_branch_allows() {
+  local case_dir rc
+  case_dir=$(make_case reset-off-pushed)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "pushed branch work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  git -C "$case_dir/wt" checkout -q --detach origin/main
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "reset-off-pushed: a recorded branch whose commits are all on a remote loses nothing"$'\n'"$(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "reset-off-pushed: teardown printed a REFUSED line"
+  pass "a copy off its recorded branch tears down once that branch is fully pushed"
+}
+
+test_copy_reset_off_its_squash_merged_branch_allows() {
+  local case_dir rc pr_head
+  case_dir=$(make_case reset-off-squash-merged)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'branch=fm/task-x1' >> "$case_dir/state/task-x1.meta"
+  wt_commit_file "$case_dir" feature.txt hello "merged branch work"
+  append_pr_meta_for_current_head "$case_dir"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  land_on_origin_main "$case_dir" feature.txt hello
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  git -C "$case_dir/project" fetch -q origin
+  git -C "$case_dir/wt" checkout -q --detach origin/main
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "reset-off-squash-merged: a recorded branch proved by its merged PR is safe to tear down"$'\n'"$(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "reset-off-squash-merged: teardown printed a REFUSED line"
+  pass "a copy reset off its squash-merged recorded branch tears down"
+}
+
+# A copy detached at exactly the recorded branch tip holds everything on that
+# branch, so teardown loses nothing and accepts it (relaunch refuses it).
+test_copy_detached_at_its_recorded_branch_tip_allows() {
+  local case_dir rc
+  case_dir=$(make_case detached-tip)
+  write_meta "$case_dir" no-mistakes ship
+  git -C "$case_dir/wt" checkout -q --detach fm/task-x1
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "detached-tip: a copy detached at its recorded branch tip loses nothing"$'\n'"$(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "detached-tip: teardown printed a REFUSED line"
+  pass "a copy detached at its recorded branch tip tears down"
+}
+
 test_squash_merged_branch_deleted_allows() {
   local case_dir rc pr_head
   case_dir=$(make_case squash-merged)
@@ -4529,6 +4617,10 @@ test_merge_proved_slot_removal
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
+test_copy_reset_off_its_recorded_branch_refuses
+test_copy_reset_off_its_pushed_recorded_branch_allows
+test_copy_detached_at_its_recorded_branch_tip_allows
+test_copy_reset_off_its_squash_merged_branch_allows
 test_local_only_force_overrides_unpushed
 test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses

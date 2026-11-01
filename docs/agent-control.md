@@ -73,17 +73,19 @@ A relaunch does take one session reference when the endpoint's own runtime recor
    A Claude or Pi replacement must also pass the home's [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account), so a pin that no longer resolves or is signed out refuses before the old agent stops.
 2. **Safe checkpoint.**
    The recorded worktree must exist and be a worktree root; its head and dirty state are recorded.
+   A ship's copy must still have HEAD attached to its recorded ship branch, or that branch must not exist yet, because a copy on another branch or detached at the same tip is not safe for new task commits.
    For a `kind=secondmate` task, the home's identity marker must match and its child records must be readable, so a relaunch can never strand child work behind an unreadable home.
    A secondmate's own crewmates run in their own endpoints and outlive its relaunch; the relaunched secondmate reconciles them from its home's durable records at startup.
 3. **Preflight crew admission.**
    A ship or scout replacement must pass the selected account's admission and pacing checks plus the [quota-balance spawn policy](configuration.md#quota-balance) before the current agent is stopped.
    The balance verdict is journaled with the checkpoint and reused by the launch owner, so a later ranking change cannot strand the stopped worker.
+   A Treehouse pool worktree then takes the shared project lock and passes the owner-claim check, and keeps that lock until the launch owner has published the record, so a contended lock or a foreign claim refuses with the old agent still running.
 4. **Record the note.**
    A ship or scout relaunch requires `--note`, because the replacement inherits the local copy but none of the conversation; the note is appended to the instructions it reads.
    A secondmate relaunch does not require one and never rewrites its standing charter.
 5. **Stop the old agent** through the `exit` verb, with its postcondition.
 6. **Launch the replacement** through its single owner, `bin/fm-spawn.sh --relaunch`, which reuses the recorded worktree instead of creating one, adopts the recorded endpoint when it still exists, clears the previous harness's per-task wiring, and arms a fresh busy generation.
-   A Treehouse pool worktree also passes the shared-lock and owner-claim relaunch boundary described in [architecture.md](architecture.md#delivery-modes-are-explicit-per-task).
+   The launch owner inherits that lock and repeats the branch and owner-claim checks before it adopts or creates any endpoint, as described in [architecture.md](architecture.md#delivery-modes-are-explicit-per-task).
    When the recorded endpoint is proven gone rather than merely idle or unreachable - which only Herdr can establish - the launch owner creates one fresh endpoint in that same worktree and the republished record rebinds the task to it - see [Reclaiming a task whose endpoint is gone](#reclaiming-a-task-whose-endpoint-is-gone).
 7. **Preserve runtime-bound status authority where supported.**
    The endpoint's runtime may bind pane status to one session identity; the launch owner preserves it only when that runtime records a reference the replacement adapter can consume, and otherwise launches the ordinary fresh session.
