@@ -116,6 +116,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-tasks-axi.sh`        | Run `tasks-axi` against this home's backlog from any working directory               |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe                  |
 | `fm-backlog-transition-lib.sh` | Pair task-record changes with their backlog transitions and replay interrupted closes |
+| `fm-finish-first.sh`     | Read-only backlog WIP and two-day flow admission with P0 and resume exemptions |
+| `fm-flow-report.sh`      | Report finished, closed-not-landed, and started work for one completed AEST day |
 | `fm-quota-axi-lib.sh`    | Shared `quota-axi` compatibility floor and quota snapshot schema validation           |
 | `fm-live-workers-lib.sh` | Shared live-worker count for Claude admission, away spend cap, quota pacing and placement |
 | `fm-quota-pacing-lib.sh` | Shared quota-pacing allowance evidence and launch admission                          |

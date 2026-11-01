@@ -381,10 +381,59 @@ Under that gate, dispatch accepts only an unheld, unblocked Queued or In flight 
 
 [`bin/fm-tasks-axi.sh`](../bin/fm-tasks-axi.sh) refuses `add --start` and its `create --start` alias.
 Either would place a row In flight without a task record, status file, or inbox, counting it as live work that nobody is doing.
-The wrapper still passes through the documented direct transition `tasks-axi start <id>`.
+The wrapper still passes through the documented direct transition `tasks-axi start <id>` as an administrative record of reality; it starts no worker and does not perform dispatch admission.
 Completion refuses to report success until the item is closed, and session start reconciles this home's own books after an interrupted run.
 
 When a spawn is interrupted after launch delivery began, its exit path re-reads the paired task record and the backlog row under the same per-task lock as the commit, repairs a row the commit believed it had moved, and reports only what was verified or honestly attempted, never intent phrased as outcome ([`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-backlog-atomicity.test.sh`](../tests/fm-backlog-atomicity.test.sh)).
+
+### Finish-first admission
+
+Fresh ship and scout spawns check finish-first admission through [`bin/fm-finish-first.sh`](../bin/fm-finish-first.sh) before allocating their endpoint or worktree.
+Within each impact level the existing placement queue orders carried-over resumptions first, then dated queued work oldest first, then undated work in backlog order.
+This is the rule 20 ordering contract, not a same-priority veto: below the WIP bound, another queued item at that priority may still start while an item remains In flight.
+Each request is assessed independently; an older held, blocked or unplaceable job does not veto other runnable work.
+An In-flight item may resume without becoming a new start.
+Captain obligations, public follow-ups, persistent secondmates and parent program commissions are not worker jobs in this check.
+The same backlog applicability rules as lifecycle transitions apply, including the manual-backend and absent-backlog exemptions.
+Configured placement records finish-first refusals as `wip` waits in its existing ledger and rechecks them through the ordinary queue; they are not machine-capacity bottlenecks.
+The spawn repeats the check under its task-set lock before allocation.
+
+When `config/crew-placement.json` exists, its positive `max_crew` value sets the WIP bound at twice that many crew slots.
+Only unheld, unblocked In-flight worker rows with activity in the preceding 72 hours count: a stamped status event, a positively live worker, or a pull request update.
+A parked record, an old status, or a future timestamp is not recent activity.
+Provider reads are bounded; unavailable activity is warned and listed separately without charging an unproved row to WIP.
+`config/finish-first-wip-mode` accepts `warn` or `enforce`; absence defaults to `enforce` in every home.
+At the bound, warn mode allows admission with one warning naming the count and oldest active jobs; enforce mode refuses it.
+Warn mode loosens Zac's rule 20 cap and may be enabled for a home only with his explicit approval.
+Held, blocked, and stale records never consume WIP, and the report lists stale jobs for triage without closing them.
+A worker row with `(serves: <task-id>)` and `(support: review|replay|fix|recheck)` naming an unheld, unblocked In-flight worker is finishing that item, so it bypasses both start bounds and does not consume another WIP item.
+The parent must have no support role or serves link: self-links, chains and cycles never qualify.
+Record the relation and one of those four support roles explicitly in the backlog row (in a native backend, its title); a review-like task name alone grants no exemption, and holds or blockers on the support row still apply.
+P0 bypasses the WIP check and the two-day stop; linked finishing work remains exempt in both modes.
+Homes without `crew-placement.json` remain uncapped; malformed placement configuration refuses ordinary admission.
+This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
+[`tests/fm-finish-first.test.sh`](../tests/fm-finish-first.test.sh) exercises admission and placement using the operational backlog shape.
+
+### Daily work flow
+
+[`bin/fm-flow-report.sh`](../bin/fm-flow-report.sh) reports finished, closed-not-landed and started items separately for the previous AEST day, or for one explicit completed day selected with `--date`.
+Teardown emits a finished event only after verified pull request merge, a recorded local landing still containing the exact task head, or a scout report whose completion gate passed.
+The local merge command records `local_landed_head` in task metadata only when it advances the default branch; old local landings without a receipt remain closed-not-landed.
+Another Done transition, including a direct `done --pr`, is closed-not-landed.
+A job closed and then proven landed on the same AEST day appears only as finished, not also as closed-not-landed.
+Stored timestamps remain UTC.
+[`bin/fm-flow-history.py`](../bin/fm-flow-history.py) owns journal schema, recording boundaries and unknown-history behavior; [`tests/fm-flow-report.test.sh`](../tests/fm-flow-report.test.sh) exercises real wrapper and lifecycle transitions.
+Manual edits and direct calls to `tasks-axi` are outside this journal, so this is transition evidence rather than a reconstruction of all historical work.
+When recorded worker starts exceed finished deliveries on both reported AEST days, the report emits `stop_starting: yes`.
+Fresh admission then refuses work at the same or a lower priority than active, unheld In-flight work, while a higher priority still jumps the queue; warn mode does not disable this two-day rule.
+Current holds and blockers do not retroactively change the recorded signal, while non-worker starts remain excluded.
+Receipts snapshot the validated `serves` relation at start and preserve it at closure even after the parent closes; those support transitions contribute neither new starts nor extra deliveries to the daily totals.
+Malformed history affects only its bounded date interval; recording failures raise a deduplicated wake and never prevent a backlog mutation.
+Preserve damaged journals for diagnosis; after repairing a storage limit, archive the journal outside `flow-history.jsonl` and let the next transition begin new coverage rather than fabricating historical receipts.
+Historical linked support is named from its first recorded day, and the current appendix names every claimed link, including invalid links and newly queued support.
+A separate current-state appendix reports WIP mode, count, the oldest five active jobs and `stale, for Zac's triage`; an overloaded home prints `WIP over cap (N of M)` every morning.
+This current snapshot never rewrites the historical start/finish counts or automatically closes a job.
+The pstack job 03 morning scoreboard is the intended consumer of these counts.
 
 ### Which backlog receives a transition
 
@@ -1437,14 +1486,15 @@ The slot owner signals successful reclaim and merge-proved slot removal through 
 
 The ordinary watcher rechecks capacity waits on crew metadata/lock changes, explicit slot-reclaim signals, and at least every 900 seconds while the watcher is running.
 It orders requests by the canonical backlog `(impact: P0)` through `(impact: P3)`, oldest first within each level.
-Missing impact defaults to P2; legacy `(priority: N)` and task-classification fields never override impact.
+The shared backlog parser uses explicit impact first, legacy numeric `(priority: 0..3)` only when impact is absent, then P2.
+Placement, WIP admission and flow receipts use that same resolved impact.
 The read-only backlog parser strips impact metadata from display titles, and each queue read uses the current backlog impact.
 Rechecks preserve the original wait age, apply current machine/account checks, and append one ordinary `capacity-ready` row to the durable wake queue for Firstmate to reroute through dispatch; they never launch a worker or grant new authority.
 A failing recheck wakes the supervisor once per distinct error, then at most every 900 seconds.
 Backlog captain/external holds suspend admission checks until the row is queued and unheld again.
 A wait whose backlog row is done or no longer exists leaves the queue.
 Capacity and hold waits keep ordinary supervision alive even with no live workers; unplaceable waits do not.
-Firstmate's morning report reads `bin/fm-placement.sh waits` (run from the home, for example `FM_HOME=<home> <home>/bin/fm-placement.sh waits`): a JSON array of the same ledger, ordered P0-P3 then oldest first, where each current-wait row carries `task`, `state` (`capacity`, `ready`, `hold`, or `unplaceable`), `failed` (the named failing checks), `impact`, `since`, `checked`, `request`, and `over_four_hours` (true only for a `capacity` or `ready` wait older than four hours).
+Firstmate's morning report reads `bin/fm-placement.sh waits` (run from the home, for example `FM_HOME=<home> <home>/bin/fm-placement.sh waits`): a JSON array of the same ledger, ordered P0-P3 then oldest first, where each current-wait row carries `task`, `state` (`capacity`, `ready`, `wip`, `hold`, or `unplaceable`), `failed` (the named failing checks), `impact`, `since`, `checked`, `request`, and `over_four_hours` (true only for a `capacity` or `ready` wait older than four hours).
 The same read includes `history` rows for capacity waits that exceeded four hours before admission, removal, or a hold, for 48 hours after their last capacity observation so the next morning can report resolved bottlenecks too.
 These rows carry `over_four_hours: true`, `wait_seconds`, and `observed_at`; they never reenter dispatch, and their durable evidence remains in the ledger's `bottlenecks` map after the reporting window expires.
 The per-attempt decision with each check's reason is the matching entry in `state/capacity.json` `.decisions`.

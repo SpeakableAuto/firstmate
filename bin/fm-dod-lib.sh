@@ -339,6 +339,17 @@ There is no pull request, no \`gh-axi\` call, and no forge CI result to report: 
 EOF
 }
 
+# Render the wire form owned by status_checkpoint_warning in fm-classify-lib.sh.
+fm_checkpoint_fields_block() {
+  cat <<'EOF'
+Use this fixed checkpoint form (semicolon-separated, every value nonempty):
+`working [at=<epoch>]: checkpoint; done=<result and validation>; next=<remaining step>; how_to_resume=<command or evidence>; branch=<branch or none>; checkpoint_sha=<full 40-character SHA or local>`
+Use the same fields for a paused handoff, with its reason and `until` time after a final semicolon.
+Use `local` only when there is no commit yet; an unpushed commit still names its exact SHA and says it is local and not yet pushed.
+The prior trail is authoritative on pickup; verify inherited claims against the referenced artifacts before continuing.
+EOF
+}
+
 # Shared checkpoint contract for generated ships and promoted scouts.
 # Delivery-specific publication authority remains with fm_dod_block below.
 fm_checkpoint_block() {  # <mode> <task-id> <branch> <forge>
@@ -354,6 +365,7 @@ Record the pushed commit as checkpoint_sha=<full 40-character SHA> in that note,
 Before validation takes custody, commit each meaningful implementation checkpoint with that same concise resume note in the commit body; never commit secrets or private operational context.
 While no-mistakes owns the branch, report its run identifier, current gate and supported reattach command instead of editing or committing its work.
 EOF
+  fm_checkpoint_fields_block
   case "$mode:$forge" in
     local-only:*)
       printf '%s\n' 'Keep checkpoints on the local task branch; the local-only contract forbids remote publication, so report that cross-machine resume requires firstmate to arrange transfer.' ;;

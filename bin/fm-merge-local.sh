@@ -22,6 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+MERGE_STATE=$STATE
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
@@ -31,11 +32,11 @@ if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
   exit 2
 fi
 ID=$1
-fm_backlog_directory_present "$STATE" "state directory" || {
+fm_backlog_directory_present "$MERGE_STATE" "state directory" || {
   echo "error: local merge refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
   exit 1
 }
-META="$STATE/$ID.meta"
+META="$MERGE_STATE/$ID.meta"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -120,7 +121,7 @@ if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
   exit 1
 fi
 
-before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
+before=$(git -C "$PROJ" rev-parse "$DEFAULT")
 hold_status=0
 FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
   "$SCRIPT_DIR/fm-captain-hold.sh" open "$ID" --distinguish-absent || hold_status=$?
@@ -137,10 +138,15 @@ case "$hold_status" in
 esac
 merge_status=0
 git -C "$PROJ" merge --ff-only "$BRANCH" >/dev/null || merge_status=$?
+[ "$merge_status" -eq 0 ] || exit "$merge_status"
+after=$(git -C "$PROJ" rev-parse "$DEFAULT")
+# Bind completion evidence to actual new commits, never an already-up-to-date
+# empty branch. The existing task control lock protects this receipt.
+if [ "$before" != "$after" ]; then
+  printf 'local_landed_head=%s\n' "$after" >> "$META" || exit 1
+fi
 fm_lock_release "$MERGE_CONTROL_LOCK" || true
 MERGE_CONTROL_LOCK=
-[ "$merge_status" -eq 0 ] || exit "$merge_status"
-after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"
