@@ -111,14 +111,15 @@ fm_live_workers_count() {
 # urgent mark, so a live urgent task fills the reserved slot rather than an
 # ordinary one. Unknown evidence prints 0, keeping the stricter ordinary bound.
 fm_live_workers_urgent() { # <data> <counted>
-  local data=$1 counted=$2 dir backlog='{"records":[]}' n
+  local data_dir=$1 counted=$2 dir backlog='{"records":[]}' n
   [ -n "$counted" ] || { printf '0'; return 0; }
   dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   # shellcheck source=bin/fm-backlog-lib.sh
   declare -F backlog_json >/dev/null || . "$dir/fm-backlog-lib.sh"
-  backlog=$(backlog_json "$data/backlog.md" 2>/dev/null) || backlog='{"records":[]}'
-  # shellcheck disable=SC2046 # task ids are safe meta file stems
-  n=$(printf '%s\n' "$backlog" | python3 "$dir/fm-placement.py" urgent-live "$data" $(printf '%s\n' "$counted" | sed 's/, /\n/g') 2>/dev/null) || n=0
+  backlog=$(backlog_json "$data_dir/backlog.md" 2>/dev/null) || backlog='{"records":[]}'
+  local -a ids
+  read -r -a ids <<< "${counted//,/ }"
+  n=$(printf '%s\n' "$backlog" | python3 "$dir/fm-placement.py" urgent-live "$data_dir" "${ids[@]}" 2>/dev/null) || n=0
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   printf '%s' "$n"
 }
