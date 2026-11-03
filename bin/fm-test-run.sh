@@ -317,7 +317,7 @@ family_for_basename() {
     fm-turnend-foreign-owner-arm-fix.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-durable-queue.test.sh|fm-watch-recovery-loop.test.sh|\
     fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
-    fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh)
+    fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh|fm-progress-audit.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
     fm-supervisor-watchdog-herdr-e2e.test.sh|\
@@ -1477,7 +1477,7 @@ families_for_changed_path() {
     bin/fm-workflow-context.sh)
       printf '%s\n' pure-contract-unit session-bootstrap
       ;;
-    bin/fm-watch*|bin/fm-wake*|bin/fm-inactive-reconcile.sh|\
+    bin/fm-watch*|bin/fm-wake*|bin/fm-inactive-reconcile.sh|bin/fm-progress-audit.sh|\
     bin/fm-classify-lib.sh|bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
       ;;

@@ -2,7 +2,7 @@
 name: stuck-crewmate-recovery
 description: >-
   Agent-only playbook for stuck or missing ordinary Firstmate direct reports.
-  Use when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
+  Use when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or after a stale wake, a progress-audit check wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
   Also use on the inverse case: a live crewmate reporting the no-mistakes pipeline dead, unreachable, or timed out.
   Reconciles recorded work before escalating from targeted inspection through safe relaunch or failure.
 user-invocable: false
@@ -21,6 +21,14 @@ Interrupt, stop, and relaunch a worker through `bin/fm-control.sh <task-id> inte
 That plane covers workers running in this home; a remotely placed secondmate is refused by name and reconciled through `secondmate-provisioning` instead.
 Load `harness-adapters` before a resume command or a harness-specific skill invocation, and whenever the adapter's own quirks matter.
 The target window's harness is recorded as `harness=` in `state/<id>.meta`.
+
+## Progress-audit wake
+
+A `check: progress-audit` wake means `bin/fm-progress-audit.sh` found a ship or scout that landed no push, commit, status event or report for its whole window, or whose endpoint or local copy is gone; its header owns the evidence, causes, window and cadence.
+Run `bin/fm-progress-audit.sh recover <id>` for each crew the wake names: it performs the cause's due action (a steer, or a relaunch through `fm-control` carrying a consolidated note) and records the attempt, so the two-attempt allowance holds across sessions.
+Do not hand-drive the escalation ladder below for a crew the check is recovering; an uncounted relaunch defeats the cap.
+Exit 3 is the one escalation after two attempts with nothing landed since, or a crew no retry can reach: record the failure in the backlog and tell the captain the plain failure, preserved work, and consequence under `AGENTS.md` section 9.
+`bin/fm-progress-audit.sh account` prints the full roll-call, one line per recorded crew, when the wake lists more crews than it names.
 
 ## Session-start reconciliation for a dead ordinary direct report
 
@@ -81,4 +89,4 @@ Escalate in order:
    Genuine wedging means looping, unresponsive, repeating the same obstacle, or truly dead.
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
    The worktree and commits persist, so relaunch is cheap.
-5. If a second relaunch fails too, write `failed` to the backlog and tell the captain the plain failure, preserved work, and consequence using `AGENTS.md` section 9; do not mention metadata, harness, window, or worktree unless the path itself is needed for action.
+5. If a second relaunch fails too (the progress audit's `recover` counts its own attempts and says when this point is reached), write `failed` to the backlog and tell the captain the plain failure, preserved work, and consequence using `AGENTS.md` section 9; do not mention metadata, harness, window, or worktree unless the path itself is needed for action.
