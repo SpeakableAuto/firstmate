@@ -2068,6 +2068,20 @@ live_claude "$REMOTE_HOME/state" 2
 rm -rf "$HOME_DIR/state/quota-remote"
 balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
 assert_equals local "$(jq -r .chosen.home <<<"$out")" 'a full remote machine is not named as the pick'
+# A machine down to its reserved slot takes only Firstmate-marked urgent work.
+live_claude "$REMOTE_HOME/state" 1
+rm -rf "$HOME_DIR/state/quota-remote"
+balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
+assert_equals local "$(jq -r .chosen.home <<<"$out")" 'ordinary work passes over a machine whose last slot is reserved'
+printf '%s\n' '{"workload":"backend","requires_drive":false,"reported_urgency":"urgent"}' > "$TMP_ROOT/placement.json"
+rm -rf "$HOME_DIR/state/quota-remote"
+balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
+assert_equals local "$(jq -r .chosen.home <<<"$out")" 'a reporter urgency label does not unlock the reserved slot'
+printf '%s\n' '{"workload":"backend","requires_drive":false,"urgent":true}' > "$TMP_ROOT/placement.json"
+rm -rf "$HOME_DIR/state/quota-remote"
+balance_run "$BRIEF" --project pager --rule rule_1 --check claude opus high
+assert_equals peer "$(jq -r .chosen.home <<<"$out")" 'urgent work may take the reserved slot on the better machine'
+rm "$TMP_ROOT/placement.json"
 live_claude "$REMOTE_HOME/state" 0
 rm "$REMOTE_HOME/config/crew-placement.json"
 cp "$BASE_RULES" "$RULES"

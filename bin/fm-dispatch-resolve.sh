@@ -161,6 +161,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-timing-lib.sh"
 # shellcheck source=bin/fm-brief-heading-lib.sh
 . "$SCRIPT_DIR/fm-brief-heading-lib.sh"
+# shellcheck source=bin/fm-backlog-lib.sh
+. "$SCRIPT_DIR/fm-backlog-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-backend.sh
@@ -724,7 +726,7 @@ remote_home() { # <id> -> remote.<id>.json, read once per call
 }
 
 homes_for() { # <index> -> homes.<index>.json
-  local i=$1 project=${PROJECTS[$1]} ids id local_eligible=true local_reason='' machine work='{}' workfile
+  local i=$1 project=${PROJECTS[$1]} ids id local_eligible=true local_reason='' machine work='{}' workfile urgent impact
   local -a files=()
   ids=
   ids=$(remote_ids "$project")
@@ -752,8 +754,18 @@ homes_for() { # <index> -> homes.<index>.json
   done <<<"$ids"
   workfile="$(dirname "${BRIEFS[$i]}")/placement.json"
   [ ! -f "$workfile" ] || work=$(jq -c . "$workfile") || work='{}'
-  jq -s --argjson work "$work" '
+  # Only a machine down to its reserved slot needs this task's urgency.
+  urgent=no
+  if jq -se 'any(.[]; .machine.reserved_only == true)' "${files[@]}" >/dev/null; then
+    impact=P2
+    [ ! -f "$DATA/backlog.md" ] || impact=$(backlog_json "$DATA/backlog.md" | jq -r --arg id "$(brief_key "$i")" \
+      '[.records[]|select(.id==$id)|.impact][0] // "P2"') || impact=P2
+    urgent=$(python3 "$SCRIPT_DIR/fm-placement.py" urgent "$workfile" "$impact") || urgent=no
+  fi
+  jq -s --argjson work "$work" --arg urgent "$urgent" '
     map(if .machine.available == false then .eligible=false | .reason=.machine.reason
+        elif .machine.reserved_only == true and $urgent != "yes" then
+          .eligible=false | .reason="only the crew slot reserved for urgent work is free"
         elif $work.requires_drive == true and (.machine.profile.drive // "") == "" then
           .eligible=false | .reason="task requires an external drive this machine cannot provide"
         elif $work.workload != null and .machine.configured == true

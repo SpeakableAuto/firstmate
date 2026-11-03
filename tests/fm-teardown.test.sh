@@ -4530,6 +4530,63 @@ test_retained_sources_still_reach_the_ordinary_refusal() {
   pass "present required sources still reach the ordinary teardown refusal"
 }
 
+# Full teardown entrypoint: a pushed branch is safe to preserve/retire, but
+# only verified delivery may enter the finished bucket.
+test_flow_delivery_evidence() {
+  local variant case_dir head landing rc
+  for variant in OPEN CLOSED MERGED local-unlanded local-empty local-landed scout; do
+    case_dir=$(make_case "flow-$variant")
+    write_meta "$case_dir" no-mistakes ship
+    if [ "$variant" != local-empty ]; then wt_commit_file "$case_dir" feature.txt hello feature; fi
+    head=$(git -C "$case_dir/wt" rev-parse HEAD)
+    git -C "$case_dir/wt" push -q origin fm/task-x1
+    git -C "$case_dir/project" fetch -q origin
+    case "$variant" in
+      local-*)
+        write_meta "$case_dir" local-only ship
+        if [ "$variant" = local-landed ]; then
+          FM_HOME="$case_dir" FM_ROOT_OVERRIDE="$ROOT" PATH="$case_dir/fakebin:$PATH" \
+            bash "$ROOT/bin/fm-merge-local.sh" task-x1 > "$case_dir/local-merge.out" 2> "$case_dir/local-merge.err" \
+            || { cat "$case_dir/local-merge.err"; fail 'local landing command'; }
+          assert_contains "$(cat "$case_dir/state/task-x1.meta")" "local_landed_head=$head" 'landing command records delivered head'
+        fi ;;
+      scout)
+        write_meta "$case_dir" no-mistakes scout
+        mkdir -p "$case_dir/data/task-x1"
+        printf '# Findings\nComplete.\n' > "$case_dir/data/task-x1/report.md"
+        FM_HOME="$case_dir" FM_ROOT_OVERRIDE="$ROOT" bash "$ROOT/bin/fm-captain-hold.sh" complete task-x1 --none >/dev/null || fail 'scout inventory' ;;
+      *)
+        printf 'pr=https://github.com/example/repo/pull/7\n' >> "$case_dir/state/task-x1.meta"
+        cat > "$case_dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in "pr view") printf '%s\t%s\t%s\n' '$variant' '$head' https://github.com/example/repo/pull/7; exit 0;; esac
+exit 0
+SH
+        chmod +x "$case_dir/fakebin/gh" ;;
+    esac
+    seed_backlog_in_flight "$case_dir"
+    rc=0
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    [ "$rc" = 0 ] || { cat "$case_dir/stderr"; fail "flow $variant teardown failed"; }
+    landing=$(python3 - "$case_dir/data/flow-history.jsonl" <<'PYFLOW'
+import json, sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+print([r['landing'] for r in rows if r['type']=='transition'][-1])
+PYFLOW
+)
+    case "$variant" in MERGED) assert_equals merge "$landing" 'merged PR delivered' ;;
+      local-landed) assert_equals local "$landing" 'recorded local landing delivered' ;;
+      scout) assert_equals report "$landing" 'scout report delivered' ;;
+      *) assert_equals none "$landing" "$variant never counted finished" ;; esac
+  done
+  pass 'full teardown proves PR, local and scout deliveries before recording finished'
+}
+if [ "${FM_TEARDOWN_FLOW_ONLY:-0}" = 1 ]; then
+  test_flow_delivery_evidence
+  exit 0
+fi
+ test_flow_delivery_evidence
+
 test_missing_startup_source_refuses_before_cleanup
 test_unreadable_startup_source_refuses_before_cleanup
 test_missing_adapter_sibling_refuses_before_cleanup

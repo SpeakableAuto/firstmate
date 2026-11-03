@@ -8,6 +8,8 @@ Usage: fm-placement.py assess CONFIG DATA ID HARNESS MODEL EFFORT
        fm-placement.py waits STATE
        fm-placement.py drop STATE ID
        fm-placement.py due STATE
+       fm-placement.py urgent PLACEMENT_JSON IMPACT
+       fm-placement.py urgent-live DATA [ID...]
 memory reads fresh operating-system memory/swap evidence; assess consumes JSON
 evidence on stdin and prints a complete decision.
 record consumes that decision; one replace publishes the decision and its wait
@@ -19,6 +21,8 @@ A fit refusal is 'unplaceable' (never a capacity wait);
 a terminal decision or drop removes the wait.
 due emits 'due' on a 900-second cadence or a changed resource fingerprint;
 it never launches work. The watcher owns rechecks and normal wake delivery.
+urgent prints yes or no for the reserved-slot rule (see urgent() below);
+urgent-live counts the named live tasks it marks, from backlog JSON on stdin.
 """
 
 import fcntl
@@ -57,6 +61,36 @@ def atomic(path, value):
     finally:
         if os.path.exists(name):
             os.unlink(name)
+
+
+def urgent(work, impact):
+    """Only Firstmate's own marks make work urgent: backlog impact P0, or an
+    explicit placement.json impact P0 or "urgent": true written after triage.
+    A reporter's urgency label in titles or brief text never counts."""
+    work = work if isinstance(work, dict) else {}
+    return impact == "P0" or work.get("impact") == "P0" or work.get("urgent") is True
+
+
+def room_limit(cap, is_urgent, urgent_live=0):
+    """Ordinary work leaves the last crew slot free for one urgent task; a
+    live urgent task fills that reserve, not one of the cap - 1 ordinary slots."""
+    if is_urgent or cap < 2:
+        return cap
+    return min(cap, cap - 1 + (urgent_live if type(urgent_live) is int and urgent_live > 0 else 0))
+
+
+def urgent_live(data, tasks, records):
+    """Count live tasks carrying Firstmate's urgent mark."""
+    impacts = {row.get("id"): row.get("impact") for row in records if isinstance(row, dict)}
+    total = 0
+    for task in tasks:
+        work = data / task / "placement.json"
+        try:
+            value = read(work) if work.is_file() and not work.is_symlink() else {}
+        except (OSError, ValueError):
+            value = {}
+        total += urgent(value, impacts.get(task) or "P2")
+    return total
 
 
 def result(passed, reason):
@@ -220,7 +254,7 @@ def assess(config, data, task, harness, model, effort):
         value = evidence.get(name)
         if isinstance(value, dict) and value.get("status") in ("pass", "fail"):
             checks[name] = value
-    machine = None
+    machine = work = None
     try:
         profile = read(config / "crew-placement.json")
         if not isinstance(profile, dict) or profile.get("version") != 1:
@@ -299,6 +333,10 @@ def assess(config, data, task, harness, model, effort):
             count = evidence.get("crew_count")
             if type(count) is not int or count < 0 or count >= cap:
                 raise ValueError(f"crew cap: count={count}, cap={cap}")
+            # A relaunch resumes a task that already held its slot.
+            if (evidence.get("relaunch") is not True
+                    and count >= room_limit(cap, urgent(work, evidence.get("impact")), evidence.get("urgent_live"))):
+                raise ValueError(f"crew cap: count={count}, cap={cap}; last slot reserved for urgent work")
             free, swap = evidence.get("memory", {}).get("free_percent"), evidence.get("memory", {}).get("swap_mib")
             if not all(type(v) in (int, float) and math.isfinite(v) and v >= 0 for v in (free, swap)):
                 raise ValueError("memory pressure or swap evidence absent")
@@ -383,11 +421,12 @@ def ledger(state, operation, task=None, mode=None):
                 value["waits"].pop(task, None)
             else:
                 value["waits"][task] = {
-                    "task": task, "since": now if old.get("state") == "hold" else old.get("since", now), "checked": now,
+                    "task": task, "since": now if old.get("state") == "hold" or (old.get("state") == "wip" and decision["failed"] != ["finish-first"]) else old.get("since", now), "checked": now,
                     "impact": decision["impact"], "failed": decision["failed"],
                     "request": decision["request"],
                     "state": "ready" if decision["admitted"] else
-                             "unplaceable" if "fit" in decision["failed"] else "capacity",
+                             "unplaceable" if "fit" in decision["failed"] else
+                             "wip" if decision["failed"] == ["finish-first"] else "capacity",
                 }
             atomic(path, value)
             return decision
@@ -410,9 +449,12 @@ def ledger(state, operation, task=None, mode=None):
                 atomic(path, value)
             return True
         if operation in ("waits", "ordered"):
-            impacts = {}
+            impacts, order = {}, {}
             if operation == "ordered":
-                impacts = {row["id"]: row.get("impact") or "P2" for row in json.load(sys.stdin)["records"]}
+                records = json.load(sys.stdin)["records"]
+                impacts = {row["id"]: row.get("impact") or "P2" for row in records}
+                order = {row["id"]: (row["state"] != "in_flight", row.get("since") or "9999-99-99", row["order"])
+                         for row in records}
             history = []
             for event in value.get("bottlenecks", {}).values():
                 current = value["waits"].get(event["task"], {})
@@ -423,8 +465,11 @@ def ledger(state, operation, task=None, mode=None):
             rows = [dict(row, impact=impacts.get(row["task"], row.get("impact", "P2")),
                                 over_four_hours=row["state"] in ("capacity", "ready") and now - row["since"] > 14400)
                     for row in value["waits"].values()] + history
-            return sorted(rows,
-                          key=lambda row: (row["impact"], row["since"], row["task"]))
+            # Undated queued work falls back to wait age before backlog position.
+            def rank(row):
+                carried, dated, position = order.get(row["task"], (True, "9999-99-99", 0))
+                return (row["impact"], carried, dated, row["since"], position, row["task"])
+            return sorted(rows, key=rank)
         if not value["waits"]:
             return False
         # Metadata removals cover teardown/auto-retire. Lock and explicit slot
@@ -443,7 +488,7 @@ def ledger(state, operation, task=None, mode=None):
         return due
 
 
-def pool(config, count):
+def pool(config, count, live_urgent=0):
     """Read-only machine fit/room evidence for the quota resolver pool."""
     path = config / "crew-placement.json"
     if not path.exists():
@@ -455,6 +500,8 @@ def pool(config, count):
             raise ValueError("invalid machine crew cap")
         if count < 0 or count >= cap:
             raise ValueError(f"machine crew cap: {count}/{cap}")
+        # Remote evidence is task-independent; the resolver applies urgent().
+        reserved_only = count >= room_limit(cap, False, live_urgent)
         free, swap = memory()
         if free < profile["min_free_memory_percent"] or swap > profile["max_swap_mib"]:
             raise ValueError("machine memory or swap limit")
@@ -467,7 +514,8 @@ def pool(config, count):
             stat = os.statvfs(volume["path"])
             if stat.f_bavail * stat.f_frsize / 1024**3 < volume["min_free_gib"]:
                 raise ValueError("machine disk below floor")
-        return {"configured": True, "available": True, "profile": profile, "crew_count": count}
+        return {"configured": True, "available": True, "profile": profile, "crew_count": count,
+                "reserved_only": reserved_only}
     except (OSError, ValueError, KeyError, TypeError) as error:
         return {"configured": True, "available": False, "reason": str(error)}
 
@@ -475,7 +523,16 @@ def pool(config, count):
 def main():
     operation, *args = sys.argv[1:]
     if operation == "pool":
-        output = pool(Path(args[0]), int(args[1]))
+        output = pool(Path(args[0]), int(args[1]), int(args[2]) if len(args) > 2 else 0)
+    elif operation == "urgent":
+        path, impact = args
+        work = read(Path(path)) if Path(path).is_file() else {}
+        print("yes" if urgent(work, impact) else "no")
+        return
+    elif operation == "urgent-live":
+        records = json.load(sys.stdin).get("records", [])
+        print(urgent_live(Path(args[0]), args[1:], records if isinstance(records, list) else []))
+        return
     elif operation == "memory":
         free, swap = memory()
         output = {"free_percent": free, "swap_mib": swap}

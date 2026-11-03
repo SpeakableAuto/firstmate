@@ -137,4 +137,31 @@ else
 fi
 
 cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
+# Help is read-only even for mutation verbs; do not create a journal attempt.
+for arg in ${ARGS[@]+"${ARGS[@]}"}; do
+  case "$arg" in -h|--help) exec tasks-axi "${ARGS[@]}" ;; esac
+done
+case "${ARGS[0]:-}" in
+  start|done|close|reopen)
+    # Preserve tasks-axi output and status; the shared hook also covers spawn
+    # and teardown's direct lifecycle mutations.
+    # Locate the positional id without changing native argument validation.
+    flow_id='' skip_value=0
+    for arg in "${ARGS[@]:1}"; do
+      if [ "$skip_value" = 1 ]; then skip_value=0; continue; fi
+      case "$arg" in
+        --pr|--report|--note|--keep) skip_value=1 ;;
+        --*) ;;
+        *) [ -n "$flow_id" ] || flow_id=$arg ;;
+      esac
+    done
+    fm_flow_begin "$DATA" "${ARGS[0]}" "$flow_id" none || fm_flow_warning "$DATA" "could not record ${ARGS[0]} ${flow_id:-missing-id}; history incomplete"
+    flow_token=$FM_FLOW_TOKEN
+    output=$(tasks-axi "${ARGS[@]}")
+    result=$?
+    [ -z "$output" ] || printf '%s\n' "$output"
+    fm_flow_finish "$DATA" "$flow_token" "${ARGS[0]}" "$flow_id" "$result" "$output" || true
+    exit "$result"
+    ;;
+esac
 exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}

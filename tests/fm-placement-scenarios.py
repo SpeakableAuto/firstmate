@@ -129,7 +129,9 @@ fm_placement_count
             self.live(home, f'live-{i}')
             self.assertEqual(self.crew_count(home), i + 1)
             result = self.admit(home, 'candidate')
-            self.assertEqual(result.returncode == 0, i < 3, result.stderr)
+            self.assertEqual(result.returncode == 0, i < 2, result.stderr)
+            if i == 2:
+                self.assertIn('last slot reserved for urgent work', self.ledger(home)['decisions'][-1]['checks']['room']['reason'])
         self.assertIn('count=4, cap=4', self.ledger(home)['decisions'][-1]['checks']['room']['reason'])
 
     def test_unreadable_crew_liveness_refuses_room(self):
@@ -170,7 +172,7 @@ fm_placement_count
                     FM_STATE_OVERRIDE=str(home / 'state'), FM_WAKE_QUEUE=str(home / 'state/.wake-queue'),
                     FM_WAKE_QUEUE_LOCK=str(home / 'state/.wake-queue.lock'))
 
-    def admit(self, home, task):
+    def admit(self, home, task, relaunch=False):
         # Same admission owner used by spawn, without allocating a worker.
         script = '''SCRIPT_DIR=$1/bin
 CONFIG=$FM_CONFIG_OVERRIDE DATA=$FM_DATA_OVERRIDE STATE=$FM_STATE_OVERRIDE PROJ=$2
@@ -182,7 +184,8 @@ CONFIG=$FM_CONFIG_OVERRIDE DATA=$FM_DATA_OVERRIDE STATE=$FM_STATE_OVERRIDE PROJ=
 trap fm_placement_release EXIT
 fm_placement_begin "$3" && fm_placement_check codex test high unknown
 '''
-        return subprocess.run(['bash', '-c', script, 'scenario', str(ROOT), str(self.project), task], env=self.env_for(home), capture_output=True, text=True)
+        env = dict(self.env_for(home), RELAUNCH='1' if relaunch else '0')
+        return subprocess.run(['bash', '-c', script, 'scenario', str(ROOT), str(self.project), task], env=env, capture_output=True, text=True)
 
     def tick(self, home):
         result = subprocess.run(['bash', str(ROOT / 'bin/fm-placement.sh'), 'tick'], env=self.env_for(home), capture_output=True, text=True)
@@ -249,6 +252,9 @@ fm_placement_begin "$3" && fm_placement_check codex test high unknown
         self.assertEqual(self.wake_order(heavy), [])
         (heavy / 'state/occupant-0.meta').unlink()
         self.tick(heavy)
+        self.assertEqual(self.wake_order(heavy), [], 'the last slot stays reserved for urgent work')
+        (heavy / 'state/occupant-1.meta').unlink()
+        self.tick(heavy)
         self.assertEqual(self.wake_order(heavy), ['iphone'])
         value = self.ledger(heavy)
         value['last_recheck'] -= 901
@@ -266,7 +272,8 @@ fm_placement_begin "$3" && fm_placement_check codex test high unknown
         self.assertEqual(held.returncode, 0, held.stderr)
         self.age(home, dict(a=18300, b=3900, c=10800, d=172800))
         (home / 'hold-d').touch()
-        (home / 'state/occupant-0.meta').unlink()
+        for i in (0, 1):
+            (home / f'state/occupant-{i}.meta').unlink()
         self.tick(home)
         self.assertEqual(self.wake_order(home), ['c', 'b', 'a'])
         self.assertEqual(self.ledger(home)['waits']['d']['state'], 'hold')
@@ -292,7 +299,8 @@ fm_placement_begin "$3" && fm_placement_check codex test high unknown
             self.task(home, name, 'backend', impact)
             self.refuse(home, name, 'room')
         self.age(home, dict(a=25200, b=5400, c=106200))
-        (home / 'state/occupant-0.meta').unlink()
+        for i in (0, 1):
+            (home / f'state/occupant-{i}.meta').unlink()
         self.tick(home)
         self.assertEqual(self.wake_order(home), ['b', 'a', 'c'])
         self.assertEqual([r['task'] for r in self.rows(home) if r['over_four_hours']], ['a', 'c'])
@@ -305,7 +313,8 @@ fm_placement_begin "$3" && fm_placement_check codex test high unknown
             self.refuse(home, name, 'fit' if home == heavy and name == 'a' else 'room')
         self.age(heavy, dict(a=7200, b=3600, c=10800))
         (heavy / 'hold-c').touch()
-        (heavy / 'state/occupant-0.meta').unlink()
+        for i in (0, 1):
+            (heavy / f'state/occupant-{i}.meta').unlink()
         self.tick(heavy)
         self.tick(light)
         self.assertEqual(self.wake_order(heavy), ['b'])
@@ -314,6 +323,57 @@ fm_placement_begin "$3" && fm_placement_check codex test high unknown
         self.assertEqual(self.ledger(heavy)['waits']['c']['state'], 'hold')
         decision = self.ledger(heavy)['decisions'][-1]
         self.assertTrue(all(decision['checks'][k]['status'] == 'pass' for k in ('fit', 'room', 'quota', 'locks')))
+
+    def test_reserved_urgent_slot(self):
+        home = self.home('heavy', True, count=3)
+        self.task(home, 'ordinary', 'website')
+        self.task(home, 'reporter', 'website')
+        self.task(home, 'flagged', 'website')
+        self.task(home, 'outage', 'website', 'P0')
+        # A reporter's urgency label lives in the title and brief, never in Firstmate's marks.
+        brief = b'URGENT: the office reporter marked this report urgent\n'
+        (home / 'data/reporter/brief.md').write_bytes(brief)
+        work = json.loads((home / 'data/reporter/placement.json').read_text())
+        self.write(home / 'data/reporter/placement.json', dict(work, brief_sha256=hashlib.sha256(brief).hexdigest()))
+        backlog = home / 'data/backlog.md'
+        backlog.write_text(backlog.read_text().replace('- [ ] reporter - Scenario task', '- [ ] reporter - URGENT reported urgent by office'))
+        flagged = json.loads((home / 'data/flagged/placement.json').read_text())
+        self.write(home / 'data/flagged/placement.json', dict(flagged, urgent=True))
+        for name in ('ordinary', 'reporter'):
+            decision = self.refuse(home, name, 'room')
+            self.assertIn('last slot reserved for urgent work', decision['checks']['room']['reason'])
+            self.assertEqual(self.ledger(home)['waits'][name]['state'], 'capacity', 'refused ordinary work stays queued')
+        self.assertEqual(self.admit(home, 'flagged').returncode, 0, 'a Firstmate-flagged urgent task takes the reserved slot')
+        self.live(home, 'flagged-run')
+        decision = self.refuse(home, 'outage', 'room')
+        self.assertIn('count=4, cap=4', decision['checks']['room']['reason'], 'one urgent task at a time holds the reserved slot')
+        self.tick(home)
+        self.assertEqual(self.wake_order(home), [])
+        # The urgent task finishing frees only the reserved slot: the queued urgent task gets it.
+        (home / 'state/flagged-run.meta').unlink()
+        self.tick(home)
+        self.assertEqual(self.wake_order(home), ['outage'])
+        # A freed ordinary slot dispatches the queued ordinary work.
+        (home / 'state/occupant-0.meta').unlink()
+        self.tick(home)
+        self.assertEqual(set(self.wake_order(home)[1:]), {'outage', 'ordinary', 'reporter'})
+
+    def test_reserved_slot_relaunch_and_urgent_occupant(self):
+        home = self.home('heavy', True, count=3)
+        self.task(home, 'restart', 'website')
+        self.task(home, 'ordinary', 'website')
+        self.refuse(home, 'ordinary', 'room')
+        # A relaunch resumes a slot the task already held; the reserve never blocks it.
+        self.assertEqual(self.admit(home, 'restart', relaunch=True).returncode, 0, 'an ordinary relaunch at the reserved boundary')
+        # A live urgent task fills the reserve, so ordinary work keeps max_crew - 1 slots.
+        (home / 'state/occupant-2.meta').unlink()
+        self.task(home, 'flagged', 'website', 'P0')
+        self.live(home, 'flagged')
+        self.assertEqual(self.admit(home, 'ordinary').returncode, 0, 'ordinary work keeps its slots while an urgent task runs')
+        self.assertIn('crew=3/4', self.ledger(home)['decisions'][-1]['checks']['room']['reason'])
+        self.live(home, 'ordinary')
+        decision = self.refuse(home, 'restart', 'room')
+        self.assertIn('count=4, cap=4', decision['checks']['room']['reason'], 'the full cap still holds')
 
 
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(PlacementScenarios)

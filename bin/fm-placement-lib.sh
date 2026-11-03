@@ -78,6 +78,28 @@ fm_placement_alerts() {
   done < <(printf '%s\n' "$alerts" | jq -c '.[]')
 }
 
+# Add the shared backlog policy to the existing placement decision. Rechecks
+# use this too, so a WIP or two-day refusal stays queued until it clears.
+fm_placement_finish_first() { # <decision-json>
+  local decision=$1 reason='not applicable' status=pass applies=0
+  if [ "${RELAUNCH:-0}" != 1 ]; then
+    fm_backlog_transition_applies "$CONFIG" "$DATA" "${KIND:-ship}" || applies=$?
+    if [ "$applies" = 0 ]; then
+      if ! reason=$(FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_DATA_OVERRIDE="$DATA" \
+        bash "$SCRIPT_DIR/fm-finish-first.sh" "$FM_PLACEMENT_ID" 2>&1); then
+        status=fail
+      fi
+    elif [ "$applies" != 1 ]; then
+      status=fail
+      reason="${FM_BACKLOG_TRANSITION_ERROR:-cannot read backlog applicability}"
+    fi
+  fi
+  printf '%s\n' "$decision" | jq --arg status "$status" --arg reason "$reason" '
+    .checks["finish-first"]={status:$status,reason:$reason} |
+    .failed=[.checks|to_entries[]|select(.value.status != "pass")|.key] |
+    .admitted=(.failed|length == 0)'
+}
+
 fm_placement_worktree() { # <project> <acquired-worktree>; amend the same decision
   local check decision
   [ "$FM_PLACEMENT_ACTIVE" = 1 ] || return 0
@@ -176,7 +198,7 @@ fm_placement_quota() { # <harness> <model> <effort>; Claude guard handled by cal
 }
 
 fm_placement_check() {
-  local harness=$1 model=$2 effort=$3 quota=$4 disk=fail slots=fail locks=fail count liveness evidence decision memory slot_reason
+  local harness=$1 model=$2 effort=$3 quota=$4 disk=fail slots=fail locks=fail count liveness evidence decision memory slot_reason impact urgent_live=0
   [ "$FM_PLACEMENT_ACTIVE" = 1 ] || return 0
   [ "$FM_PLACEMENT_LOCK_HELD" != 1 ] || locks=pass
   if FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-disk-guard.sh" --check-room >/dev/null 2>&1; then disk=pass; fi
@@ -187,11 +209,17 @@ fm_placement_check() {
     slots=pass
   fi
   liveness=''
-  if ! count=$(fm_placement_count); then
-    liveness=$count
+  # Same count as fm_placement_count, kept in this shell for the urgent tally.
+  if fm_live_workers_count "$STATE" "$FM_PLACEMENT_ID" 2>/dev/null; then
+    count=$FM_LIVE_WORKERS_COUNT
+    urgent_live=$(fm_live_workers_urgent "$DATA" "$FM_LIVE_WORKERS_COUNTED")
+  else
+    liveness=$FM_LIVE_WORKERS_ERROR
     count=null
   fi
   memory=$(python3 "$SCRIPT_DIR/fm-placement.py" memory) || memory='{}'
+  # Room keeps the last crew slot for urgent work, judged by backlog impact.
+  impact=$(backlog_json "$DATA/backlog.md" | jq -r --arg id "$FM_PLACEMENT_ID" '[.records[]|select(.id==$id)|.impact][0] // "P2"') || return 1
   FM_PLACEMENT_QUOTA_DETAIL=$(jq -cn --arg status "$quota" --arg account "${CLAUDE_QUOTA_IDENTITY:-}" \
     --arg reason "${FM_PLACEMENT_QUOTA_REASON:-selected account admission}" \
     '{status:$status,reason:$reason,account:$account}') || return 1
@@ -215,9 +243,11 @@ fm_placement_check() {
     FM_PLACEMENT_QUOTA_DETAIL=$(printf '%s\n' "$FM_PLACEMENT_QUOTA_DETAIL" | jq -c --argjson balance "$FM_QUOTA_BALANCE_RECORD" '. + {balance: $balance}') || return 1
   fi
   evidence=$(jq -cn --argjson quota "$FM_PLACEMENT_QUOTA_DETAIL" --arg disk "$disk" --arg slots "$slots" --arg locks "$locks" --argjson count "$count" --arg liveness "$liveness" --argjson memory "$memory" \
-    --arg project "${PROJ_ABS:-${PROJ:-}}" --arg reason "$slot_reason" '
-    {quota:$quota,disk:{status:$disk},
+    --arg project "${PROJ_ABS:-${PROJ:-}}" --arg reason "$slot_reason" --arg impact "$impact" \
+    --argjson urgent_live "$urgent_live" --argjson relaunch "$([ "${RELAUNCH:-0}" = 1 ] && echo true || echo false)" '
+    {impact:$impact,urgent_live:$urgent_live,relaunch:$relaunch,quota:$quota,disk:{status:$disk},
      project:$project,slots:{status:$slots,reason:$reason},locks:{status:$locks,reason:"placement and spawn locks"},crew_count:$count,memory:$memory} + (if $liveness == "" then {} else {crew_liveness:$liveness} end)') || return 1
   decision=$(printf '%s\n' "$evidence" | python3 "$SCRIPT_DIR/fm-placement.py" assess "$CONFIG" "$DATA" "$FM_PLACEMENT_ID" "$harness" "$model" "$effort") || return 1
+  decision=$(fm_placement_finish_first "$decision") || return 1
   fm_placement_publish "$decision"
 }
