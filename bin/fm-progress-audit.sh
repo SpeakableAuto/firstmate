@@ -19,6 +19,9 @@
 #   commit  the committer time of the local copy's HEAD;
 #   status  the [at=<epoch>] stamp of the newest recognized status event;
 #   report  the modification time of data/<id>/report.md.
+# Push, commit and report are landed work; a status line is only a sign of
+# life. Any of them keeps the window fresh, but only landed work resets the
+# recovery allowance below.
 # The window clock also restarts at spawn (spawn_gen=s<epoch>.), at a declared
 # pause's due time, and at each recovery attempt, so a fresh or just-recovered
 # crew gets a full window before it is judged again.
@@ -28,7 +31,10 @@
 #   live      progress or a fresh start inside the window;
 #   waiting   a stated reason: an open decision or blocker for firstmate, a
 #             declared pause not yet due, a captain hold, an active validation
-#             run, an idle secondmate, or a remote endpoint read elsewhere;
+#             run (even with its agent gone), an idle secondmate, a remote
+#             endpoint read elsewhere, or the storage holding the local copy
+#             not reachable (one fleet-level finding, never a per-crew
+#             escalation);
 #   finished  the newest event is done or failed: landing or cleanup is owed;
 #   stalled   no progress for the whole window while the endpoint exists;
 #   missing   the endpoint, the local copy, or the record itself is gone.
@@ -44,10 +50,16 @@
 #   pause-overdue   declared pause past due, nothing   steer, then relaunch
 #   agent-exited    endpoint present, agent gone       relaunch, then relaunch
 #   endpoint-gone   endpoint authoritatively absent    relaunch, then relaunch
+#   long-idle       nothing for the long-idle bound    escalate at once
 #   worktree-gone   the local copy is gone             escalate at once
 #   record-unreadable the task record cannot be read   escalate at once
-# Attempts count only since the newest real progress (push, commit, status,
-# report), so a crew that recovers and lands work earns a fresh allowance.
+# long-idle is a record abandoned far beyond any recovery bound
+# (FM_PROGRESS_LONG_IDLE_SECS, default 86400, valid 7200..2592000): it goes to
+# firstmate for hand reconciliation instead of an automatic relaunch of stale
+# work, and costs no endpoint probe.
+# Attempts count only since the newest landed work (push, commit, report), so a
+# crew that recovers and lands work earns a fresh allowance, while a looping
+# crew that answers each steer with only a status line still reaches the cap.
 # After two attempts with no progress since, the next due action is a single
 # escalation; once it is recorded the check stays silent for that crew until
 # it lands progress or its record is cleaned up.
@@ -59,9 +71,12 @@
 # missing, became due for its next attempt, or became due for its one
 # escalation) does it append one durable `check` wake keyed progress-audit and
 # print that reason as `wake: <reason>`; an unchanged fleet prints nothing.
-# The reason names each crew with its cause and next action, at most FM_PROGRESS_AUDIT_WAKE_ITEMS (default 8) of them, then points
-# at `account` for the rest. Surfaced signatures live in
-# state/.progress-audit/<id>; a record with no task meta is pruned there.
+# The reason names each crew with its cause and next action, at most
+# FM_PROGRESS_AUDIT_WAKE_ITEMS (default 8) of them, then points at `account`
+# for the rest. Storage that holds local copies and is not reachable is named
+# once in the same wake, with the count of crews it holds, whenever that set of
+# storage roots changes. Surfaced signatures live in state/.progress-audit/<id>
+# and state/.progress-audit/.storage; a record with no task meta is pruned there.
 # Endpoint and current-state reads stop starting once the
 # FM_PROGRESS_AUDIT_BUDGET_SECS budget (default 20, valid 1..60) is spent; a
 # crew left unconfirmed keeps its previous signature and is read next tick.
@@ -129,6 +144,8 @@ BUDGET=${FM_PROGRESS_AUDIT_BUDGET_SECS:-20}
 bounded_int FM_PROGRESS_AUDIT_BUDGET_SECS "$BUDGET" 1 60
 WAKE_ITEMS=${FM_PROGRESS_AUDIT_WAKE_ITEMS:-8}
 bounded_int FM_PROGRESS_AUDIT_WAKE_ITEMS "$WAKE_ITEMS" 1 50
+LONG_IDLE=${FM_PROGRESS_LONG_IDLE_SECS:-86400}
+bounded_int FM_PROGRESS_LONG_IDLE_SECS "$LONG_IDLE" 7200 2592000
 PAUSE_FALLBACK=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
 case "$PAUSE_FALLBACK" in ''|*[!0-9]*) PAUSE_FALLBACK=$FM_PAUSE_RESURFACE_SECS_DEFAULT ;; esac
 
@@ -181,11 +198,13 @@ ref_push_epoch() {  # <worktree> <ref>
   printf '%s' "$out"
 }
 
-# Sets EVIDENCE_KIND / EVIDENCE_EPOCH to the newest real progress of the task.
+# Sets EVIDENCE_KIND / EVIDENCE_EPOCH to the newest progress of the task, and
+# LANDED_EPOCH to the newest landed work (everything but a status line).
 collect_evidence() {  # <id> <worktree> <branch>
   local id=$1 wt=$2 branch=$3 e line
   EVIDENCE_KIND=none
   EVIDENCE_EPOCH=0
+  LANDED_EPOCH=0
   if [ -n "$wt" ] && [ -d "$wt" ]; then
     if [ -n "$branch" ]; then
       e=$(ref_push_epoch "$wt" "refs/remotes/origin/$branch")
@@ -210,6 +229,9 @@ consider_evidence() {  # <kind> <epoch>
   case "$2" in ''|*[!0-9]*) return 0 ;; esac
   # A clock-skewed future stamp is not evidence of anything yet.
   [ "$2" -le "$NOW" ] || return 0
+  if [ "$1" != status ] && [ "$2" -gt "$LANDED_EPOCH" ]; then
+    LANDED_EPOCH=$2
+  fi
   if [ "$2" -gt "$EVIDENCE_EPOCH" ]; then
     EVIDENCE_EPOCH=$2
     EVIDENCE_KIND=$1
@@ -254,6 +276,21 @@ ledger_append() {  # <id> <line>
 
 # --- classification ----------------------------------------------------------
 
+# Prints the storage root of <path> when the storage itself is not reachable:
+# the nearest existing ancestor is the filesystem root or a mount directory, so
+# the missing child is an unmounted volume rather than one removed copy.
+unreachable_storage() {  # <path>
+  local p=$1 child=''
+  case "$p" in /*) ;; *) return 0 ;; esac
+  while [ "$p" != / ] && [ ! -d "$p" ]; do
+    child=$p
+    p=${p%/*}
+    [ -n "$p" ] || p=/
+  done
+  [ -n "$child" ] || return 0
+  case "$p" in /|/Volumes|/mnt|/media|/media/*|/run/media|/run/media/*) printf '%s' "$child" ;; esac
+}
+
 meta_value() {  # <meta> <key>
   fm_meta_get "$1" "$2"
 }
@@ -294,9 +331,9 @@ budget_left() {
 classify() {
   local id=$1 meta="$STATE/$1.meta" kind wt branch backend target remote_host
   local open line verb note until at start clock pause_due=0 agent cs e
-  BUCKET='' CAUSE='' REASON='' NEXT=- UNCONFIRMED=0 KIND=''
+  BUCKET='' CAUSE='' REASON='' NEXT=- UNCONFIRMED=0 KIND='' STORAGE_ROOT=''
   ATTEMPTS=0 ESCALATED_EPOCH=0 LAST_ATTEMPT_EPOCH=0 LAST_FAILED_EPOCH=0
-  EVIDENCE_KIND=none EVIDENCE_EPOCH=0
+  EVIDENCE_KIND=none EVIDENCE_EPOCH=0 LANDED_EPOCH=0
   if [ ! -f "$meta" ] || [ -L "$meta" ] || ! cat "$meta" >/dev/null 2>&1; then
     BUCKET=missing CAUSE=record-unreadable
     read_ledger "$id" 0
@@ -358,13 +395,19 @@ classify() {
   esac
 
   if [ -z "$wt" ] || [ ! -d "$wt" ]; then
+    STORAGE_ROOT=$(unreachable_storage "$wt")
+    if [ -n "$STORAGE_ROOT" ]; then
+      BUCKET=waiting
+      REASON="storage unavailable: $STORAGE_ROOT holding its local copy is not reachable; judged again when it returns"
+      return 0
+    fi
     BUCKET=missing CAUSE=worktree-gone
-    read_ledger "$id" "$EVIDENCE_EPOCH"
+    read_ledger "$id" "$LANDED_EPOCH"
     next_action
     return 0
   fi
 
-  read_ledger "$id" "$EVIDENCE_EPOCH"
+  read_ledger "$id" "$LANDED_EPOCH"
   start=$(spawn_epoch "$(meta_value "$meta" spawn_gen)")
   # A launch made inside a failed recovery attempt is not a fresh start.
   [ "${start:-0}" -gt "$LAST_FAILED_EPOCH" ] || start=0
@@ -379,6 +422,13 @@ classify() {
     else
       REASON="inside its window since $(iso_utc "$clock"); nothing landed yet"
     fi
+    return 0
+  fi
+  # Abandoned far beyond any recovery bound: hand reconciliation, not a
+  # relaunch of stale work, and no probe spent on it.
+  if [ $((NOW - clock)) -ge "$LONG_IDLE" ]; then
+    BUCKET=stalled CAUSE=long-idle
+    next_action
     return 0
   fi
 
@@ -397,8 +447,9 @@ classify() {
   fi
   case "$agent" in
     missing) BUCKET=missing CAUSE=endpoint-gone ;;
-    dead) BUCKET=stalled CAUSE=agent-exited ;;
     *)
+      # An active validation run waits even when its agent is gone; the
+      # replacement is due once the run stops.
       cs=$(probe_crew_state "$id")
       case "$cs" in
         "state: working · source: run-step"*|"state: parked · source: run-step"*)
@@ -407,7 +458,10 @@ classify() {
           return 0 ;;
       esac
       BUCKET=stalled
-      if [ "$pause_due" -gt 0 ]; then CAUSE='pause-overdue'; else CAUSE='no-progress'; fi
+      if [ "$agent" = dead ]; then CAUSE='agent-exited'
+      elif [ "$pause_due" -gt 0 ]; then CAUSE='pause-overdue'
+      else CAUSE='no-progress'
+      fi
       ;;
   esac
   next_action
@@ -420,7 +474,7 @@ next_action() {
     return 0
   fi
   case "$CAUSE" in
-    worktree-gone|record-unreadable) NEXT=escalate; return 0 ;;
+    worktree-gone|record-unreadable|long-idle) NEXT=escalate; return 0 ;;
   esac
   if [ "$ATTEMPTS" -ge "$RETRY_MAX" ]; then
     NEXT=escalate
@@ -480,8 +534,8 @@ cmd_account() {
 # --- tick --------------------------------------------------------------------
 
 cmd_tick() {
-  local id sig prev items=0 total=0 wake='' marker="$AUDIT_DIR/.last-tick" age reason
-  local pending='' line
+  local id sig prev items=0 total=0 wake='' marker="$AUDIT_DIR/.last-tick" age reason=''
+  local pending='' line storage='' storage_sig='' storage_wake=''
   mkdir -p "$AUDIT_DIR" 2>/dev/null || exit 1
   # The first call in a home only starts the cadence, so a watcher that has
   # just been set up gives its crews one cadence before the first roll-call.
@@ -505,6 +559,7 @@ cmd_tick() {
         ;;
       *) sig= ;;
     esac
+    [ -z "$STORAGE_ROOT" ] || storage="$storage$STORAGE_ROOT"$'\n'
     if [ -z "$sig" ]; then
       rm -f "$AUDIT_DIR/$id"
       continue
@@ -524,12 +579,32 @@ cmd_tick() {
     id=${prev##*/}
     [ -e "$STATE/$id.meta" ] || rm -f "$prev"
   done
-  if [ "$total" -gt 0 ]; then
-    [ "$total" -le "$items" ] || wake="$wake; and $((total - items)) more"
-    reason="check: progress-audit: $total crew need recovery by cause ($wake); run bin/fm-progress-audit.sh recover <id> for each, and account for the full roll-call"
+  # Unreachable storage is one fleet-level finding, surfaced when its set of
+  # roots changes; the crews it holds are counted, never escalated one by one.
+  if [ -n "$storage" ]; then
+    storage_sig=$(printf '%s' "$storage" | sort -u | tr '\n' ' ')
+    if [ "$storage_sig" != "$(cat "$AUDIT_DIR/.storage" 2>/dev/null || true)" ]; then
+      storage_wake=$(printf '%s' "$storage" | sort | uniq -c \
+        | awk '{n=$1; $1=""; sub(/^ /, ""); printf "%s%s (%s crew)", sep, $0, n; sep=", "}')
+      storage_wake="local-copy storage not reachable: $storage_wake; those crews are judged again when it returns"
+    fi
+  fi
+  if [ "$total" -gt 0 ] || [ -n "$storage_wake" ]; then
+    reason=
+    if [ "$total" -gt 0 ]; then
+      [ "$total" -le "$items" ] || wake="$wake; and $((total - items)) more"
+      reason="$total crew need recovery by cause ($wake); run bin/fm-progress-audit.sh recover <id> for each"
+    fi
+    [ -z "$storage_wake" ] || reason="$reason${reason:+; }$storage_wake"
+    reason="check: progress-audit: $reason, and account for the full roll-call"
     # Durable before the signatures move: a crash in between repeats the wake
     # next tick rather than losing it.
     fm_wake_append check progress-audit "$reason" || exit 1
+  fi
+  if [ -n "$storage_sig" ]; then
+    printf '%s\n' "$storage_sig" > "$AUDIT_DIR/.storage" || exit 1
+  else
+    rm -f "$AUDIT_DIR/.storage"
   fi
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -537,7 +612,7 @@ cmd_tick() {
   done <<EOF
 $pending
 EOF
-  [ "$total" -eq 0 ] || printf 'wake: %s\n' "$reason"
+  [ -z "$reason" ] || printf 'wake: %s\n' "$reason"
 }
 
 # --- recover -----------------------------------------------------------------
@@ -607,6 +682,8 @@ cmd_recover() {
       case "$CAUSE" in
         worktree-gone|record-unreadable)
           out="escalate: $id $BUCKET ($CAUSE): no recovery can run; check its branch and PR for landed work, then clean up the record or record the failure" ;;
+        long-idle)
+          out="escalate: $id $BUCKET ($CAUSE): nothing for $(age_words "$LONG_IDLE") or more, too stale for an automatic retry; check its branch and PR for landed work, then relaunch it by hand, clean up the record, or record the failure" ;;
         *)
           out="escalate: $id $BUCKET ($CAUSE) after $ATTEMPTS recovery attempt(s) with no progress landed since; its local copy and branch are preserved - record the failure and tell the captain the consequence" ;;
       esac

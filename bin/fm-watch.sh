@@ -122,7 +122,8 @@
 #   check: progress-audit: <n> crew need recovery by cause (...)
 #                          a ship or scout landed no push, commit, status event
 #                          or report for the whole progress window, or its
-#                          endpoint or local copy is gone (bin/fm-progress-audit.sh)
+#                          endpoint or local copy is gone, or the storage holding
+#                          local copies is not reachable (bin/fm-progress-audit.sh)
 #   check: secondmate wake-loop stalled: mate=<id> row=<seq> idle=<seconds>s
 #                          an actionable row in an endpoint-recorded local
 #                          secondmate home's durable wake queue did not advance

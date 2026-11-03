@@ -27,7 +27,8 @@ The target window's harness is recorded as `harness=` in `state/<id>.meta`.
 A `check: progress-audit` wake means `bin/fm-progress-audit.sh` found a ship or scout that landed no push, commit, status event or report for its whole window, or whose endpoint or local copy is gone; its header owns the evidence, causes, window and cadence.
 Run `bin/fm-progress-audit.sh recover <id>` for each crew the wake names: it performs the cause's due action (a steer, or a relaunch through `fm-control` carrying a consolidated note) and records the attempt, so the two-attempt allowance holds across sessions.
 Do not hand-drive the escalation ladder below for a crew the check is recovering; an uncounted relaunch defeats the cap.
-Exit 3 is the one escalation after two attempts with nothing landed since, or a crew no retry can reach: record the failure in the backlog and tell the captain the plain failure, preserved work, and consequence under `AGENTS.md` section 9.
+Exit 3 is the one escalation after two attempts with nothing landed since, a record idle far past any recovery bound, or a crew no retry can reach: reconcile its branch and PR by hand, then record the failure in the backlog and tell the captain the plain failure, preserved work, and consequence under `AGENTS.md` section 9.
+A wake naming local-copy storage as not reachable is one fleet-level wait, not a per-crew failure: restore the drive rather than recovering the crews it holds.
 `bin/fm-progress-audit.sh account` prints the full roll-call, one line per recorded crew, when the wake lists more crews than it names.
 
 ## Session-start reconciliation for a dead ordinary direct report

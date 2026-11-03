@@ -2790,6 +2790,7 @@ FM_PROGRESS_WINDOW_SECS=2400  # 300..7200 seconds a ship or scout may land no pu
 FM_PROGRESS_AUDIT_SECS=600    # 60..1800-second watcher cadence of the progress audit's roll-call
 FM_PROGRESS_AUDIT_BUDGET_SECS=20   # 1..60 seconds of endpoint and current-state reads one progress-audit tick may start; the rest wait for the next tick
 FM_PROGRESS_AUDIT_WAKE_ITEMS=8     # 1..50 crews named in one progress-audit wake before it points at the full account
+FM_PROGRESS_LONG_IDLE_SECS=86400   # 7200..2592000 seconds idle after which the progress audit escalates a record for hand reconciliation instead of relaunching it
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or Relay dispatch)
 FM_TASK_INBOX_GRACE_SECS=90   # seconds an unhandled steering-inbox message may sit before the watcher attempts doorbell delivery on an idle pane; also the minimum spacing between attempts
 FM_TASK_INBOX_RING_MAX=3      # watcher delivery attempts without an acknowledgement before the task surfaces as a stale wake for recovery

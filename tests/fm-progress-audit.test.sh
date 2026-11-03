@@ -175,10 +175,35 @@ OUT=$(audit "$T3" recover busy) || fail "a recovery after escalation should exit
 assert_contains "$OUT" "nothing due: busy was already escalated" "the escalation happens once"
 pass "a stalled crew is steered, then relaunched, then escalated exactly once"
 
-status busy "working [at=$((T3 + 10))]: pushed a checkpoint"
+mkdir -p "$HOME_DIR/data/busy"
+echo "findings" > "$HOME_DIR/data/busy/report.md"
+fm_touch_epoch "$((T3 + 10))" "$HOME_DIR/data/busy/report.md"
 OUT=$(audit "$((T3 + WINDOW + 15))" account busy)
 assert_contains "$OUT" "attempts=0/2 · next=steer" "landed progress earns a fresh allowance"
 pass "progress landed after recovery resets the allowance"
+
+# A looping crew that answers every steer with a status line and lands nothing
+# still reaches the cap: a status line keeps the window fresh, never the
+# allowance.
+: > "$STUBS/calls"
+crew looper
+L=$LATER
+for n in 1 2; do
+  OUT=$(audit "$L" recover looper) || fail "looper recovery $n failed: $OUT"
+  assert_contains "$OUT" "attempt $n of 2" "looper attempt $n is counted"
+  status looper "working [at=$((L + 10))]: still on it"
+  OUT=$(audit "$((L + 20))" account looper)
+  assert_contains "$OUT" "looper · live" "a status line keeps the window fresh"
+  L=$((L + 10 + WINDOW + 1))
+  OUT=$(audit "$L" account looper)
+  assert_contains "$OUT" "attempts=$n/2" "a status line does not reset the allowance after attempt $n"
+done
+assert_grep "send looper Progress check:" "$STUBS/calls" "the looper's first recovery is a steer"
+assert_grep "control looper relaunch" "$STUBS/calls" "the looper's second recovery is a relaunch"
+rc=0; OUT=$(audit "$L" recover looper) || rc=$?
+expect_code 3 "$rc" "a looper that only answers with status lines escalates after two attempts"
+assert_contains "$OUT" "escalate: looper stalled (no-progress) after 2 recovery attempt(s)" "the looper escalation names the cause"
+pass "status lines alone never reset the two-attempt allowance"
 
 : > "$STUBS/calls"
 echo 1 > "$STUBS/control-rc"
@@ -203,6 +228,40 @@ rc=0; OUT=$(audit "$LATER" recover validating) || rc=$?
 expect_code 0 "$rc" "nothing is due for a waiting crew"
 assert_contains "$OUT" "nothing due: validating is waiting" "recover never acts on a waiting crew"
 pass "recover refuses unknown ids and leaves waiting crews alone"
+
+crew deadrun
+printf dead > "$STUBS/agent-deadrun"
+echo "state: working · source: run-step · run def running" > "$STUBS/cs-deadrun"
+OUT=$(audit "$LATER" account deadrun)
+assert_contains "$OUT" "deadrun · waiting · validation run" "an active validation run waits even with its agent gone"
+rm -f "$STUBS/cs-deadrun"
+OUT=$(audit "$LATER" account deadrun)
+assert_contains "$OUT" "deadrun · stalled · agent-exited" "once the run stops, the gone agent is due a relaunch"
+pass "a dead agent with an active validation run waits for the run"
+
+crew abandoned
+OUT=$(audit "$((REAL_NOW + 90000))" account abandoned)
+assert_contains "$OUT" "abandoned · stalled · long-idle" "a record idle past the long-idle bound is long-idle"
+assert_contains "$OUT" "next=escalate" "a long-idle record escalates instead of relaunching stale work"
+: > "$STUBS/calls"
+rc=0; OUT=$(audit "$((REAL_NOW + 90000))" recover abandoned) || rc=$?
+expect_code 3 "$rc" "a long-idle record escalates at once"
+assert_contains "$OUT" "too stale for an automatic retry" "the long-idle escalation asks for hand reconciliation"
+[ ! -s "$STUBS/calls" ] || fail "a long-idle record must not be steered or relaunched: $(cat "$STUBS/calls")"
+pass "a record abandoned past the long-idle bound goes to hand reconciliation"
+
+ABSENT_VOL="/Volumes/fm-progress-audit-absent-$$"
+[ ! -e "$ABSENT_VOL" ] || fail "test volume path unexpectedly exists: $ABSENT_VOL"
+crew offdrive1 ship "$ABSENT_VOL/pool/1/copy"
+crew offdrive2 ship "$ABSENT_VOL/pool/2/copy"
+OUT=$(audit "$LATER" account offdrive1 offdrive2)
+assert_contains "$(line_for "$OUT" offdrive1)" "offdrive1 · waiting · storage unavailable: " \
+  "a copy on unreachable storage waits instead of escalating"
+assert_contains "$(line_for "$OUT" offdrive2)" "next=-" "unreachable storage never makes a per-crew escalation due"
+rc=0; OUT=$(audit "$LATER" recover offdrive1) || rc=$?
+expect_code 0 "$rc" "nothing is due for a copy on unreachable storage"
+rm -f "$STATE/offdrive1.meta" "$STATE/offdrive2.meta"
+pass "missing storage is a wait, not a mass escalation"
 
 # --- tick: bounded cadence, one durable wake per new finding ------------------
 
@@ -264,6 +323,22 @@ age_marker "$((LATER + 3 * WINDOW - 700))"
 tick "$((LATER + 3 * WINDOW))" tick >/dev/null || fail "pruning tick failed"
 assert_absent "$STATE/.progress-audit/stuck" "a cleaned-up crew's signature is pruned"
 pass "tick follows the two attempts, surfaces one escalation, then goes quiet"
+
+crew offdrive1 ship "$ABSENT_VOL/pool/1/copy"
+crew offdrive2 ship "$ABSENT_VOL/pool/2/copy"
+age_marker "$((LATER + 3 * WINDOW - 700))"
+OUT=$(tick "$((LATER + 3 * WINDOW))" tick) || fail "storage tick failed"
+assert_contains "$OUT" "local-copy storage not reachable: " "unreachable storage is surfaced"
+assert_contains "$OUT" "(2 crew)" "one storage finding counts the crews it holds"
+assert_not_contains "$OUT" "need recovery" "crews on unreachable storage are not surfaced one by one"
+age_marker "$((LATER + 3 * WINDOW - 700))"
+OUT=$(tick "$((LATER + 3 * WINDOW))" tick) || fail "repeat storage tick failed"
+assert_equals "" "$OUT" "unchanged unreachable storage is surfaced once"
+rm -f "$STATE/offdrive1.meta" "$STATE/offdrive2.meta"
+age_marker "$((LATER + 3 * WINDOW - 700))"
+tick "$((LATER + 3 * WINDOW))" tick >/dev/null || fail "storage-clear tick failed"
+assert_absent "$STATE/.progress-audit/.storage" "the storage signature clears when nothing is held there"
+pass "tick names unreachable storage once, as one fleet-level finding"
 
 rc=0; env FM_HOME="$TICK_HOME" FM_PROGRESS_WINDOW_SECS=5 "$AUDIT" account >/dev/null 2>&1 || rc=$?
 expect_code 2 "$rc" "an out-of-range window is refused"
