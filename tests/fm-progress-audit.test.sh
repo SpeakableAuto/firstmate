@@ -185,6 +185,9 @@ echo 1 > "$STUBS/control-rc"
 rc=0; OUT=$(audit "$LATER" recover exited) || rc=$?
 expect_code 1 "$rc" "a failed relaunch reports failure"
 assert_contains "$OUT" "relaunch exited failed (cause agent-exited, attempt 1 of 2)" "the failure is named"
+# A relaunch that launched something before failing its own checks rewrites
+# the spawn generation; that launch is not a fresh start.
+sed -i.bak "s/^spawn_gen=.*/spawn_gen=s$LATER.2.2/" "$STATE/exited.meta" && rm -f "$STATE/exited.meta.bak"
 OUT=$(audit "$LATER" account exited)
 assert_contains "$OUT" "exited · stalled · agent-exited" "a failed attempt does not restart the window"
 assert_contains "$OUT" "attempts=1/2 · next=relaunch" "a failed attempt still spends one of the two"

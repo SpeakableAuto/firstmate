@@ -218,12 +218,14 @@ consider_evidence() {  # <kind> <epoch>
 
 # --- recovery ledger ---------------------------------------------------------
 
-# Sets ATTEMPTS (attempts since <since>), LAST_ATTEMPT_EPOCH, ESCALATED_EPOCH
+# Sets ATTEMPTS (attempts since <since>), LAST_ATTEMPT_EPOCH (newest attempt
+# that went through), LAST_FAILED_EPOCH (newest failed one), and ESCALATED_EPOCH
 # (escalation since <since>, else 0) from state/<id>.recovery.
 read_ledger() {  # <id> <since>
   local id=$1 since=$2 kind epoch n cause action result
   ATTEMPTS=0
   LAST_ATTEMPT_EPOCH=0
+  LAST_FAILED_EPOCH=0
   ESCALATED_EPOCH=0
   [ -f "$STATE/$id.recovery" ] && [ ! -L "$STATE/$id.recovery" ] || return 0
   while read -r kind epoch n cause action result; do
@@ -236,6 +238,8 @@ read_ledger() {  # <id> <since>
         # still spends an attempt but leaves the next one due at once.
         if [ "$result" = ok ] && [ "$epoch" -gt "$LAST_ATTEMPT_EPOCH" ]; then
           LAST_ATTEMPT_EPOCH=$epoch
+        elif [ "$result" != ok ] && [ "$epoch" -gt "$LAST_FAILED_EPOCH" ]; then
+          LAST_FAILED_EPOCH=$epoch
         fi
         ;;
       escalated) ESCALATED_EPOCH=$epoch ;;
@@ -291,7 +295,7 @@ classify() {
   local id=$1 meta="$STATE/$1.meta" kind wt branch backend target remote_host
   local open line verb note until at start clock pause_due=0 agent cs e
   BUCKET='' CAUSE='' REASON='' NEXT=- UNCONFIRMED=0 KIND=''
-  ATTEMPTS=0 ESCALATED_EPOCH=0 LAST_ATTEMPT_EPOCH=0
+  ATTEMPTS=0 ESCALATED_EPOCH=0 LAST_ATTEMPT_EPOCH=0 LAST_FAILED_EPOCH=0
   EVIDENCE_KIND=none EVIDENCE_EPOCH=0
   if [ ! -f "$meta" ] || [ -L "$meta" ] || ! cat "$meta" >/dev/null 2>&1; then
     BUCKET=missing CAUSE=record-unreadable
@@ -362,6 +366,8 @@ classify() {
 
   read_ledger "$id" "$EVIDENCE_EPOCH"
   start=$(spawn_epoch "$(meta_value "$meta" spawn_gen)")
+  # A launch made inside a failed recovery attempt is not a fresh start.
+  [ "${start:-0}" -gt "$LAST_FAILED_EPOCH" ] || start=0
   clock=$EVIDENCE_EPOCH
   for e in "${start:-0}" "$pause_due" "$LAST_ATTEMPT_EPOCH"; do
     [ "$e" -le "$clock" ] || clock=$e
@@ -573,7 +579,7 @@ relaunch_note() {  # <id> <attempt>
 }
 
 cmd_recover() {
-  local id=${1:-} dry=0 lock rc=0 n out
+  local id=${1:-} dry=0 lock rc=0 n out done_at
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   case "${1:-}" in
@@ -622,13 +628,16 @@ cmd_recover() {
       out=$(FM_HOME="$FM_HOME" "$CONTROL_BIN" "$id" relaunch --note "$(relaunch_note "$id" "$n")" 2>&1) || rc=$?
       ;;
   esac
+  # The ledger records when the action finished, so a launch it made is never
+  # newer than its own attempt line.
+  done_at=$(now_epoch)
   if [ "$rc" -eq 0 ]; then
-    ledger_append "$id" "attempt $NOW $n $CAUSE $NEXT ok" || exit 1
+    ledger_append "$id" "attempt $done_at $n $CAUSE $NEXT ok" || exit 1
     echo "$NEXT $id: cause $CAUSE, attempt $n of $RETRY_MAX"
     exit 0
   fi
-  ledger_append "$id" "attempt $NOW $n $CAUSE $NEXT failed" || exit 1
-  echo "$NEXT $id failed (cause $CAUSE, attempt $n of $RETRY_MAX): $(one_line "$out" 300)"
+  ledger_append "$id" "attempt $done_at $n $CAUSE $NEXT failed" || exit 1
+  echo "$NEXT $id failed (cause $CAUSE, attempt $n of $RETRY_MAX): $(one_line "$out" 2000)"
   exit 1
 }
 
