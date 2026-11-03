@@ -8,6 +8,7 @@ Usage: fm-placement.py assess CONFIG DATA ID HARNESS MODEL EFFORT
        fm-placement.py waits STATE
        fm-placement.py drop STATE ID
        fm-placement.py due STATE
+       fm-placement.py urgent PLACEMENT_JSON IMPACT
 memory reads fresh operating-system memory/swap evidence; assess consumes JSON
 evidence on stdin and prints a complete decision.
 record consumes that decision; one replace publishes the decision and its wait
@@ -19,6 +20,7 @@ A fit refusal is 'unplaceable' (never a capacity wait);
 a terminal decision or drop removes the wait.
 due emits 'due' on a 900-second cadence or a changed resource fingerprint;
 it never launches work. The watcher owns rechecks and normal wake delivery.
+urgent prints yes or no for the reserved-slot rule (see urgent() below).
 """
 
 import fcntl
@@ -57,6 +59,19 @@ def atomic(path, value):
     finally:
         if os.path.exists(name):
             os.unlink(name)
+
+
+def urgent(work, impact):
+    """Only Firstmate's own marks make work urgent: backlog impact P0, or an
+    explicit placement.json impact P0 or "urgent": true written after triage.
+    A reporter's urgency label in titles or brief text never counts."""
+    work = work if isinstance(work, dict) else {}
+    return impact == "P0" or work.get("impact") == "P0" or work.get("urgent") is True
+
+
+def room_limit(cap, is_urgent):
+    """Ordinary work leaves the last crew slot free for one urgent task."""
+    return cap if is_urgent or cap < 2 else cap - 1
 
 
 def result(passed, reason):
@@ -220,7 +235,7 @@ def assess(config, data, task, harness, model, effort):
         value = evidence.get(name)
         if isinstance(value, dict) and value.get("status") in ("pass", "fail"):
             checks[name] = value
-    machine = None
+    machine = work = None
     try:
         profile = read(config / "crew-placement.json")
         if not isinstance(profile, dict) or profile.get("version") != 1:
@@ -299,6 +314,8 @@ def assess(config, data, task, harness, model, effort):
             count = evidence.get("crew_count")
             if type(count) is not int or count < 0 or count >= cap:
                 raise ValueError(f"crew cap: count={count}, cap={cap}")
+            if count >= room_limit(cap, urgent(work, evidence.get("impact"))):
+                raise ValueError(f"crew cap: count={count}, cap={cap}; last slot reserved for urgent work")
             free, swap = evidence.get("memory", {}).get("free_percent"), evidence.get("memory", {}).get("swap_mib")
             if not all(type(v) in (int, float) and math.isfinite(v) and v >= 0 for v in (free, swap)):
                 raise ValueError("memory pressure or swap evidence absent")
@@ -427,8 +444,11 @@ def ledger(state, operation, task=None, mode=None):
             rows = [dict(row, impact=impacts.get(row["task"], row.get("impact", "P2")),
                                 over_four_hours=row["state"] in ("capacity", "ready") and now - row["since"] > 14400)
                     for row in value["waits"].values()] + history
-            return sorted(rows,
-                          key=lambda row: (row["impact"], order.get(row["task"], (True, "9999-99-99", 0)), row["since"], row["task"]))
+            # Undated queued work falls back to wait age before backlog position.
+            def rank(row):
+                carried, dated, position = order.get(row["task"], (True, "9999-99-99", 0))
+                return (row["impact"], carried, dated, row["since"], position, row["task"])
+            return sorted(rows, key=rank)
         if not value["waits"]:
             return False
         # Metadata removals cover teardown/auto-retire. Lock and explicit slot
@@ -459,6 +479,8 @@ def pool(config, count):
             raise ValueError("invalid machine crew cap")
         if count < 0 or count >= cap:
             raise ValueError(f"machine crew cap: {count}/{cap}")
+        # Remote evidence is task-independent; the resolver applies urgent().
+        reserved_only = count >= room_limit(cap, False)
         free, swap = memory()
         if free < profile["min_free_memory_percent"] or swap > profile["max_swap_mib"]:
             raise ValueError("machine memory or swap limit")
@@ -471,7 +493,8 @@ def pool(config, count):
             stat = os.statvfs(volume["path"])
             if stat.f_bavail * stat.f_frsize / 1024**3 < volume["min_free_gib"]:
                 raise ValueError("machine disk below floor")
-        return {"configured": True, "available": True, "profile": profile, "crew_count": count}
+        return {"configured": True, "available": True, "profile": profile, "crew_count": count,
+                "reserved_only": reserved_only}
     except (OSError, ValueError, KeyError, TypeError) as error:
         return {"configured": True, "available": False, "reason": str(error)}
 
@@ -480,6 +503,11 @@ def main():
     operation, *args = sys.argv[1:]
     if operation == "pool":
         output = pool(Path(args[0]), int(args[1]))
+    elif operation == "urgent":
+        path, impact = args
+        work = read(Path(path)) if Path(path).is_file() else {}
+        print("yes" if urgent(work, impact) else "no")
+        return
     elif operation == "memory":
         free, swap = memory()
         output = {"free_percent": free, "swap_mib": swap}

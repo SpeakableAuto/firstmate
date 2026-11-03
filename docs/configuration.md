@@ -389,7 +389,7 @@ When a spawn is interrupted after launch delivery began, its exit path re-reads 
 ### Finish-first admission
 
 Fresh ship and scout spawns check finish-first admission through [`bin/fm-finish-first.sh`](../bin/fm-finish-first.sh) before allocating their endpoint or worktree.
-Within each impact level the existing placement queue orders carried-over resumptions first, then dated queued work oldest first, then undated work in backlog order.
+Within each impact level the existing placement queue orders carried-over resumptions first, then dated queued work oldest first, then undated work by wait age and then backlog order.
 This is the rule 20 ordering contract, not a same-priority veto: below the WIP bound, another queued item at that priority may still start while an item remains In flight.
 Each request is assessed independently; an older held, blocked or unplaceable job does not veto other runnable work.
 An In-flight item may resume without becoming a new start.
@@ -402,14 +402,15 @@ When `config/crew-placement.json` exists, its positive `max_crew` value sets the
 Only unheld, unblocked In-flight worker rows with activity in the preceding 72 hours count: a stamped status event, a positively live worker, or a pull request update.
 A parked record, an old status, or a future timestamp is not recent activity.
 Provider reads are bounded; unavailable activity is warned and listed separately without charging an unproved row to WIP.
-`config/finish-first-wip-mode` accepts `warn` or `enforce`; absence defaults to `enforce` in every home.
-At the bound, warn mode allows admission with one warning naming the count and oldest active jobs; enforce mode refuses it.
-Warn mode loosens Zac's rule 20 cap and may be enabled for a home only with his explicit approval.
+At the bound every home refuses an ordinary start, naming the count and oldest active jobs; there is no warn-only mode, and a leftover `config/finish-first-wip-mode` file is ignored.
+The refused item stays queued as a `wip` wait and the ordinary placement recheck reports it ready once work finishes, so dispatch can place it on any fitting machine in the pool.
 Held, blocked, and stale records never consume WIP, and the report lists stale jobs for triage without closing them.
 A worker row with `(serves: <task-id>)` and `(support: review|replay|fix|recheck)` naming an unheld, unblocked In-flight worker is finishing that item, so it bypasses both start bounds and does not consume another WIP item.
 The parent must have no support role or serves link: self-links, chains and cycles never qualify.
 Record the relation and one of those four support roles explicitly in the backlog row (in a native backend, its title); a review-like task name alone grants no exemption, and holds or blockers on the support row still apply.
-P0 bypasses the WIP check and the two-day stop; linked finishing work remains exempt in both modes.
+Urgent work bypasses the WIP check and the two-day stop, and only urgent work may take a machine's reserved crew slot (see Crew placement); linked finishing work remains exempt from both start bounds.
+Work is urgent only when Firstmate marks it: backlog impact P0, or `"impact": "P0"` or `"urgent": true` in its intake `placement.json`, set after Firstmate's own triage.
+A reporter's urgency label in a staff report, title or brief text never makes work urgent; `bin/fm-placement.py`'s `urgent()` owns this rule.
 Homes without `crew-placement.json` remain uncapped; malformed placement configuration refuses ordinary admission.
 This setting is independent of the disk-copy bound in `config/worktree-slot-cap` and applies to every spawn backend.
 [`tests/fm-finish-first.test.sh`](../tests/fm-finish-first.test.sh) exercises admission and placement using the operational backlog shape.
@@ -425,13 +426,13 @@ Stored timestamps remain UTC.
 [`bin/fm-flow-history.py`](../bin/fm-flow-history.py) owns journal schema, recording boundaries and unknown-history behavior; [`tests/fm-flow-report.test.sh`](../tests/fm-flow-report.test.sh) exercises real wrapper and lifecycle transitions.
 Manual edits and direct calls to `tasks-axi` are outside this journal, so this is transition evidence rather than a reconstruction of all historical work.
 When recorded worker starts exceed finished deliveries on both reported AEST days, the report emits `stop_starting: yes`.
-Fresh admission then refuses work at the same or a lower priority than active, unheld In-flight work, while a higher priority still jumps the queue; warn mode does not disable this two-day rule.
+Fresh admission then refuses work at the same or a lower priority than active, unheld In-flight work, while a higher priority still jumps the queue.
 Current holds and blockers do not retroactively change the recorded signal, while non-worker starts remain excluded.
 Receipts snapshot the validated `serves` relation at start and preserve it at closure even after the parent closes; those support transitions contribute neither new starts nor extra deliveries to the daily totals.
 Malformed history affects only its bounded date interval; recording failures raise a deduplicated wake and never prevent a backlog mutation.
 Preserve damaged journals for diagnosis; after repairing a storage limit, archive the journal outside `flow-history.jsonl` and let the next transition begin new coverage rather than fabricating historical receipts.
 Historical linked support is named from its first recorded day, and the current appendix names every claimed link, including invalid links and newly queued support.
-A separate current-state appendix reports WIP mode, count, the oldest five active jobs and `stale, for Zac's triage`; an overloaded home prints `WIP over cap (N of M)` every morning.
+A separate current-state appendix reports the WIP count, the oldest five active jobs and `stale, for Zac's triage`; an overloaded home prints `WIP over cap (N of M)` every morning.
 This current snapshot never rewrites the historical start/finish counts or automatically closes a job.
 The pstack job 03 morning scoreboard is the intended consumer of these counts.
 
@@ -1431,6 +1432,9 @@ A light-machine example:
 ```
 
 The light-machine cap may be raised to three after measuring its room; the heavy-machine cap cannot exceed four.
+When `max_crew` is two or more, ordinary work may fill only `max_crew - 1` crew slots: the last slot stays free so one urgent task can start at any moment, and room refuses an ordinary start there with `last slot reserved for urgent work`.
+An urgent task may take that last slot; once it is full, a further urgent task waits like any other.
+The machine evidence shared with the dispatch resolver carries `reserved_only: true` when only that slot is left, and the resolver passes such a machine over for ordinary work so it can place on another machine that still has an ordinary slot.
 The crew cap uses the same shared live-worker count: recorded endpoints positively classified alive by the existing backend liveness owner, plus any record launched within the last 60 seconds, excluding the launching task and persistent secondmates.
 Records whose backend answered that the endpoint is missing, dead, gone, ambiguous or unverified, such as retained paused or done records, do not consume crew capacity.
 If a backend cannot be read for an existing record, placement refuses its room check with `crew liveness unreadable: <backend>` instead of counting or admitting.
@@ -1467,6 +1471,7 @@ Intake writes `data/<task-id>/placement.json` beside the brief:
 ```
 
 The classification must name the actual work and the zero-based matched rule in `crew-dispatch.json`; changing the brief requires renewing its classification.
+Optional `"urgent": true` is Firstmate's own post-triage urgency mark for the reserved crew slot and finish-first bypass; never copy a reporter's label into it.
 Missing classification, a disallowed workload, a required drive absent from the machine profile, or a selected harness/model/effort outside that rule without a quota-admitted recorded `balance_override` refuses fit.
 An iPhone build therefore cannot use the light example, and Plane work cannot use the heavy example.
 The typed resolver keeps matched-rule candidates ahead of default fallbacks in placement-enabled homes, then lets the existing quota selection policy (soonest paced window, then pace headroom or fallback `spendPriority`) decide within that fit class; the existing Claude preference applies only to an exact or near tie in the `spendPriority` fallback.

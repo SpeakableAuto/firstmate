@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """WIP and two-day flow admission; queue ordering belongs to placement."""
 import concurrent.futures
+import importlib.util
 import os
 import signal
 import subprocess
@@ -131,23 +132,31 @@ def activity(row, state, now):
         return 'unknown'
 
 
-def wip_settings(config_dir):
-    mode_path = config_dir / 'finish-first-wip-mode'
-    if mode_path.is_symlink():
-        raise ValueError('finish-first-wip-mode must be a regular file')
-    mode = mode_path.read_text().strip() if mode_path.exists() else 'enforce'
-    if mode not in ('warn', 'enforce'):
-        raise ValueError('finish-first-wip-mode must be warn or enforce')
+def wip_cap(config_dir):
     placement = config_dir / 'crew-placement.json'
     if not placement.exists() and not placement.is_symlink():
-        return mode, None
+        return None
     if placement.is_symlink() or not placement.is_file():
         raise ValueError('crew-placement.json must be a regular file')
     profile = json.loads(placement.read_text())
     cap = profile.get('max_crew') if isinstance(profile, dict) else None
     if type(cap) is not int or cap <= 0:
         raise ValueError('crew-placement.json max_crew must be a positive integer')
-    return mode, 2 * cap
+    return 2 * cap
+
+
+def is_urgent(row, config_dir):
+    """Placement owns the urgent rule; this reads its intake classification."""
+    spec = importlib.util.spec_from_file_location('fm_placement', pathlib.Path(__file__).with_name('fm-placement.py'))
+    placement = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(placement)
+    data = pathlib.Path(os.environ.get('FM_DATA_OVERRIDE', str(config_dir.parent / 'data')))
+    work = data / row['id'] / 'placement.json'
+    try:
+        classification = json.loads(work.read_text()) if work.is_file() and not work.is_symlink() else {}
+    except (OSError, ValueError):
+        classification = {}
+    return placement.urgent(classification, row['impact'])
 
 
 def finishing_parent(rows, row):
@@ -182,8 +191,8 @@ def admit(backlog, task_id, config_dir, stop_starting):
             return 0
         if target['state'] != 'queued':
             raise ValueError(f'{task_id} is not queued or in flight')
-        if target['impact'] == 'P0':
-            print(f'finish-first: P0 start allowed for {task_id}')
+        if is_urgent(target, config_dir):
+            print(f"finish-first: urgent ({target['impact']}) start allowed for {task_id}")
             return 0
     # A recorded link, never a task-name convention, identifies finishing work.
     def finishing(row):
@@ -191,7 +200,7 @@ def admit(backlog, task_id, config_dir, stop_starting):
     if not report_only and finishing(target):
         print(f"finish-first: {task_id} serves {target['serves']}; finishing work allowed")
         return 0
-    mode, cap = wip_settings(config_dir)
+    cap = wip_cap(config_dir)
     workers = [r for r in rows if r['state'] == 'in_flight'
                and r['kind'] not in ('captain', 'secondmate', 'public-followup', 'program')]
     eligible = {r['id'] for r in workers if not r.get('hold_reason')
@@ -214,7 +223,7 @@ def admit(backlog, task_id, config_dir, stop_starting):
     if report_only:
         print(f'WIP over cap ({len(finishable)} of {cap})' if over_cap else
               f'WIP active: {len(finishable)}; cap: {cap if cap is not None else "off"}')
-        print(f'WIP mode: {mode}; oldest active: {oldest or "-"}')
+        print(f'WIP oldest active: {oldest or "-"}')
         linked = sorted(f"{r['id']}->{r['serves']}" for r in rows if r.get('serves'))
         print('linked support: ' + (', '.join(linked) or '-'))
         print("stale, for Zac's triage: " + (', '.join(stale) or '-'))
@@ -222,10 +231,8 @@ def admit(backlog, task_id, config_dir, stop_starting):
             print('activity unavailable, for triage: ' + ', '.join(unknown))
         return 0
     if over_cap:
-        prefix = 'warning: ' if mode == 'warn' else ''
-        print(f'finish-first: {prefix}WIP {len(finishable)}/{cap}; oldest active: {oldest}')
-        if mode == 'enforce':
-            return 1
+        print(f'finish-first: WIP {len(finishable)}/{cap}; queued until work finishes; oldest active: {oldest}')
+        return 1
     if stop_starting == 'yes' and finishable:
         first = min(finishable, key=lambda row: int(row['impact'][1:]))
         if int(target['impact'][1:]) >= int(first['impact'][1:]):

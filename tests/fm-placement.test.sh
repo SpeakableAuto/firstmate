@@ -18,7 +18,7 @@ cat > "$CONFIG/crew-dispatch.json" <<'JSON'
 {"rules":[{"when":"backend","use":[{"harness":"codex","model":"test","effort":"high"}]}]}
 JSON
 jq -n --arg hash "$hash" '{version:1,workload:"backend",priority:"P1",requires_drive:false,dispatch_rule:0,brief_sha256:$hash}' > "$DATA/task-one/placement.json"
-base='{"impact":"P1","crew_count":1,"memory":{"free_percent":50,"swap_mib":0},"disk":{"status":"pass"},"slots":{"status":"pass"},"quota":{"status":"pass"},"locks":{"status":"pass"}}'
+base='{"impact":"P1","crew_count":0,"memory":{"free_percent":50,"swap_mib":0},"disk":{"status":"pass"},"slots":{"status":"pass"},"quota":{"status":"pass"},"locks":{"status":"pass"}}'
 assess() {
   printf '%s\n' "$1" | python3 "$TOOL" assess "$CONFIG" "$DATA" task-one codex test high
 }
@@ -60,6 +60,32 @@ assert_contains "$(jq -r .reason <<<"$pool_full")" 'crew cap: 2/2' 'the pool pub
 pool_unknown=$(python3 "$TOOL" pool "$CONFIG" -1)
 assert_equals false "$(jq .available <<<"$pool_unknown")" 'unknown live crew count cannot promise room'
 pass 'fit, room, quota, locks and missing evidence refuse bad placement'
+
+# The last crew slot is kept for one urgent task at a time.
+reserved=$(jq '.crew_count=1' <<< "$base")
+bad=$(assess "$reserved")
+assert_equals fail "$(jq -r .checks.room.status <<< "$bad")" 'an ordinary start may not take the last slot'
+assert_contains "$(jq -r .checks.room.reason <<< "$bad")" 'last slot reserved for urgent work' 'the reserved-slot refusal is named'
+assert_equals true "$(assess "$(jq '.impact="P0"' <<< "$reserved")" | jq -r .admitted)" 'a P0 task takes the reserved slot'
+cp "$DATA/task-one/placement.json" "$TMP_ROOT/work"
+jq '.urgent=true' "$TMP_ROOT/work" > "$DATA/task-one/placement.json"
+assert_equals true "$(assess "$reserved" | jq -r .admitted)" 'a Firstmate-flagged urgent task takes the reserved slot'
+bad=$(assess "$(jq '.crew_count=2' <<< "$base")")
+assert_contains "$(jq -r .checks.room.reason <<< "$bad")" 'count=2, cap=2' 'a second urgent task waits once the reserved slot is taken'
+assert_equals yes "$(python3 "$TOOL" urgent "$DATA/task-one/placement.json" P2)" 'the urgent rule reads the intake flag'
+for label in '.urgent="yes"' '.reported_urgency="urgent"' '.reporter={"urgent":true}'; do
+  jq "$label" "$TMP_ROOT/work" > "$DATA/task-one/placement.json"
+  assert_equals false "$(assess "$reserved" | jq -r .admitted)" "a reporter-style label is not urgent: $label"
+  assert_equals no "$(python3 "$TOOL" urgent "$DATA/task-one/placement.json" P1)" "the urgent rule ignores $label"
+done
+cp "$TMP_ROOT/work" "$DATA/task-one/placement.json"
+# Pool evidence reads live memory, so this profile accepts any measurement.
+mkdir -p "$TMP_ROOT/roomy"
+jq '.min_free_memory_percent=0.001 | .max_swap_mib=1048575' "$CONFIG/crew-placement.json" > "$TMP_ROOT/roomy/crew-placement.json"
+pool_reserved=$(python3 "$TOOL" pool "$TMP_ROOT/roomy" 1)
+assert_equals 'true:true' "$(jq -r '"\(.available):\(.reserved_only)"' <<<"$pool_reserved")" 'shared machine evidence says only the reserved slot is left'
+assert_equals false "$(python3 "$TOOL" pool "$TMP_ROOT/roomy" 0 | jq .reserved_only)" 'an ordinary slot is still free below the reserve'
+pass 'the reserved slot admits one urgent task and refuses ordinary and reporter-labelled work'
 
 blocked=$(assess "$(jq '.crew_count=2' <<< "$base")")
 printf '%s\n' "$blocked" | python3 "$TOOL" record "$STATE" task-one spawn >/dev/null

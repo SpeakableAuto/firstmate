@@ -9,7 +9,6 @@ command -v tasks-axi >/dev/null || { echo 'ok - skipped (tasks-axi missing)'; ex
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND FM_DATA_OVERRIDE FM_CONFIG_OVERRIDE FM_ROOT_OVERRIDE
 export FM_HOME="$TMP_ROOT/home"
 mkdir -p "$FM_HOME/data" "$FM_HOME/config" "$FM_HOME/state"
-printf 'enforce\n' > "$FM_HOME/config/finish-first-wip-mode"
 for task in current carried held; do
   printf 'working [at=%s]: active fixture\n' "$(date +%s)" > "$FM_HOME/state/$task.status"
 done
@@ -35,6 +34,17 @@ printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
 check 1 WIP candidate
 check 0 'P0' urgent
 check 0 resume current
+# Firstmate's own intake flag is urgent; a reporter's label is not.
+mkdir -p "$FM_HOME/data/candidate"
+printf '{"version":1,"urgent":true}\n' > "$FM_HOME/data/candidate/placement.json"
+check 0 'urgent (P2) start allowed' candidate
+printf '{"version":1,"urgent":"yes"}\n' > "$FM_HOME/data/candidate/placement.json"
+check 1 WIP candidate
+rm -r "$FM_HOME/data/candidate"
+cp "$FM_HOME/data/backlog.md" "$TMP_ROOT/before-reporter.md"
+sed -i.bak 's/^- \[ \] candidate - New work/- [ ] candidate - URGENT reported urgent by the office (urgent: yes)/' "$FM_HOME/data/backlog.md"
+check 1 WIP candidate
+cp "$TMP_ROOT/before-reporter.md" "$FM_HOME/data/backlog.md"; rm -f "$FM_HOME/data/backlog.md.bak"
 # Canonical impact overrides legacy priority, including trailing metadata.
 python3 - "$FM_HOME/data/backlog.md" <<'PYROW'
 from pathlib import Path
@@ -71,11 +81,9 @@ with open(sys.argv[1], 'w') as stream:
     for row in rows:
         stream.write(json.dumps(row)+'\n')
 PY
-printf 'warn\n' > "$FM_HOME/config/finish-first-wip-mode"
 check 1 'two-day stop' candidate
 check 0 allowed elevated
 check 0 P0 urgent
-printf 'enforce\n' > "$FM_HOME/config/finish-first-wip-mode"
 rm "$FM_HOME/data/flow-history.jsonl"
 pass 'WIP and two-day flow bounds new starts; higher priorities and resumes remain runnable'
 
@@ -152,16 +160,15 @@ check 0 allowed new-job
 cp "$TMP_ROOT/before-serves.md" "$FM_HOME/data/backlog.md"
 pass 'recorded finishing work starts at the exact WIP bound and under the two-day stop'
 
-# An over-cap installation enforces by default; old and held records never charge WIP.
+# An over-cap installation always refuses; old and held records never charge WIP.
 printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
-rm "$FM_HOME/config/finish-first-wip-mode"
 check 1 'WIP 2/2' candidate
 out=$(bash "$ROOT/bin/fm-flow-report.sh")
 assert_contains "$out" 'WIP over cap (2 of 2)' 'morning report shows the admission bound'
+# A leftover warn-mode file cannot loosen the bound.
 printf 'warn\n' > "$FM_HOME/config/finish-first-wip-mode"
-check 0 warning candidate
-printf 'enforce\n' > "$FM_HOME/config/finish-first-wip-mode"
-check 1 'WIP 2/2' candidate
+check 1 'queued until work finishes' candidate
+rm "$FM_HOME/config/finish-first-wip-mode"
 # Missing activity, a future stamp and a stamp older than 72 hours are not current work.
 printf 'working [at=1]: old job\nworking [at=9999999999]: invalid future\n' > "$FM_HOME/state/current.status"
 check 0 allowed candidate
@@ -185,9 +192,6 @@ p=Path(sys.argv[1]); p.write_text(p.read_text().replace('- [ ] current -', '- [ 
 PYBLOCK
 check 0 allowed candidate
 cp "$TMP_ROOT/unblocked.md" "$FM_HOME/data/backlog.md"
-printf 'invalid\n' > "$FM_HOME/config/finish-first-wip-mode"
-check 2 'warn or enforce' candidate
-printf 'enforce\n' > "$FM_HOME/config/finish-first-wip-mode"
 # Freeze the CLI clock to pin the inclusive 72-hour status boundary.
 python3 - "$ROOT" "$FM_HOME" <<'PYBOUNDARY'
 import json, os, pathlib, subprocess, sys
@@ -231,7 +235,7 @@ printf 'backend=tmux\nwindow=fixture:current\nkind=ship\nspawn_gen=s%s.1\n' "$(d
 check 1 'WIP 2/2' candidate
 rm "$FM_HOME/state/current.meta"
 printf 'working [at=%s]: restored\n' "$(date +%s)" > "$FM_HOME/state/current.status"
-pass 'WIP modes and current activity exclude stale and held backlog records'
+pass 'WIP refusal and current activity exclude stale and held backlog records'
 # Redacted operating-home shape: 79 open jobs, 49 held, 22 recently active.
 fixture_home=$FM_HOME
 export FM_HOME="$TMP_ROOT/overloaded-home"
@@ -251,15 +255,14 @@ for i in range(79):
 rows.extend(['## Queued','- [ ] candidate - New work (kind: ship) (priority: 2)'])
 (home/'data/backlog.md').write_text('\n'.join(rows)+'\n')
 PYREAL
-printf 'warn\n' > "$FM_HOME/config/finish-first-wip-mode"
 before=$(cksum "$FM_HOME/data/backlog.md")
-check 0 'warning: WIP 22/8' candidate
+check 1 'WIP 22/8' candidate
 out=$(bash "$ROOT/bin/fm-flow-report.sh")
-assert_contains "$out" 'WIP over cap (22 of 8)' 'morning report exposes overload without freezing starts'
+assert_contains "$out" 'WIP over cap (22 of 8)' 'morning report exposes the overload that refuses ordinary starts'
 assert_contains "$out" "stale, for Zac's triage: job-71" 'old jobs stay listed for triage'
 assert_equals "$before" "$(cksum "$FM_HOME/data/backlog.md")" 'admission and reporting never close old jobs'
 export FM_HOME=$fixture_home
-pass 'operating-home overload warns and ordinary work stays runnable'
+pass 'operating-home overload refuses ordinary starts and keeps old jobs for triage'
 
 
 # The placement decision must retain the finish-first refusal and queue it.
@@ -305,7 +308,6 @@ fm_test_spawn_brief "$spawn_home" candidate
 printf 'backend = "markdown"\n' > "$spawn_home/.tasks.toml"
 cp "$ROOT/tests/fixtures/finish-first/backlog.md" "$spawn_home/data/backlog.md"
 printf '{"version":1,"max_crew":1}\n' > "$spawn_home/config/crew-placement.json"
-printf 'enforce\n' > "$spawn_home/config/finish-first-wip-mode"
 for task in current carried; do
   printf 'working [at=%s]: active fixture\n' "$(date +%s)" > "$spawn_home/state/$task.status"
 done
