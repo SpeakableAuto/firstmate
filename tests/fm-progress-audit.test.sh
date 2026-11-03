@@ -265,3 +265,35 @@ pass "tick follows the two attempts, surfaces one escalation, then goes quiet"
 rc=0; env FM_HOME="$TICK_HOME" FM_PROGRESS_WINDOW_SECS=5 "$AUDIT" account >/dev/null 2>&1 || rc=$?
 expect_code 2 "$rc" "an out-of-range window is refused"
 pass "configuration outside its bounds is refused"
+
+# --- the real watcher poll runs the tick and wakes on its finding -------------
+
+WATCH_HOME="$T/watch-home"
+mkdir -p "$WATCH_HOME/state" "$WATCH_HOME/data" "$WATCH_HOME/config" "$WATCH_HOME/projects"
+# No window is recorded, so the pane-based stale path has nothing to poll and
+# only the progress audit can notice this crew.
+fm_write_meta "$WATCH_HOME/state/silent.meta" \
+  "endpoint_task_id=silent" "worktree=$WT" "project=$T/repo" "harness=claude" \
+  "kind=ship" "mode=direct-PR" "yolo=off" "branch=fm/silent" "spawn_gen=s$((REAL_NOW - WINDOW - 600)).1.1"
+mkdir -p "$WATCH_HOME/state/.progress-audit"
+fm_touch_epoch "$((REAL_NOW - 120))" "$WATCH_HOME/state/.progress-audit/.last-tick"
+WATCH_OUT="$T/watch.out"
+env FM_HOME="$WATCH_HOME" FM_STATE_OVERRIDE="$WATCH_HOME/state" FM_TEST_STUBS="$STUBS" \
+  FM_PROGRESS_AUDIT_NOW="$((REAL_NOW + WINDOW + 600))" FM_PROGRESS_AUDIT_SECS=60 \
+  FM_PROGRESS_WINDOW_SECS="$WINDOW" \
+  FM_PROGRESS_CREW_STATE_BIN="$STUBS/crew-state" \
+  FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+  "$ROOT/bin/fm-watch.sh" > "$WATCH_OUT" 2>&1 &
+WATCH_PID=$!
+i=0
+while [ "$i" -lt 100 ]; do
+  kill -0 "$WATCH_PID" 2>/dev/null || break
+  sleep 0.1
+  i=$((i + 1))
+done
+kill "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" 2>/dev/null || true
+assert_grep "check: progress-audit: 1 crew need recovery by cause (silent missing endpoint-gone, next relaunch)" \
+  "$WATCH_OUT" "the watcher poll surfaces the progress audit's finding"
+assert_grep "progress-audit" "$WATCH_HOME/state/.wake-queue" "the watcher's progress wake is durable"
+pass "the real watcher poll runs the progress tick and wakes on a silent crew"
