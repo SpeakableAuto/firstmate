@@ -354,6 +354,12 @@ if sys.argv[1]=='api':
 elif sys.argv[2]=='view':
     print('pull_request:\\n  body: '+json.dumps(d['body']))
 elif sys.argv[2]=='diff':
+    c=p.with_suffix('.diffs')
+    n=int(c.read_text()) if c.exists() else 0
+    c.write_text(str(n+1))
+    if d['mode']=='down' or (d['mode']=='flaky' and not n):
+        print('error: "HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)"\\ncode: UNKNOWN')
+        sys.exit(1)
     print('pr_diff:\\n  diff: '+json.dumps(d['diff']))
 if d['mode']=='truncated': print('  truncated: true')
 ''')
@@ -373,6 +379,33 @@ if d['mode']=='truncated': print('  truncated: true')
                            env=self.forge(diff='--- a/src/secrets.py\n+++ b/src/utils.py\n'), text=True, capture_output=True)
         self.assertEqual(r.returncode, 1)
         self.assertIn('logins-keys-secrets', r.stderr)
+
+    def test_large_diff_and_failed_reads(self):
+        url = 'https://github.com/example/repo/pull/1'
+        def lint(diff='', mode='ok'):
+            for name in ('forge.count', 'forge.diffs'):
+                (self.root/name).unlink(missing_ok=True)
+            return subprocess.run(['python3', str(TOOL), '--pr-url', url],
+                                  env=self.forge(diff=diff, mode=mode), text=True, capture_output=True)
+        # Well past the 61 KB diff that was refused; only its last line is a carve-out.
+        large = ''.join(f'diff --git a/docs/n{i}.md b/docs/n{i}.md\n--- a/docs/n{i}.md\n+++ b/docs/n{i}.md\n'
+                        + '+An ordinary documentation line that changes nothing sensitive.\n' * 20 for i in range(200))
+        self.assertGreater(len(large), 250_000)
+        r = lint(large)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = lint(large+'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n'
+                 '+const key = process.env.STRIPE_SECRET_KEY;\n')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('carve-outs/logins-keys-secrets', r.stderr)
+        # A transient forge failure is read again; a read that keeps failing still refuses.
+        r = lint(large, 'flaky')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.root/'forge.diffs').read_text(), '2')
+        r = lint(large, 'down')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('forge read failed 3 times', r.stderr)
+        self.assertIn('502 Bad Gateway', r.stderr)
+        self.assertNotIn('pass:', r.stdout)
 
     def test_pr_registration_refuses_before_side_effects(self):
         home = self.root/'home'
