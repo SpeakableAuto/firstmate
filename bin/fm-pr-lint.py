@@ -42,7 +42,8 @@ These explanations and classifications are review inputs, never approvals.
 The classifier is conservative and cannot recognize every domain-specific alias.
 
 The GitHub reader uses gh-axi full body/diff output and checks the head before and
-after reading. Unknown, missing or truncated output refuses; other forges must
+after reading. A failed read is retried twice; one still failing after that, or
+unknown, missing or truncated output, refuses; other forges must
 use --file until an adapter is implemented. Exit 0 shape passes, 1 refusal, 2 usage.
 The home config and integration boundaries are documented in docs/configuration.md.
 """
@@ -53,6 +54,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from urllib.parse import urlsplit
 
 
@@ -300,11 +302,19 @@ def lint(text, kind='pr', paths=(), diff=''):
     return errors
 
 
-def run_axi(*args):
-    result = subprocess.run(['gh-axi', *args], text=True, capture_output=True, timeout=60)
-    if result.returncode or re.search(r'^\s*(?:error:|truncated: true)', result.stdout, re.M):
-        raise ValueError('forge read failed or was truncated; repair gh-axi access and retry')
-    return result.stdout
+def run_axi(*args, attempts=3):
+    # Forge 5xx replies are routine, so a failed read is retried; truncation is not.
+    for attempt in range(attempts):
+        result = subprocess.run(['gh-axi', *args], text=True, capture_output=True, timeout=60)
+        if re.search(r'^\s*truncated: true', result.stdout, re.M):
+            raise ValueError('forge read was truncated; retry with full output')
+        if not result.returncode and not re.search(r'^\s*error:', result.stdout, re.M):
+            return result.stdout
+        if attempt + 1 < attempts:
+            time.sleep(2 ** attempt)
+    error = re.search(r'^\s*error:\s*(.*)$', result.stdout + '\n' + result.stderr, re.M)
+    detail = error[1].strip()[:200] if error else f'exit {result.returncode}'
+    raise ValueError(f'forge read failed {attempts} times ({detail}); repair gh-axi access and retry')
 
 
 def toon_scalar(output, name, indent):
