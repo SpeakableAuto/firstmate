@@ -217,7 +217,8 @@ printf 'pr=https://github.com/example/repo/pull/7\n' > "$FM_HOME/state/current.m
 mkdir -p "$TMP_ROOT/activity-tools"
 cat > "$TMP_ROOT/activity-tools/gh-axi" <<'PRUPDATE'
 #!/usr/bin/env bash
-printf 'api_response:\n  body: "%s"\n  truncated: false\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# A minute old, so a read that crosses a second boundary never looks future-dated.
+printf 'api_response:\n  body: "%s"\n  truncated: false\n' "$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc)-d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 PRUPDATE
 chmod +x "$TMP_ROOT/activity-tools/gh-axi"
 old_path=$PATH
