@@ -1434,6 +1434,8 @@ A light-machine example:
 The light-machine cap may be raised to three after measuring its room; the heavy-machine cap cannot exceed four.
 When `max_crew` is two or more, ordinary work may fill only `max_crew - 1` crew slots: the last slot stays free so one urgent task can start at any moment, and room refuses an ordinary start there with `last slot reserved for urgent work`.
 An urgent task may take that last slot; once it is full, a further urgent task waits like any other.
+A live urgent task counts against that reserve rather than an ordinary slot, so ordinary work keeps `max_crew - 1` slots while it runs.
+A relaunch resumes a task that already held a slot, so the reservation never refuses it; the full `max_crew` still applies.
 The machine evidence shared with the dispatch resolver carries `reserved_only: true` when only that slot is left, and the resolver passes such a machine over for ordinary work so it can place on another machine that still has an ordinary slot.
 The crew cap uses the same shared live-worker count: recorded endpoints positively classified alive by the existing backend liveness owner, plus any record launched within the last 60 seconds, excluding the launching task and persistent secondmates.
 Records whose backend answered that the endpoint is missing, dead, gone, ambiguous or unverified, such as retained paused or done records, do not consume crew capacity.
@@ -1491,7 +1493,7 @@ The slot owner signals successful reclaim and merge-proved slot removal through 
 
 The ordinary watcher rechecks capacity waits on crew metadata/lock changes, explicit slot-reclaim signals, and at least every 900 seconds while the watcher is running.
 It orders requests by the canonical backlog `(impact: P0)` through `(impact: P3)`, oldest first within each level.
-The shared backlog parser uses explicit impact first, legacy numeric `(priority: 0..3)` only when impact is absent, then P2.
+Missing impact defaults to P2; legacy `(priority: N)` and task-classification fields never override impact, so an untriaged legacy priority 0 is ordinary work.
 Placement, WIP admission and flow receipts use that same resolved impact.
 The read-only backlog parser strips impact metadata from display titles, and each queue read uses the current backlog impact.
 Rechecks preserve the original wait age, apply current machine/account checks, and append one ordinary `capacity-ready` row to the durable wake queue for Firstmate to reroute through dispatch; they never launch a worker or grant new authority.

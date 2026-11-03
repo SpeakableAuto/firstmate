@@ -79,12 +79,21 @@ for label in '.urgent="yes"' '.reported_urgency="urgent"' '.reporter={"urgent":t
   assert_equals no "$(python3 "$TOOL" urgent "$DATA/task-one/placement.json" P1)" "the urgent rule ignores $label"
 done
 cp "$TMP_ROOT/work" "$DATA/task-one/placement.json"
+# A relaunch resumes the slot it held, and a live urgent task fills the reserve.
+assert_equals true "$(assess "$(jq '.relaunch=true' <<< "$reserved")" | jq -r .admitted)" 'an ordinary relaunch is not refused by the reserved slot'
+assert_equals true "$(assess "$(jq '.urgent_live=1' <<< "$reserved")" | jq -r .admitted)" 'ordinary work keeps max_crew - 1 slots while an urgent task runs'
+assert_equals false "$(assess "$(jq '.crew_count=2 | .relaunch=true | .urgent_live=1' <<< "$base")" | jq -r .admitted)" 'neither exemption passes the full cap'
+mkdir -p "$DATA/outage" "$DATA/flagged-live"
+printf '{"version":1,"urgent":true}\n' > "$DATA/flagged-live/placement.json"
+live_rows='{"records":[{"id":"outage","impact":"P0"},{"id":"legacy","impact":"P2"}]}'
+assert_equals 2 "$(python3 "$TOOL" urgent-live "$DATA" task-one outage flagged-live legacy <<< "$live_rows")" 'live urgent tally reads backlog P0 and the intake mark only'
 # Pool evidence reads live memory, so this profile accepts any measurement.
 mkdir -p "$TMP_ROOT/roomy"
 jq '.min_free_memory_percent=0.001 | .max_swap_mib=1048575' "$CONFIG/crew-placement.json" > "$TMP_ROOT/roomy/crew-placement.json"
 pool_reserved=$(python3 "$TOOL" pool "$TMP_ROOT/roomy" 1)
 assert_equals 'true:true' "$(jq -r '"\(.available):\(.reserved_only)"' <<<"$pool_reserved")" 'shared machine evidence says only the reserved slot is left'
 assert_equals false "$(python3 "$TOOL" pool "$TMP_ROOT/roomy" 0 | jq .reserved_only)" 'an ordinary slot is still free below the reserve'
+assert_equals false "$(python3 "$TOOL" pool "$TMP_ROOT/roomy" 1 1 | jq .reserved_only)" 'a live urgent task leaves the ordinary slots open'
 pass 'the reserved slot admits one urgent task and refuses ordinary and reporter-labelled work'
 
 blocked=$(assess "$(jq '.crew_count=2' <<< "$base")")
@@ -285,7 +294,7 @@ assert_equals null "$(jq -r '.waits["invalid-task"]' "$SPAWN_HOME/state/capacity
 assert_equals 'spawn ended before placement for a non-capacity reason' "$(jq -r '[.decisions[]|select(.task=="invalid-task")][-1].terminal' "$SPAWN_HOME/state/capacity.json")" 'non-capacity spawn exit records a terminal decision'
 pass 'real spawn refuses bad placement before allocating a worker'
 
-# Canonical impact wins conflicting legacy priority; legacy numeric priority is the fallback.
+# Canonical impact wins conflicting legacy priority; missing impact defaults P2.
 # shellcheck source=bin/fm-backlog-lib.sh
 . "$ROOT/bin/fm-backlog-lib.sh"
 cat > "$DATA/backlog.md" <<'BACKLOG'
@@ -297,7 +306,7 @@ parsed=$(backlog_json "$DATA/backlog.md")
 assert_equals P0 "$(jq -r '.records[0].impact' <<< "$parsed")" 'explicit impact is parsed'
 assert_equals 'Most urgent' "$(jq -r '.records[0].title' <<< "$parsed")" 'impact metadata stripped from display title'
 waits=$(printf '%s\n' "$parsed" | python3 "$TOOL" ordered "$STATE")
-assert_equals P0 "$(jq -r '.[]|select(.task=="task-one")|.impact' <<< "$waits")" 'missing impact uses legacy priority'
+assert_equals P2 "$(jq -r '.[]|select(.task=="task-one")|.impact' <<< "$waits")" 'missing impact ignores legacy priority'
 pass 'canonical impact and display title handling'
 
 python3 - "$TOOL" "$TMP_ROOT" <<'PY'

@@ -263,7 +263,10 @@ fm_quota_balance_charge() {
 
 # Shared read-only pool evidence, also attached to remote quota snapshots.
 fm_quota_balance_machine_state() { # <config> <state> [exclude-id]
-  local count=-1
-  if fm_live_workers_count "$2" "${3:-}" >/dev/null 2>&1; then count=$FM_LIVE_WORKERS_COUNT; fi
-  python3 "$SCRIPT_DIR/fm-placement.py" pool "$1" "$count"
+  local count=-1 urgent=0
+  if fm_live_workers_count "$2" "${3:-}" >/dev/null 2>&1; then
+    count=$FM_LIVE_WORKERS_COUNT
+    urgent=$(fm_live_workers_urgent "${DATA:-${FM_DATA_OVERRIDE:-${2%/*}/data}}" "$FM_LIVE_WORKERS_COUNTED")
+  fi
+  python3 "$SCRIPT_DIR/fm-placement.py" pool "$1" "$count" "$urgent"
 }

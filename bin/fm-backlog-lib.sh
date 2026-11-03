@@ -125,11 +125,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
              priority:metadata($rest; "priority"),
              serves:metadata($rest; "serves"),
              support:metadata($rest; "support"),
-             impact:(metadata($rest; "impact") as $impact
-               | metadata($rest; "priority") as $legacy
-               | if $impact != null and ($impact | test("^P[0-3]$")) then $impact
-                 elif $legacy != null and ($legacy | test("^[0-3]$")) then "P" + $legacy
-                 else "P2" end),
+             impact:(metadata($rest; "impact") | if . != null and test("^P[0-3]$") then . else "P2" end),
              hold_reason:hold_metadata($rest),
              hold_kind:metadata($rest; "hold-kind"),
              hold_until:metadata($rest; "hold-until"),

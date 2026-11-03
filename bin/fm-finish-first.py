@@ -67,13 +67,16 @@ def read_rows(text):
         row['serves'] = serves[1] if serves else None
         support = re.search(r'\(support:\s*([a-z-]+)\)', row.get('title', ''))
         row['support'] = support[1] if support else None
+        # Numeric priority is not Firstmate's impact mark; only explicit impact is.
+        impact = re.search(r'\(impact:\s*(P[0-3])\)', row.get('title', ''))
+        row['impact'] = impact[1] if impact else 'P2'
         if row['created'] != '-':
             datetime.date.fromisoformat(row['created'])
         row['order'] = (row['created'] if row['created'] != '-' else '', len(rows))
         rows.append(row)
     if len(rows) != count or len({row['id'] for row in rows}) != count:
         raise ValueError('truncated or duplicate tasks-axi task list')
-    return {'present': True, 'records': [dict(r, structured=True, impact='P'+str(r['priority']), hold_reason=r['held']=='yes', unresolved_blocker_ids=['blocked'] if r['blocked']=='yes' else []) for r in rows]}
+    return {'present': True, 'records': [dict(r, structured=True, hold_reason=r['held']=='yes', unresolved_blocker_ids=['blocked'] if r['blocked']=='yes' else []) for r in rows]}
 
 
 def bounded_read(command):

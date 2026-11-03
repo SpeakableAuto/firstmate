@@ -172,7 +172,7 @@ fm_placement_count
                     FM_STATE_OVERRIDE=str(home / 'state'), FM_WAKE_QUEUE=str(home / 'state/.wake-queue'),
                     FM_WAKE_QUEUE_LOCK=str(home / 'state/.wake-queue.lock'))
 
-    def admit(self, home, task):
+    def admit(self, home, task, relaunch=False):
         # Same admission owner used by spawn, without allocating a worker.
         script = '''SCRIPT_DIR=$1/bin
 CONFIG=$FM_CONFIG_OVERRIDE DATA=$FM_DATA_OVERRIDE STATE=$FM_STATE_OVERRIDE PROJ=$2
@@ -184,7 +184,8 @@ CONFIG=$FM_CONFIG_OVERRIDE DATA=$FM_DATA_OVERRIDE STATE=$FM_STATE_OVERRIDE PROJ=
 trap fm_placement_release EXIT
 fm_placement_begin "$3" && fm_placement_check codex test high unknown
 '''
-        return subprocess.run(['bash', '-c', script, 'scenario', str(ROOT), str(self.project), task], env=self.env_for(home), capture_output=True, text=True)
+        env = dict(self.env_for(home), RELAUNCH='1' if relaunch else '0')
+        return subprocess.run(['bash', '-c', script, 'scenario', str(ROOT), str(self.project), task], env=env, capture_output=True, text=True)
 
     def tick(self, home):
         result = subprocess.run(['bash', str(ROOT / 'bin/fm-placement.sh'), 'tick'], env=self.env_for(home), capture_output=True, text=True)
@@ -356,6 +357,23 @@ fm_placement_begin "$3" && fm_placement_check codex test high unknown
         (home / 'state/occupant-0.meta').unlink()
         self.tick(home)
         self.assertEqual(set(self.wake_order(home)[1:]), {'outage', 'ordinary', 'reporter'})
+
+    def test_reserved_slot_relaunch_and_urgent_occupant(self):
+        home = self.home('heavy', True, count=3)
+        self.task(home, 'restart', 'website')
+        self.task(home, 'ordinary', 'website')
+        self.refuse(home, 'ordinary', 'room')
+        # A relaunch resumes a slot the task already held; the reserve never blocks it.
+        self.assertEqual(self.admit(home, 'restart', relaunch=True).returncode, 0, 'an ordinary relaunch at the reserved boundary')
+        # A live urgent task fills the reserve, so ordinary work keeps max_crew - 1 slots.
+        (home / 'state/occupant-2.meta').unlink()
+        self.task(home, 'flagged', 'website', 'P0')
+        self.live(home, 'flagged')
+        self.assertEqual(self.admit(home, 'ordinary').returncode, 0, 'ordinary work keeps its slots while an urgent task runs')
+        self.assertIn('crew=3/4', self.ledger(home)['decisions'][-1]['checks']['room']['reason'])
+        self.live(home, 'ordinary')
+        decision = self.refuse(home, 'restart', 'room')
+        self.assertIn('count=4, cap=4', decision['checks']['room']['reason'], 'the full cap still holds')
 
 
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(PlacementScenarios)

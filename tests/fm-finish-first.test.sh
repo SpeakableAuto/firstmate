@@ -33,6 +33,8 @@ check 0 allowed candidate
 printf '{"version":1,"max_crew":1}\n' > "$FM_HOME/config/crew-placement.json"
 check 1 WIP candidate
 check 0 'P0' urgent
+# A legacy numeric priority 0 is not Firstmate's urgent mark.
+check 1 WIP legacy
 check 0 resume current
 # Firstmate's own intake flag is urgent; a reporter's label is not.
 mkdir -p "$FM_HOME/data/candidate"
@@ -49,7 +51,7 @@ cp "$TMP_ROOT/before-reporter.md" "$FM_HOME/data/backlog.md"; rm -f "$FM_HOME/da
 python3 - "$FM_HOME/data/backlog.md" <<'PYROW'
 from pathlib import Path
 import sys
-p=Path(sys.argv[1]); s=p.read_text().replace('(priority: 0)', '(priority: 3) (impact: P0)')
+p=Path(sys.argv[1]); s=p.read_text().replace('(impact: P0) (since', '(priority: 3) (impact: P0) (since')
 p.write_text(s)
 PYROW
 check 0 P0 urgent
@@ -82,6 +84,7 @@ with open(sys.argv[1], 'w') as stream:
         stream.write(json.dumps(row)+'\n')
 PY
 check 1 'two-day stop' candidate
+check 1 'two-day stop' legacy
 check 0 allowed elevated
 check 0 P0 urgent
 rm "$FM_HOME/data/flow-history.jsonl"
