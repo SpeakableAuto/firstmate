@@ -119,6 +119,11 @@
 #   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
 #                          inactive terminal outcome that still lacks its durable
 #                          upstream receipt
+#   check: progress-audit: <n> crew need recovery by cause (...)
+#                          a ship or scout landed no push, commit, status event
+#                          or report for the whole progress window, or its
+#                          endpoint or local copy is gone, or the storage holding
+#                          local copies is not reachable (bin/fm-progress-audit.sh)
 #   check: secondmate wake-loop stalled: mate=<id> row=<seq> idle=<seconds>s
 #                          an actionable row in an endpoint-recorded local
 #                          secondmate home's durable wake queue did not advance
@@ -2809,6 +2814,18 @@ while :; do
     fi
   else
     triage_log "inactive-outcome reconciliation unavailable"
+  fi
+
+  # The progress audit judges crews by landed work on its own bounded cadence
+  # (bin/fm-progress-audit.sh owns the cadence, the causes, and the durable
+  # wake it appends); quiet ticks print nothing and never wake firstmate.
+  progress_out=
+  if progress_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-progress-audit.sh" tick 2>/dev/null); then
+    progress_out=$(printf '%s\n' "$progress_out" | sed -n 's/^wake: //p' | head -1)
+    [ -z "$progress_out" ] || wake "$progress_out"
+  else
+    triage_log "progress audit unavailable"
   fi
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
