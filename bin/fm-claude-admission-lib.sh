@@ -35,6 +35,11 @@ fm_claude_profile_floor_valid() {
 # Session-floor evidence from one Claude quota row: {pct} from the session
 # windows when the row is explicitly fresh, otherwise {unknown}. Shared by the
 # admission verdict and the dispatch state so both read the floor identically.
+# A fresh, error-free reading with no session row has no five-hour window in
+# force; quota-axi builds every Claude window from one usage response, so the
+# row is absent rather than lost to a failed sub-read. The weekly seven_day
+# window then carries the same floor as {pct, window: "seven_day"}, and an
+# absent or unmeasured weekly row stays {unknown}.
 # shellcheck disable=SC2016,SC2034  # jq program text; read by the sourcing consumers
 FM_CLAUDE_SESSION_JQ='
   def claude_session($p):
@@ -42,9 +47,19 @@ FM_CLAUDE_SESSION_JQ='
     if $p == null then {unknown: "no Claude quota row"}
     elif $p.state.stale != false then {unknown: "Claude quota reading is not explicitly fresh"}
     else ([$p.windows[]? | select(.id == "five_hour" or .kind == "five_hour" or .kind == "session")]) as $rows |
-      if ($rows | length) == 0 or any($rows[]; (.percentRemaining | known) | not)
-      then {unknown: "Claude session window percentage is unknown"}
-      else {pct: ($rows | map(.percentRemaining) | min)} end
+      if ($rows | length) > 0 then
+        if any($rows[]; (.percentRemaining | known) | not)
+        then {unknown: "Claude session window percentage is unknown"}
+        else {pct: ($rows | map(.percentRemaining) | min)} end
+      elif $p.state.status != "fresh" or ($p.state.error // "") != ""
+        then {unknown: "Claude quota reading has no session window and is not a fresh successful reading"}
+      else ([$p.windows[]? | select(.id == "seven_day")]) as $weekly |
+        if ($weekly | length) == 0
+          then {unknown: "Claude quota reading has neither a session nor a weekly window"}
+        elif any($weekly[]; (.percentRemaining | known) | not)
+          then {unknown: "Claude weekly window percentage is unknown"}
+        else {pct: ($weekly | map(.percentRemaining) | min), window: "seven_day"} end
+      end
     end;
 '
 
@@ -183,7 +198,7 @@ fm_claude_admission_check() {
     (claude_session($p)) as $session |
     (if $p.state.stale == false then [
       (if $session.unknown then {scope:"five_hour",unknown:true}
-        else {scope:"five_hour",pct:$session.pct,min:$floor} end),
+        else {scope:($session.window // "five_hour"),pct:$session.pct,min:$floor} end),
       ($floors[] | . as $f |
         ([$p.quotaSemantics.effectiveAvailability[]? | select(.scope == $f.scope)]) as $rows |
         if ($rows | length) == 0
