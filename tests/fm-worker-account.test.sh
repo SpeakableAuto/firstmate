@@ -641,6 +641,153 @@ SH
   pass 'Claude admission enforces fixed and selected floors, strict overrides, and fail-closed quota evidence'
 )
 
+# A Claude account whose fresh reading carries a weekly row but no five-hour
+# row, as on a machine whose plan reports no session window. Fixtures hold
+# percentages only. no_session_case <name> sets up the case; weekly_reading
+# <weekly-percent> writes that machine's reading shape.
+no_session_case() {
+  new_case "$1" claude
+  cat > "$FAKEBIN/quota-axi" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_TEST_QUOTA_FAIL:-}" ] || exit 1
+cat "$FM_TEST_QUOTA"
+SH
+  chmod +x "$FAKEBIN/quota-axi"
+  export FM_TEST_QUOTA="$CASE/quota.json"
+}
+weekly_reading() {
+  jq -n --argjson weekly "$1" '{schemaVersion:5,providers:[{provider:"claude",state:{status:"fresh",stale:false},
+    windows:[{id:"seven_day",kind:"weekly",percentRemaining:$weekly},
+      {id:"model:fable",kind:"model",percentRemaining:91},
+      {id:"extra_usage",kind:"extra_usage",enabled:true}],
+    quotaSemantics:{status:"known",effectiveAvailability:[
+      {scope:"all_models",status:"known",effectivePercentRemaining:$weekly,runway:{status:"through_reset"}},
+      {scope:"model:fable",status:"known",effectivePercentRemaining:$weekly,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
+}
+reshape_reading() { # <jq-filter>
+  jq "$1" "$FM_TEST_QUOTA" > "$CASE/reshaped.json" && cp "$CASE/reshaped.json" "$FM_TEST_QUOTA"
+}
+no_session_check() { # [floor-scope] [floor-min-percent] [model] [P0]
+  fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate "${IDENTITY:-ordinary}" \
+    "${1:-}" "${2:-}" "${3:-}" "${4:-}" 2>&1
+}
+
+test_claude_admission_admits_a_weekly_only_reading() (
+  . "$ROOT/bin/fm-backend.sh"
+  . "$ROOT/bin/fm-claude-admission-lib.sh"
+  no_session_case no-session-admit
+  # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
+  local PATH="$FAKEBIN:$PATH"
+  export PATH
+  local out rc
+  weekly_reading 14
+  out=$(no_session_check); rc=$?
+  expect_code 0 "$rc" "a fresh reading with weekly 14% and no session row admits against the weekly floor: $out"
+  out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_QUOTA")
+  assert_equals '{"pct":14,"window":"seven_day"}' "$(jq -c .session <<<"$out")" \
+    "dispatch state reads the weekly window when no session window is in force"
+  out=$(no_session_check all_models 10); rc=$?
+  expect_code 0 "$rc" "a satisfied selected profile floor still admits: $out"
+  out=$(no_session_check model:fable 20 fable); rc=$?
+  expect_code 1 "$rc" "a selected profile floor still applies without a session window: $out"
+  assert_contains "$out" 'model:fable remaining 14% below 20%' 'the selected scope is still enforced'
+  weekly_reading 6
+  out=$(no_session_check '' '' '' P0); rc=$?
+  expect_code 0 "$rc" "a P0 override uses its 5% reserve on the weekly window as it does on a session window: $out"
+  pass 'Claude admission admits a fresh weekly-only reading against its weekly floor'
+)
+
+test_claude_admission_weekly_floor_refuses_below_floor() (
+  . "$ROOT/bin/fm-backend.sh"
+  . "$ROOT/bin/fm-claude-admission-lib.sh"
+  no_session_case no-session-below
+  # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
+  local PATH="$FAKEBIN:$PATH"
+  export PATH
+  local out rc
+  weekly_reading 9
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a weekly window below the floor refuses: $out"
+  assert_contains "$out" 'seven_day remaining 9% below 10%' 'the refusal names the weekly window and the floor'
+  assert_contains "$out" 'choose Codex' 'refusal gives an alternative'
+  weekly_reading 10
+  out=$(no_session_check); rc=$?
+  expect_code 0 "$rc" "the exact weekly floor admits: $out"
+  printf '%s\n' '{"claude_admission":{"min_session_percent":70}}' > "$HOME_DIR/config/crew-dispatch.json"
+  weekly_reading 60
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a configured floor applies to the weekly window: $out"
+  assert_contains "$out" 'seven_day remaining 60% below 70%' 'the configured floor is named'
+  pass 'Claude admission refuses a weekly-only reading below its floor'
+)
+
+test_claude_admission_without_a_session_window_still_fails_closed() (
+  . "$ROOT/bin/fm-backend.sh"
+  . "$ROOT/bin/fm-claude-admission-lib.sh"
+  no_session_case no-session-closed
+  # shellcheck disable=SC2030,SC2031 # PATH changes are deliberately isolated to this subshell.
+  local PATH="$FAKEBIN:$PATH"
+  export PATH
+  local out rc
+  weekly_reading 80
+  reshape_reading '.providers[0].state = {status:"stale",stale:true,error:"Claude quota endpoint rate limited"}'
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a stale weekly-only reading refuses: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'stale evidence fails closed'
+  weekly_reading 80
+  reshape_reading '.providers[0].state = {status:"error",stale:false,error:"authentication failed"}'
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a failed weekly-only reading refuses even when marked not stale: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'a failed reading fails closed'
+  weekly_reading 80
+  reshape_reading '.providers[0].state = {stale:false}'
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a weekly-only reading that is not explicitly fresh refuses: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'unproved success fails closed'
+  weekly_reading 80
+  out=$(FM_TEST_QUOTA_FAIL=1 no_session_check); rc=$?
+  expect_code 1 "$rc" "a failed account quota lookup refuses: $out"
+  assert_contains "$out" 'quota is unavailable or invalid' 'a failed lookup fails closed'
+  reshape_reading '.providers[0].provider = "codex"'
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a reading with no row for the Claude account refuses: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'a missing account row fails closed'
+  weekly_reading 80
+  reshape_reading '.providers[0].windows |= map(select(.id != "seven_day"))'
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a reading with neither a session nor a weekly row refuses: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'absent weekly evidence fails closed'
+  out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_QUOTA")
+  assert_equals true "$(jq '.session.unknown != null' <<<"$out")" 'dispatch state stays unknown without a weekly row'
+  for weekly in 'null' '"14"' '-1' '101'; do
+    weekly_reading 80
+    reshape_reading "(.providers[0].windows[] | select(.id == \"seven_day\") | .percentRemaining) = $weekly"
+    out=$(no_session_check); rc=$?
+    expect_code 1 "$rc" "an unmeasured weekly row ($weekly) refuses: $out"
+    assert_contains "$out" 'quota floor is unverifiable' 'unknown weekly evidence fails closed'
+  done
+  weekly_reading 80
+  reshape_reading '.providers[0].windows += [{id:"seven_day",kind:"weekly"}]'
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "one measured weekly row must not hide an unmeasured one: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'mixed weekly evidence fails closed'
+  weekly_reading 80
+  reshape_reading '.providers[0].windows += [{id:"five_hour",kind:"session",percentRemaining:9}]'
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a present session row below the floor refuses despite a healthy weekly row: $out"
+  assert_contains "$out" 'five_hour remaining 9% below 10%' 'a present session row still governs'
+  weekly_reading 80
+  reshape_reading '.providers[0].windows += [{id:"five_hour",kind:"session"}]'
+  out=$(no_session_check); rc=$?
+  expect_code 1 "$rc" "a present but unmeasured session row never falls back to the weekly row: $out"
+  assert_contains "$out" 'quota floor is unverifiable' 'unmeasured session evidence fails closed'
+  weekly_reading 80
+  out=$(IDENTITY=unknown no_session_check); rc=$?
+  expect_code 1 "$rc" "a raw command whose credential cannot be proved refuses: $out"
+  assert_contains "$out" 'credential selection cannot be proved' 'unprovable credentials fail closed'
+  pass 'Claude admission without a session window still fails closed on stale, failed, missing, or unknown evidence'
+)
+
 # Exercise admission through a cold-loaded backend classifier and process probe.
 # The Herdr protocol and absence recheck are canned; the shell-only proof reads
 # a real process table. No Herdr lifecycle command is permitted by this fixture.
@@ -883,6 +1030,9 @@ test_spawn_help_describes_claude_admission_boundaries() {
 
 test_claude_admission_checks_processes_without_a_registration || exit 1
 test_claude_admission_limits
+test_claude_admission_admits_a_weekly_only_reading
+test_claude_admission_weekly_floor_refuses_below_floor
+test_claude_admission_without_a_session_window_still_fails_closed
 test_spawn_enforces_claude_admission
 test_spawn_enforces_pacing_for_codex
 test_concurrent_claude_spawns_share_last_slot
