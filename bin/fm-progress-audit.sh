@@ -77,9 +77,14 @@
 # once in the same wake, with the count of crews it holds, whenever that set of
 # storage roots changes. Surfaced signatures live in state/.progress-audit/<id>
 # and state/.progress-audit/.storage; a record with no task meta is pruned there.
-# Endpoint and current-state reads stop starting once the
-# FM_PROGRESS_AUDIT_BUDGET_SECS budget (default 20, valid 1..60) is spent; a
-# crew left unconfirmed keeps its previous signature and is read next tick.
+# FM_PROGRESS_AUDIT_BUDGET_SECS (default 20, valid 1..60) bounds evidence
+# collection, including directory/Git reads, with at most 10 seconds per crew.
+# The whole synchronous tick has two extra seconds for publication plus the
+# cleanup margin owned by fm-progress-audit-bound-lib.sh. Incomplete reads keep
+# previous signatures and storage state; account prints waiting/unconfirmed,
+# and recover takes no action. Confirmed partial progress remains visible.
+# Ownership and partial output survive in .owned-* until safely reconciled;
+# see fm-progress-audit-bound-lib.sh for cleanup and filesystem assumptions.
 #
 # recover: performs the due action for one crew and records the attempt in
 # state/<id>.recovery (lines `attempt <epoch> <n> <cause> <action> <result>`
@@ -114,6 +119,14 @@ FRESHNESS_BIN="${FM_PROGRESS_FRESHNESS_BIN:-$SCRIPT_DIR/fm-checkpoint-freshness.
 # <backend> <target>. Unset means the real backend classifier.
 AGENT_STATE_BIN="${FM_PROGRESS_AGENT_STATE_BIN:-}"
 RETRY_MAX=2
+
+# The public tick and watcher share the same boundary, including initialization.
+# shellcheck source=bin/fm-progress-audit-bound-lib.sh
+. "$SCRIPT_DIR/fm-progress-audit-bound-lib.sh"
+if [ "${1:-}" = tick ] && [ "$#" -eq 1 ]; then
+  fm_progress_audit_tick "$STATE" "$SCRIPT_DIR/fm-progress-audit.sh"
+  exit $?
+fi
 
 usage() {
   sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
@@ -205,6 +218,15 @@ collect_evidence() {  # <id> <worktree> <branch>
   EVIDENCE_KIND=none
   EVIDENCE_EPOCH=0
   LANDED_EPOCH=0
+  # Collect reachable home evidence before entering potentially stuck storage.
+  line=$(last_status_line "$STATE/$id.status")
+  if [ -n "$line" ]; then
+    e=$(status_line_at_epoch "$line" 2>/dev/null || true)
+    consider_evidence status "$e"
+  fi
+  if [ -f "$DATA/$id/report.md" ]; then
+    consider_evidence report "$(file_mtime "$DATA/$id/report.md")"
+  fi
   if [ -n "$wt" ] && [ -d "$wt" ]; then
     if [ -n "$branch" ]; then
       e=$(ref_push_epoch "$wt" "refs/remotes/origin/$branch")
@@ -215,20 +237,15 @@ collect_evidence() {  # <id> <worktree> <branch>
     e=$(git -C "$wt" log -1 --format=%ct HEAD 2>/dev/null || true)
     consider_evidence commit "$e"
   fi
-  line=$(last_status_line "$STATE/$id.status")
-  if [ -n "$line" ]; then
-    e=$(status_line_at_epoch "$line" 2>/dev/null || true)
-    consider_evidence status "$e"
-  fi
-  if [ -f "$DATA/$id/report.md" ]; then
-    consider_evidence report "$(file_mtime "$DATA/$id/report.md")"
-  fi
 }
 
 consider_evidence() {  # <kind> <epoch>
   case "$2" in ''|*[!0-9]*) return 0 ;; esac
   # A clock-skewed future stamp is not evidence of anything yet.
   [ "$2" -le "$NOW" ] || return 0
+  if [ "${AUDIT_EVIDENCE_STREAM:-0}" = 1 ]; then
+    printf 'evidence=%s %s\n' "$1" "$2"
+  fi
   if [ "$1" != status ] && [ "$2" -gt "$LANDED_EPOCH" ]; then
     LANDED_EPOCH=$2
   fi
@@ -305,20 +322,23 @@ spawn_epoch() {  # <spawn_gen>
 probe_agent_state() {  # <backend> <target>
   local out rc=0
   if [ -n "$AGENT_STATE_BIN" ]; then
-    out=$(fm_run_timed 10 "$AGENT_STATE_BIN" "$1" "$2" 2>/dev/null) || rc=$?
+    out=$("$AGENT_STATE_BIN" "$1" "$2" 2>/dev/null) || rc=$?
   else
     # shellcheck disable=SC2016 # Positional parameters expand inside the child bash.
-    out=$(fm_run_timed 10 bash -c '. "$1"; fm_backend_agent_state "$2" "$3"' \
+    out=$(bash -c '. "$1"; fm_backend_agent_state "$2" "$3"' \
       fm-agent-state "$SCRIPT_DIR/fm-backend.sh" "$1" "$2" 2>/dev/null) || rc=$?
   fi
   [ "$rc" -eq 0 ] || out=unreadable
   case "$out" in alive|dead|missing|ambiguous|unreadable|unverified) printf '%s' "$out" ;; *) printf unreadable ;; esac
 }
 
-# The bounded current-state read; prints the crew-state line or nothing.
+# Runs inside the bounded classification child; preserve failures as unknown.
 probe_crew_state() {  # <id>
-  fm_run_timed 15 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CREW_STATE_NO_FORGE=1 \
-    "$CREW_STATE_BIN" "$1" 2>/dev/null | head -1 || true
+  local out
+  out=$(env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CREW_STATE_NO_FORGE=1 \
+    "$CREW_STATE_BIN" "$1" 2>/dev/null) || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "${out%%$'\n'*}"
 }
 
 budget_left() {
@@ -328,7 +348,7 @@ budget_left() {
 # classify <id>: sets BUCKET, CAUSE (stalled/missing) or REASON (other buckets),
 # ATTEMPTS, ESCALATED_EPOCH, NEXT, EVIDENCE_KIND/EPOCH, KIND, and UNCONFIRMED=1
 # when the probe budget ran out before a candidate could be read.
-classify() {
+classify_read() {
   local id=$1 meta="$STATE/$1.meta" kind wt branch backend target remote_host
   local open line verb note until at start clock pause_due=0 agent cs e
   BUCKET='' CAUSE='' REASON='' NEXT=- UNCONFIRMED=0 KIND='' STORAGE_ROOT=''
@@ -434,8 +454,8 @@ classify() {
 
   # A candidate: prove what is there before calling it stalled.
   if ! budget_left; then
-    BUCKET=stalled CAUSE=no-progress UNCONFIRMED=1
-    next_action
+    BUCKET=waiting REASON="audit incomplete: probe budget spent" UNCONFIRMED=1
+    NEXT=-
     return 0
   fi
   backend=$(fm_backend_of_meta "$meta")
@@ -447,11 +467,20 @@ classify() {
   fi
   case "$agent" in
     missing) BUCKET=missing CAUSE=endpoint-gone ;;
+    unreadable|ambiguous|unverified)
+      BUCKET=waiting REASON="audit incomplete: endpoint unconfirmed" UNCONFIRMED=1
+      return 0 ;;
     *)
       # An active validation run waits even when its agent is gone; the
       # replacement is due once the run stops.
-      cs=$(probe_crew_state "$id")
+      if ! cs=$(probe_crew_state "$id"); then
+        BUCKET=waiting REASON="audit incomplete: current state unconfirmed" UNCONFIRMED=1
+        return 0
+      fi
       case "$cs" in
+        "state: unknown · source: run-step"*)
+          BUCKET=waiting REASON="audit incomplete: validation state unconfirmed" UNCONFIRMED=1
+          return 0 ;;
         "state: working · source: run-step"*|"state: parked · source: run-step"*)
           BUCKET=waiting
           REASON="validation run: $(one_line "${cs#state: }" 100)"
@@ -465,6 +494,51 @@ classify() {
       ;;
   esac
   next_action
+}
+
+# Classification is read-only and runs entirely inside an audit-owned group.
+# Only completed fields cross this boundary; partial progress is useful but
+# never authorizes recovery or signature/storage deletion.
+classify() {
+  local id=$1 remaining=10 out='' rc=0 key value
+  BUCKET=waiting CAUSE='' REASON="audit incomplete: evidence unavailable" NEXT=-
+  UNCONFIRMED=1 KIND='' STORAGE_ROOT=''
+  ATTEMPTS=0 ESCALATED_EPOCH=0 LAST_ATTEMPT_EPOCH=0 LAST_FAILED_EPOCH=0
+  EVIDENCE_KIND=none EVIDENCE_EPOCH=0 LANDED_EPOCH=0
+  [ "$BUDGET" -ge "$remaining" ] || remaining=$BUDGET
+  if [ "${PROBE_DEADLINE:-0}" -gt 0 ]; then
+    remaining=$((PROBE_DEADLINE - $(date +%s)))
+    [ "$remaining" -gt 0 ] || return 0
+    [ "$remaining" -le 10 ] || remaining=10
+  fi
+  out=$(fm_progress_audit_run "$STATE" "task-$id" "$remaining" \
+    "$SCRIPT_DIR/fm-progress-audit.sh" _classify "$id") || rc=$?
+  while IFS='=' read -r key value; do
+    if [ "$key" = evidence ]; then
+      consider_evidence "${value%% *}" "${value#* }"
+      continue
+    fi
+    [ "$rc" -eq 0 ] || continue
+    case "$key" in
+      BUCKET) BUCKET=$value ;; CAUSE) CAUSE=$value ;; REASON) REASON=$value ;;
+      NEXT) NEXT=$value ;; UNCONFIRMED) UNCONFIRMED=$value ;; KIND) KIND=$value ;;
+      STORAGE_ROOT) STORAGE_ROOT=$value ;; ATTEMPTS) ATTEMPTS=$value ;;
+      ESCALATED_EPOCH) ESCALATED_EPOCH=$value ;;
+      LAST_ATTEMPT_EPOCH) LAST_ATTEMPT_EPOCH=$value ;;
+      LAST_FAILED_EPOCH) LAST_FAILED_EPOCH=$value ;;
+    esac
+  done <<< "$out"
+}
+
+cmd_classify_read() {
+  local field
+  valid_id "$1" || return 2
+  AUDIT_EVIDENCE_STREAM=1
+  classify_read "$1"
+  for field in BUCKET CAUSE REASON NEXT KIND STORAGE_ROOT ATTEMPTS \
+    ESCALATED_EPOCH LAST_ATTEMPT_EPOCH LAST_FAILED_EPOCH UNCONFIRMED; do
+    printf '%s=%s\n' "$field" "${!field}"
+  done
 }
 
 # NEXT: the due action for a stalled or missing crew.
@@ -493,7 +567,7 @@ render_line() {  # <id>
     stalled|missing) detail=$CAUSE ;;
     *) detail=$REASON ;;
   esac
-  [ "$UNCONFIRMED" -eq 0 ] || detail="$detail (unconfirmed: probe budget spent)"
+  [ "$UNCONFIRMED" -eq 0 ] || detail="$detail (unconfirmed)"
   if [ "$EVIDENCE_EPOCH" -gt 0 ]; then
     progress="$EVIDENCE_KIND@$(age_words $((NOW - EVIDENCE_EPOCH)))"
   else
@@ -535,7 +609,7 @@ cmd_account() {
 
 cmd_tick() {
   local id sig prev items=0 total=0 wake='' marker="$AUDIT_DIR/.last-tick" age reason=''
-  local pending='' line storage='' storage_sig='' storage_wake=''
+  local pending='' line storage='' storage_sig='' storage_wake='' incomplete=0
   mkdir -p "$AUDIT_DIR" 2>/dev/null || exit 1
   # The first call in a home only starts the cadence, so a watcher that has
   # just been set up gives its crews one cadence before the first roll-call.
@@ -551,9 +625,12 @@ cmd_tick() {
   PROBE_DEADLINE=$(( $(date +%s) + BUDGET ))
   while IFS= read -r id; do
     classify "$id"
+    if [ "$UNCONFIRMED" -ne 0 ]; then
+      incomplete=1
+      continue
+    fi
     case "$BUCKET" in
       stalled|missing)
-        [ "$UNCONFIRMED" -eq 0 ] || continue
         sig="$BUCKET:$CAUSE:$ATTEMPTS:$NEXT"
         case "$NEXT" in escalated*) sig="$BUCKET:$CAUSE:escalated" ;; esac
         ;;
@@ -581,7 +658,7 @@ cmd_tick() {
   done
   # Unreachable storage is one fleet-level finding, surfaced when its set of
   # roots changes; the crews it holds are counted, never escalated one by one.
-  if [ -n "$storage" ]; then
+  if [ "$incomplete" -eq 0 ] && [ -n "$storage" ]; then
     storage_sig=$(printf '%s' "$storage" | sort -u | tr '\n' ' ')
     if [ "$storage_sig" != "$(cat "$AUDIT_DIR/.storage" 2>/dev/null || true)" ]; then
       storage_wake=$(printf '%s' "$storage" | sort | uniq -c \
@@ -601,7 +678,9 @@ cmd_tick() {
     # next tick rather than losing it.
     fm_wake_append check progress-audit "$reason" || exit 1
   fi
-  if [ -n "$storage_sig" ]; then
+  if [ "$incomplete" -ne 0 ]; then
+    : # Unknown evidence cannot clear or replace confirmed storage state.
+  elif [ -n "$storage_sig" ]; then
     printf '%s\n' "$storage_sig" > "$AUDIT_DIR/.storage" || exit 1
   else
     rm -f "$AUDIT_DIR/.storage"
@@ -613,6 +692,7 @@ cmd_tick() {
 $pending
 EOF
   [ -z "$reason" ] || printf 'wake: %s\n' "$reason"
+  [ "$incomplete" -eq 0 ] || printf 'incomplete: audit evidence unconfirmed; previous signatures retained\n'
 }
 
 # --- recover -----------------------------------------------------------------
@@ -720,7 +800,8 @@ cmd_recover() {
 
 case "${1:-}" in
   account) shift; cmd_account "$@" ;;
-  tick) shift; [ "$#" -eq 0 ] || { usage >&2; exit 2; }; cmd_tick ;;
+  _tick) shift; [ "$#" -eq 0 ] || { usage >&2; exit 2; }; cmd_tick ;;
+  _classify) shift; [ "$#" -eq 1 ] || exit 2; cmd_classify_read "$1" ;;
   recover) shift; cmd_recover "$@" ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;

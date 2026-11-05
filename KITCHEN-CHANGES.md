@@ -1,5 +1,14 @@
 # Changes
 
+## 5 November 2026: bound progress-audit reads
+
+PR: pending no-mistakes publication.
+A stalled audit evidence read returns an incomplete result within a fixed budget so the watcher can continue checking the fleet.
+Confirmed partial evidence and previous task/storage signatures survive, and unknown reads cannot initiate recovery.
+Timeout cleanup targets only newly created audit command groups, while unresolved audit ownership prevents duplicate probes.
+Watch for incomplete ownership records that need reconciliation and remember that this does not repair unavailable task storage.
+Deployed: no; no operating home was changed.
+
 ## 30 October 2026: alert on cleared work left unmerged
 
 PR: https://github.com/SpeakableAuto/firstmate/pull/45

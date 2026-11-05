@@ -1477,7 +1477,7 @@ families_for_changed_path() {
     bin/fm-workflow-context.sh)
       printf '%s\n' pure-contract-unit session-bootstrap
       ;;
-    bin/fm-watch*|bin/fm-wake*|bin/fm-inactive-reconcile.sh|bin/fm-progress-audit.sh|\
+    bin/fm-watch*|bin/fm-wake*|bin/fm-inactive-reconcile.sh|bin/fm-progress-audit*.sh|\
     bin/fm-classify-lib.sh|bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
       ;;

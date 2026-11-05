@@ -375,3 +375,188 @@ assert_grep "check: progress-audit: 1 crew need recovery by cause (silent missin
   "$WATCH_OUT" "the watcher poll surfaces the progress audit's finding"
 assert_grep "progress-audit" "$WATCH_HOME/state/.wake-queue" "the watcher's progress wake is durable"
 pass "the real watcher poll runs the progress tick and wakes on a silent crew"
+
+
+# --- a stalled audit-owned Git read cannot starve the real watcher -----------
+# The sentinel exists before the audit and shares the test's process group.
+# The fake Git process resists TERM and holds stdout open until KILL.
+BOUND_HOME="$T/bound-home"
+mkdir -p "$BOUND_HOME"/{state,data,config,projects} "$T/slow-bin"
+STATE="$BOUND_HOME/state"
+crew blocked-git
+status blocked-git "working [at=$((REAL_NOW - 60))]: confirmed status before the stalled storage read"
+mkdir -p "$STATE/.progress-audit"
+printf 'previous-confirmed-signature\n' > "$STATE/.progress-audit/blocked-git"
+printf 'previous-storage\n' > "$STATE/.progress-audit/.storage"
+fm_touch_epoch "$((REAL_NOW - 700))" "$STATE/.progress-audit/.last-tick"
+cat > "$T/slow-bin/git" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$$" > "$FM_TEST_STUBS/slow-git.pid"
+trap '' TERM
+sleep 8
+exit 1
+SH
+chmod +x "$T/slow-bin/git"
+sleep 300 &
+SENTINEL_PID=$!
+BOUND_WATCH_PID=''
+cleanup_bound() {
+  [ -z "$BOUND_WATCH_PID" ] || kill "$BOUND_WATCH_PID" 2>/dev/null || true
+  kill "$SENTINEL_PID" 2>/dev/null || true
+  wait "$SENTINEL_PID" 2>/dev/null || true
+  fm_test_cleanup
+}
+trap cleanup_bound EXIT
+# This ordinary slow check occurs AFTER the audit in the real watch loop.
+cat > "$STATE/continuation.check.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'continued\n' > "$FM_HOME/state/continued"
+SH
+chmod 700 "$STATE/continuation.check.sh"
+FM_HOME="$BOUND_HOME" "$ROOT/bin/fm-check-register.sh" continuation >/dev/null || fail "register continuation check"
+started=$SECONDS
+PATH="$T/slow-bin:$PATH" env FM_HOME="$BOUND_HOME" FM_STATE_OVERRIDE="$STATE" \
+  FM_TEST_STUBS="$STUBS" FM_PROGRESS_AUDIT_BUDGET_SECS=1 FM_PROGRESS_AUDIT_SECS=60 \
+  FM_PROGRESS_AGENT_STATE_BIN="$STUBS/agent-state" FM_PROGRESS_CREW_STATE_BIN="$STUBS/crew-state" \
+  FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=1 FM_HEARTBEAT=999999 \
+  "$ROOT/bin/fm-watch.sh" > "$T/bound-watch.out" 2>&1 &
+BOUND_WATCH_PID=$!
+for ((i=0; i<70; i++)); do
+  [ ! -f "$STATE/continued" ] || break
+  sleep 0.1
+done
+elapsed=$((SECONDS - started))
+kill "$BOUND_WATCH_PID" 2>/dev/null || true
+wait "$BOUND_WATCH_PID" 2>/dev/null || true
+BOUND_WATCH_PID=''
+assert_present "$STUBS/slow-git.pid" "the deliberately stalled Git must actually start"
+if [ ! -f "$STATE/continued" ]; then
+  cat "$T/bound-watch.out" >&2
+  [ ! -f "$STATE/.triage.log" ] || tail -10 "$STATE/.triage.log" >&2
+  fail "a stalled Git probe must not starve watcher continuation"
+fi
+[ "$elapsed" -le 7 ] || fail "watcher exceeded budget plus cleanup headroom: ${elapsed}s"
+kill -0 "$SENTINEL_PID" 2>/dev/null || fail "audit timeout signalled the pre-existing sentinel"
+assert_equals previous-confirmed-signature "$(cat "$STATE/.progress-audit/blocked-git")" "unknown evidence retains the confirmed signature"
+assert_equals previous-storage "$(cat "$STATE/.progress-audit/.storage")" "unknown evidence cannot clear storage"
+assert_absent "$STATE/blocked-git.recovery" "timeout must not attempt recovery"
+pass "stalled audit-owned Git is bounded, watcher continues, signatures and unrelated jobs survive"
+
+
+# A subsequent healthy tick on the same home can classify again and retire
+# stale signatures, rather than leaving monitoring disabled after a timeout.
+fm_touch_epoch "$((REAL_NOW - 700))" "$STATE/.progress-audit/.last-tick"
+OUT=$(FM_HOME="$BOUND_HOME" FM_PROGRESS_AUDIT_BUDGET_SECS=5 "$AUDIT" tick) \
+  || fail "healthy tick after timeout did not resume"
+assert_absent "$STATE/.progress-audit/blocked-git" "healthy evidence clears the previous signature"
+assert_absent "$STATE/.progress-audit/.storage" "a complete healthy scan clears old storage evidence"
+pass "a healthy subsequent tick resumes normal monitoring after timeout"
+
+# The same boundary protects manual accounting and recovery. Repeat with the
+# dependency-free timeout mechanism, using a fresh slot for each attempt.
+for mechanism in default bash; do
+  for operation in account recover; do
+    CHECK_HOME="$T/partial-$mechanism-$operation"
+    mkdir -p "$CHECK_HOME/state" "$CHECK_HOME/data"
+    STATE="$CHECK_HOME/state"
+    crew partial
+    status partial "working [at=$((REAL_NOW - 60))]: confirmed before Git"
+    rc=0
+    OUT=$(PATH="$T/slow-bin:$PATH" FM_TIMEOUT_MECHANISM_OVERRIDE="$mechanism" \
+      FM_PROGRESS_AUDIT_BUDGET_SECS=1 FM_HOME="$CHECK_HOME" FM_TEST_STUBS="$STUBS" \
+      "$AUDIT" "$operation" partial) || rc=$?
+    expect_code 0 "$rc" "incomplete accounting is a waiting outcome"
+    assert_contains "$OUT" "partial · waiting · audit incomplete" "timeout is neither missing nor done"
+    assert_contains "$OUT" "(unconfirmed) · progress=status@" "confirmed partial evidence survives the timeout"
+    assert_contains "$OUT" "next=-" "unknown evidence never proposes a recovery"
+    assert_absent "$STATE/partial.recovery" "unknown evidence cannot spend a recovery attempt"
+    kill -0 "$SENTINEL_PID" 2>/dev/null || fail "sentinel lost on $mechanism/$operation"
+  done
+done
+pid=$(cat "$STUBS/slow-git.pid")
+! kill -0 "$pid" 2>/dev/null || fail "TERM-resistant audit-owned Git survived timeout cleanup"
+pass "account and recover preserve partial evidence and refuse actions on both timeout mechanisms"
+
+# Exercise the runner's finite wait through its public shell interface when
+# the timeout primitive itself cannot reap yet. This synthetic timeout creates
+# a new group but deliberately defers completion; no real kernel stall needed.
+mkdir -p "$T/deferred-bin"
+cat > "$T/deferred-bin/timeout" <<'SH'
+#!/usr/bin/env bash
+shift 3 # -k 1 <seconds>
+set -m
+"$@" &
+wait "$!"
+SH
+chmod +x "$T/deferred-bin/timeout"
+OWNED_STATE="$T/owned-state"
+owned_read() {
+  bash -c '. "$1"; shift; fm_progress_audit_run "$@"' \
+    fm-owned-test "$ROOT/bin/fm-progress-audit-bound-lib.sh" "$OWNED_STATE" probe 1 "$@"
+}
+rc=0
+OUT=$(PATH="$T/deferred-bin:$PATH" owned_read bash -c 'echo partial; sleep 6; echo complete') || rc=$?
+expect_code 124 "$rc" "an unreaped runner cannot hold the caller"
+assert_contains "$OUT" partial "partial stdout survives an unreaped runner"
+rc=0
+owned_read bash -c 'echo duplicate' > "$T/duplicate.out" || rc=$?
+expect_code 124 "$rc" "a prior unaccounted-for runner suppresses another read"
+assert_not_contains "$(cat "$T/duplicate.out")" duplicate "no duplicate probe was started"
+for ((i=0; i<100; i++)); do
+  [ ! -f "$OWNED_STATE/.progress-audit/.owned-probe/result" ] || break
+  sleep 0.1
+done
+# Simulate the publisher being interrupted before its result rename. Process
+# absence is still provable from the ownership record, so it must not disable
+# subsequent monitoring forever merely because a completion file was lost.
+rm -f "$OWNED_STATE/.progress-audit/.owned-probe/result"
+sleep 0.1
+# The primitive and its command have now completed; a new caller reconciles
+# their recorded absence, and the healthy read can run without an operator kill.
+OUT=$(owned_read printf 'healthy\n') || fail "a reaped invocation must allow the next read"
+assert_equals healthy "$OUT" "healthy read resumes after owned processes exit"
+kill -0 "$SENTINEL_PID" 2>/dev/null || fail "sentinel lost during deferred reap"
+pass "unreaped audit runner returns promptly, suppresses duplicates, and resumes after safe reap"
+
+# An audit stalled before it can classify anything still has the outer bound.
+cat > "$T/stalled-tick" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'tick started\n'
+trap '' TERM
+sleep 30
+SCRIPT
+chmod +x "$T/stalled-tick"
+started=$SECONDS
+rc=0
+OUT=$(FM_PROGRESS_AUDIT_BUDGET_SECS=1 bash -c \
+  '. "$1"; fm_progress_audit_tick "$2" "$3"' \
+  fm-tick-bound "$ROOT/bin/fm-progress-audit-bound-lib.sh" "$T/outer-state" "$T/stalled-tick") || rc=$?
+expect_code 124 "$rc" "the whole synchronous tick must be bounded"
+assert_contains "$OUT" 'tick started' "whole-tick timeout retains partial output"
+[ "$((SECONDS - started))" -le 6 ] || fail "whole tick exceeded its bound plus cleanup margin"
+kill -0 "$SENTINEL_PID" 2>/dev/null || fail "whole-tick timeout signalled pre-existing sentinel"
+pass "whole synchronous tick has an independent wall-clock bound and preserves unrelated jobs"
+
+
+# All backend metadata takes the same bounded read path. Stub only the
+# read-only endpoint/current-state interfaces; never call real Herdr lifecycle.
+cat > "$STUBS/failed-state" <<'SH'
+#!/usr/bin/env bash
+exit 124
+SH
+chmod +x "$STUBS/failed-state"
+STATE="$T/backend-state"
+mkdir -p "$STATE"
+for backend in tmux herdr zellij orca cmux; do
+  crew "backend-$backend"
+  printf 'backend=%s\n' "$backend" >> "$STATE/backend-$backend.meta"
+  OUT=$(FM_HOME="$T" FM_STATE_OVERRIDE="$STATE" FM_TEST_STUBS="$STUBS" \
+    FM_PROGRESS_AUDIT_NOW="$((REAL_NOW + WINDOW + 600))" \
+    FM_PROGRESS_AGENT_STATE_BIN="$STUBS/agent-state" \
+    FM_PROGRESS_CREW_STATE_BIN="$STUBS/failed-state" \
+    "$AUDIT" recover "backend-$backend") || fail "backend $backend read failed"
+  assert_contains "$OUT" 'waiting · audit incomplete: current state unconfirmed' \
+    "a failed current-state read is unknown for $backend"
+  assert_absent "$STATE/backend-$backend.recovery" "no recovery from timeout for $backend"
+done
+pass "every supported backend preserves a failed current-state read as unknown without lifecycle actions"

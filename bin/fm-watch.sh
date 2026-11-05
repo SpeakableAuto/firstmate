@@ -182,6 +182,8 @@ set -u
 export -n FM_WATCH_HANDLING_SUCCESSOR FM_WATCH_PREDECESSOR_ARM_PID 2>/dev/null || true
 
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
+# shellcheck source=bin/fm-progress-audit-bound-lib.sh
+. "$SCRIPT_DIR/fm-progress-audit-bound-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -2821,11 +2823,12 @@ while :; do
   # wake it appends); quiet ticks print nothing and never wake firstmate.
   progress_out=
   if progress_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$SCRIPT_DIR/fm-progress-audit.sh" tick 2>/dev/null); then
+    fm_progress_audit_tick "$STATE" "$SCRIPT_DIR/fm-progress-audit.sh" 2>/dev/null); then
+    case "$progress_out" in *incomplete:*) triage_log "progress audit incomplete: evidence unconfirmed" ;; esac
     progress_out=$(printf '%s\n' "$progress_out" | sed -n 's/^wake: //p' | head -1)
     [ -z "$progress_out" ] || wake "$progress_out"
   else
-    triage_log "progress audit unavailable"
+    triage_log "progress audit incomplete: bounded read unavailable; no crew outcome inferred"
   fi
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
