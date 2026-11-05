@@ -80,9 +80,12 @@
 # FM_PROGRESS_AUDIT_BUDGET_SECS (default 20, valid 1..60) bounds evidence
 # collection, including directory/Git reads, with at most 10 seconds per crew.
 # The whole synchronous tick has two extra seconds for publication plus the
-# cleanup margin owned by fm-progress-audit-bound-lib.sh. Incomplete reads keep
-# previous signatures and storage state; account prints waiting/unconfirmed,
-# and recover takes no action. Confirmed partial progress remains visible.
+# cleanup margin owned by fm-progress-audit-bound-lib.sh; each tick read stops
+# two seconds before the budget so that margin stays free. Incomplete reads
+# keep previous signatures and storage roots (newly confirmed roots are still
+# added); account prints waiting/unconfirmed, and recover takes no action.
+# Crews whose bounded read failed are surfaced once per change in that set
+# (state/.progress-audit/.incomplete). Confirmed partial progress remains visible.
 # Ownership and partial output survive in .owned-* until safely reconciled;
 # see fm-progress-audit-bound-lib.sh for cleanup and filesystem assumptions.
 #
@@ -119,6 +122,7 @@ FRESHNESS_BIN="${FM_PROGRESS_FRESHNESS_BIN:-$SCRIPT_DIR/fm-checkpoint-freshness.
 # <backend> <target>. Unset means the real backend classifier.
 AGENT_STATE_BIN="${FM_PROGRESS_AGENT_STATE_BIN:-}"
 RETRY_MAX=2
+BUDGET_SPENT="audit incomplete: probe budget spent"
 
 # The public tick and watcher share the same boundary, including initialization.
 # shellcheck source=bin/fm-progress-audit-bound-lib.sh
@@ -454,7 +458,7 @@ classify_read() {
 
   # A candidate: prove what is there before calling it stalled.
   if ! budget_left; then
-    BUCKET=waiting REASON="audit incomplete: probe budget spent" UNCONFIRMED=1
+    BUCKET=waiting REASON="$BUDGET_SPENT" UNCONFIRMED=1
     NEXT=-
     return 0
   fi
@@ -467,7 +471,7 @@ classify_read() {
   fi
   case "$agent" in
     missing) BUCKET=missing CAUSE=endpoint-gone ;;
-    unreadable|ambiguous|unverified)
+    unreadable)
       BUCKET=waiting REASON="audit incomplete: endpoint unconfirmed" UNCONFIRMED=1
       return 0 ;;
     *)
@@ -507,8 +511,11 @@ classify() {
   EVIDENCE_KIND=none EVIDENCE_EPOCH=0 LANDED_EPOCH=0
   [ "$BUDGET" -ge "$remaining" ] || remaining=$BUDGET
   if [ "${PROBE_DEADLINE:-0}" -gt 0 ]; then
-    remaining=$((PROBE_DEADLINE - $(date +%s)))
-    [ "$remaining" -gt 0 ] || return 0
+    remaining=$((PROBE_DEADLINE - $(date +%s) - 2))
+    if [ "$remaining" -le 0 ]; then
+      REASON="$BUDGET_SPENT"
+      return 0
+    fi
     [ "$remaining" -le 10 ] || remaining=10
   fi
   out=$(fm_progress_audit_run "$STATE" "task-$id" "$remaining" \
@@ -610,6 +617,7 @@ cmd_account() {
 cmd_tick() {
   local id sig prev items=0 total=0 wake='' marker="$AUDIT_DIR/.last-tick" age reason=''
   local pending='' line storage='' storage_sig='' storage_wake='' incomplete=0
+  local unread='' unread_sig='' unread_wake='' prior_storage root new_roots=''
   mkdir -p "$AUDIT_DIR" 2>/dev/null || exit 1
   # The first call in a home only starts the cadence, so a watcher that has
   # just been set up gives its crews one cadence before the first roll-call.
@@ -625,8 +633,10 @@ cmd_tick() {
   PROBE_DEADLINE=$(( $(date +%s) + BUDGET ))
   while IFS= read -r id; do
     classify "$id"
+    [ -z "$STORAGE_ROOT" ] || storage="$storage$STORAGE_ROOT"$'\n'
     if [ "$UNCONFIRMED" -ne 0 ]; then
       incomplete=1
+      [ "$REASON" = "$BUDGET_SPENT" ] || unread="$unread$id"$'\n'
       continue
     fi
     case "$BUCKET" in
@@ -636,7 +646,6 @@ cmd_tick() {
         ;;
       *) sig= ;;
     esac
-    [ -z "$STORAGE_ROOT" ] || storage="$storage$STORAGE_ROOT"$'\n'
     if [ -z "$sig" ]; then
       rm -f "$AUDIT_DIR/$id"
       continue
@@ -658,32 +667,52 @@ cmd_tick() {
   done
   # Unreachable storage is one fleet-level finding, surfaced when its set of
   # roots changes; the crews it holds are counted, never escalated one by one.
-  if [ "$incomplete" -eq 0 ] && [ -n "$storage" ]; then
-    storage_sig=$(printf '%s' "$storage" | sort -u | tr '\n' ' ')
-    if [ "$storage_sig" != "$(cat "$AUDIT_DIR/.storage" 2>/dev/null || true)" ]; then
+  # An incomplete scan adds newly confirmed roots but cannot clear prior ones.
+  prior_storage=$(cat "$AUDIT_DIR/.storage" 2>/dev/null || true)
+  [ -z "$storage" ] || storage_sig=$(printf '%s' "$storage" | sort -u | tr '\n' ' ')
+  if [ "$incomplete" -ne 0 ] && [ -n "$prior_storage" ]; then
+    while IFS= read -r root; do
+      case " $prior_storage" in *" $root "*) ;; *) new_roots="$new_roots$root"$'\n' ;; esac
+    done < <(printf '%s' "$storage" | sort -u)
+    storage_sig=$prior_storage
+    [ -z "$new_roots" ] || storage_sig=$( { printf '%s' "$prior_storage" | tr ' ' '\n'; \
+      printf '%s' "$new_roots"; } | sed '/^$/d' | sort -u | tr '\n' ' ')
+  fi
+  if [ -n "$storage" ]; then
+    if [ "$storage_sig" != "$prior_storage" ]; then
       storage_wake=$(printf '%s' "$storage" | sort | uniq -c \
         | awk '{n=$1; $1=""; sub(/^ /, ""); printf "%s%s (%s crew)", sep, $0, n; sep=", "}')
       storage_wake="local-copy storage not reachable: $storage_wake; those crews are judged again when it returns"
     fi
   fi
-  if [ "$total" -gt 0 ] || [ -n "$storage_wake" ]; then
+  # Crews whose bounded read failed or timed out are surfaced once per change
+  # in that set; outcome stays unknown and no recovery is proposed.
+  [ -z "$unread" ] || unread_sig=$(printf '%s' "$unread" | sort -u | tr '\n' ' ')
+  if [ -n "$unread_sig" ] && [ "$unread_sig" != "$(cat "$AUDIT_DIR/.incomplete" 2>/dev/null || true)" ]; then
+    unread_wake="audit evidence unconfirmed for $(printf '%s' "$unread" | grep -c .) crew (${unread_sig% }); bounded read failed or timed out, outcome unknown, no recovery inferred"
+  fi
+  if [ "$total" -gt 0 ] || [ -n "$storage_wake" ] || [ -n "$unread_wake" ]; then
     reason=
     if [ "$total" -gt 0 ]; then
       [ "$total" -le "$items" ] || wake="$wake; and $((total - items)) more"
       reason="$total crew need recovery by cause ($wake); run bin/fm-progress-audit.sh recover <id> for each"
     fi
     [ -z "$storage_wake" ] || reason="$reason${reason:+; }$storage_wake"
+    [ -z "$unread_wake" ] || reason="$reason${reason:+; }$unread_wake"
     reason="check: progress-audit: $reason, and account for the full roll-call"
     # Durable before the signatures move: a crash in between repeats the wake
     # next tick rather than losing it.
     fm_wake_append check progress-audit "$reason" || exit 1
   fi
-  if [ "$incomplete" -ne 0 ]; then
-    : # Unknown evidence cannot clear or replace confirmed storage state.
-  elif [ -n "$storage_sig" ]; then
+  if [ -n "$storage_sig" ]; then
     printf '%s\n' "$storage_sig" > "$AUDIT_DIR/.storage" || exit 1
   else
     rm -f "$AUDIT_DIR/.storage"
+  fi
+  if [ -n "$unread_sig" ]; then
+    printf '%s\n' "$unread_sig" > "$AUDIT_DIR/.incomplete" || exit 1
+  else
+    rm -f "$AUDIT_DIR/.incomplete"
   fi
   while IFS= read -r line; do
     [ -n "$line" ] || continue
