@@ -1649,6 +1649,7 @@ fm_worktree_recorded_branch_state() {  # <worktree> <branch> [<landed-ref>]
     FM_WORKTREE_BRANCH_STRANDED=$(printf '%s\n' "$stranded" | head -5)
     FM_WORKTREE_BRANCH_STATE=stranded
   else
+    # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
     FM_WORKTREE_BRANCH_STATE=moved
   fi
   return 0

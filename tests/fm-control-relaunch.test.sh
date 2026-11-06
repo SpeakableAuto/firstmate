@@ -1313,13 +1313,8 @@ test_spawn_relaunch_refuses_a_held_treehouse_project_lock() {
   printf 'zsh' > "$dir/fake/command"
   lock=$(FM_HOME="$dir/home" bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
     "$ROOT/bin/fm-wake-lib.sh" "$dir/proj")
-  (
-    FM_HOME="$dir/home"
-    export FM_HOME
-    . "$ROOT/bin/fm-wake-lib.sh"
-    fm_lock_try_acquire "$lock" || exit 1
-    sleep 30
-  ) &
+  FM_HOME="$dir/home" bash -c '. "$1"; fm_lock_try_acquire "$2" || exit 1; sleep 30' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$lock" &
   holder=$!
   while [ ! -e "$lock" ] && [ "$i" -lt 100 ]; do
     sleep 0.1
@@ -1345,13 +1340,8 @@ stage_treehouse_project_lock() {
   local dir=$1 lock i=0
   lock=$(FM_HOME="$dir/home" bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
     "$ROOT/bin/fm-wake-lib.sh" "$dir/proj")
-  (
-    FM_HOME="$dir/home"
-    export FM_HOME
-    . "$ROOT/bin/fm-wake-lib.sh"
-    fm_lock_try_acquire "$lock" || exit 1
-    /bin/sleep 30
-  ) >/dev/null 2>&1 &
+  FM_HOME="$dir/home" bash -c '. "$1"; fm_lock_try_acquire "$2" || exit 1; /bin/sleep 30' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$lock" >/dev/null 2>&1 &
   while [ ! -e "$lock/pid" ] && [ "$i" -lt 100 ]; do
     /bin/sleep 0.1
     i=$((i + 1))
