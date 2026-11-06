@@ -7228,6 +7228,17 @@ printf '%s\n' "$*" >> "$FM_TEST_GERRIT_LOG"
 printf '{"ok":true,"op":"show","changes":[{"change":%s,"status":"NEW","url":null,"revision":"%s"}]}\n' "${2:-0}" "$FM_TEST_GERRIT_REVISION"
 SH
   chmod +x "$fakebin/gerrit-axi"
+  # A hermetic no-mistakes: the reader looks one up for a ship branch whenever
+  # the command exists, and whether the host has one on PATH must not change
+  # the fixture. It logs its own pid, which is also the group fm_nm_bounded
+  # records for it (the perl child records itself, then execs this), so C3 can
+  # tell those legitimately published lookups from anything else.
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+printf '%s %s\n' "$$" "$*" >> "$FM_TEST_NM_LOG"
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
   printf 'idle at the prompt' > "$dir/pane.txt"
   printf 'window=test:fm-gdone\nkind=ship\nmode=direct-PR\nworktree=%s\nproject=fp\nbackend=tmux\nharness=grok\n' "$dir/wt" > "$state/gdone.meta"
   printf 'done: PR https://gerrit.example.test/c/fp/+/12 published for review\n' > "$state/gdone.status"
@@ -7238,12 +7249,12 @@ gerrit_reader() {
   local dir=$1
   PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
     FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_STATE_OVERRIDE="$dir/state" FM_TEST_GERRIT_LOG="$dir/gerrit.log" \
-    FM_TIMEOUT_MECHANISM_OVERRIDE="$2" FM_TEST_GERRIT_REVISION="$3" env ${4:+"FM_TIMEOUT_GROUP_RECORD=$4"} \
+    FM_TEST_NM_LOG="$dir/nm.log" FM_TIMEOUT_MECHANISM_OVERRIDE="$2" FM_TEST_GERRIT_REVISION="$3" env ${4:+"FM_TIMEOUT_GROUP_RECORD=$4"} \
     perl -e 'alarm 60; exec @ARGV' "$ROOT/bin/fm-crew-state.sh" gdone 2>"$dir/reader.err"
 }
 
 test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
-  local dir state fakebin out key since head line
+  local dir state fakebin out key since head line nm_before nm_c3 group
   dir=$(make_case crew-state-gerrit-bash); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
   gerrit_done_fixture "$dir"
   head=$(git -C "$dir/wt" rev-parse HEAD)
@@ -7261,12 +7272,22 @@ test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
   # C3: bash fallback with a group record, exactly as an owned read would run
   # it: the nested Gerrit read is refused before it starts (no call, no
   # record), and the reader turns that into an ordinary blocked verdict - the
-  # defect the entry guard exists for.
+  # defect the entry guard exists for. The reader's no-mistakes lookups run
+  # through fm_nm_bounded, which picks its own (perl) mechanism and so does
+  # publish their groups; those, and only those, may appear in the record.
+  nm_before=$(wc -l < "$dir/nm.log" 2>/dev/null | tr -d ' '); nm_before=${nm_before:-0}
   line=$(gerrit_reader "$dir" bash "$head" "$dir/c3.record")
   case "$line" in "state: blocked · source: status-log"*"could not be read"*) ;;
     *) fail "control C3: a refused nested Gerrit read did not surface as blocked: $line $(cat "$dir/reader.err")" ;; esac
   [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq 2 ] || fail "control C3: the refused nested read still reached Gerrit"
-  [ ! -s "$dir/c3.record" ] || fail "control C3: the refused nested read recorded a group"
+  nm_c3=$(sed -n "$((nm_before + 1)),\$p" "$dir/nm.log" 2>/dev/null)
+  [ -n "$nm_c3" ] || fail "control C3: fixture: the reader made no no-mistakes lookup"
+  [ "$(wc -l < "$dir/c3.record" | tr -d ' ')" -eq "$(printf '%s\n' "$nm_c3" | wc -l | tr -d ' ')" ] \
+    || fail "control C3: the record holds other than one group per no-mistakes lookup: $(cat "$dir/c3.record") / $nm_c3"
+  while read -r group; do
+    printf '%s\n' "$nm_c3" | grep -q "^$group " \
+      || fail "control C3: the refused nested read recorded a group ($group is not a no-mistakes lookup)"
+  done < "$dir/c3.record"
   # The watcher's owned read on the bash fallback: unknown, nothing changed.
   printf '%s' "$(seen_sig "$state/gdone.status")" > "$state/.seen-gdone_status"
   key=test_fm-gdone
@@ -7278,7 +7299,7 @@ test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
   date +%s > "$state/.crew-state-unavailable"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
     FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$ROOT/bin/fm-crew-state.sh" \
-    FM_TEST_GERRIT_LOG="$dir/gerrit.log" FM_TEST_GERRIT_REVISION="$head" \
+    FM_TEST_GERRIT_LOG="$dir/gerrit.log" FM_TEST_GERRIT_REVISION="$head" FM_TEST_NM_LOG="$dir/nm.log" \
     FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_CREW_STATE_READ_SECS=5 "$WATCH" > "$out" &
   HUNG_PID=$!
