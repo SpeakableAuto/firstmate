@@ -1,0 +1,19 @@
+== base 2ce85dce (hung git on PATH, alarm 90s) ==
+[base account] rc=142 wall=376s hung-git-started=4
+   out: hung · stalled · no-progress · progress=status@66m · attempts=0/2 · next=steer
+   sentinel KILLED
+   hung git still alive after return: 0
+run:kill:15: kill 41325 failed: no such process
+[base tick] rc=0 wall=0s hung-git-started=0
+   out: 
+   pre-existing sentinel alive
+   hung git still alive after return: 0
+== target 0f39f297 ==
+[target account] rc=0 wall=11s hung-git-started=1
+   out: hung · waiting · audit incomplete: evidence unavailable (unconfirmed) · progress=status@66m · attempts=0/2 · next=-
+   pre-existing sentinel alive
+   hung git still alive after return: 0
+[target tick] rc=0 wall=0s hung-git-started=0
+   out: 
+   pre-existing sentinel alive
+   hung git still alive after return: 0

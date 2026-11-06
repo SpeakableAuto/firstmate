@@ -1,0 +1,26 @@
+ok - account places every record in exactly one bucket with its cause or reason
+ok - pushes, commits and a fresh start keep a crew live only inside the window
+ok - a stalled crew is steered, then relaunched, then escalated exactly once
+ok - progress landed after recovery resets the allowance
+ok - status lines alone never reset the two-attempt allowance
+ok - a failed action counts as an attempt and leaves the next one due at once
+ok - recover refuses unknown ids and leaves waiting crews alone
+ok - a dead agent with an active validation run waits for the run
+ok - a record abandoned past the long-idle bound goes to hand reconciliation
+ok - missing storage is a wait, not a mass escalation
+ok - tick surfaces a new stall once, durably, on its own cadence
+ok - tick follows the two attempts, surfaces one escalation, then goes quiet
+ok - tick names unreachable storage once, as one fleet-level finding
+ok - configuration outside its bounds is refused
+ok - the real watcher poll runs the progress tick and wakes on a silent crew
+ok - stalled audit-owned Git is bounded, watcher continues, signatures and unrelated jobs survive
+ok - a healthy subsequent tick resumes normal monitoring after timeout
+ok - account and recover preserve partial evidence and refuse actions on both timeout mechanisms
+ok - unreaped audit runner returns promptly, suppresses duplicates, and resumes after safe reap
+ok - whole synchronous tick has an independent wall-clock bound and preserves unrelated jobs
+ok - every supported backend preserves a failed current-state read as unknown without lifecycle actions
+ok - unverified and ambiguous endpoints keep their stall judgement
+ok - incomplete evidence adds confirmed storage roots, keeps prior ones, and is surfaced once
+ok - a held tick wakes firstmate once per window without killing its recorded process
+ok - a held nested crew runner never suppresses later audits of other crews
+ok - an unknown run-step outcome keeps its stall judgement

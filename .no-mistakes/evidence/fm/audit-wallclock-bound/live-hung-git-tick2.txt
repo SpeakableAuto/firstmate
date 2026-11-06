@@ -1,0 +1,17 @@
+== base 2ce85dce tick (hung git, 60s alarm) ==
+[base tick] rc=142 wall=121s hung-git-started=1
+   out: 
+   pre-existing sentinel alive
+   hung git still alive after return: 0
+   stored signature: prior-sig
+   audit state: hung 
+   no recovery attempted
+== target 0f39f297 tick ==
+[target tick] rc=0 wall=11s hung-git-started=1
+   out: wake: check: progress-audit: audit evidence unconfirmed for 1 crew (hung); bounded read failed or timed out, outcome unknown, no recovery inferred, and account for the full roll-call
+   out: incomplete: audit evidence unconfirmed; previous signatures retained
+   pre-existing sentinel alive
+   hung git still alive after return: 0
+   stored signature: prior-sig
+   audit state: hung 
+   no recovery attempted
