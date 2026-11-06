@@ -36,7 +36,7 @@ fm_progress_audit_group_gone() {
 }
 
 fm_progress_audit_run() {
-  local state=$1 slot=$2 seconds=$3 dir owner runner current rc=124 deadline
+  local state=$1 slot=$2 seconds=$3 dir owner runner current rc=124 deadline monitor
   shift 3
   case "$slot" in ''|*[!A-Za-z0-9._-]*) return 2 ;; esac
   case "$seconds" in ''|0*|*[!0-9]*) return 2 ;; esac
@@ -69,6 +69,9 @@ fm_progress_audit_run() {
   owner=$current
   printf '%s\n' "$owner" > "$dir/owner" || return 1
   deadline=$((SECONDS + seconds + 2))
+  # The runner leads its own group, so a nested slot's runner never keeps an
+  # enclosing slot's recorded group alive.
+  case $- in *m*) monitor=1 ;; *) monitor=0; set -m ;; esac
   (
     # The group is recorded from INSIDE the new timeout-owned command, before
     # any evidence read. It is never a worker, watcher, or inherited group.
@@ -85,6 +88,7 @@ fm_progress_audit_run() {
     mv "$dir/result.tmp" "$dir/result"
   ) </dev/null > "$dir/stdout" 2> "$dir/stderr" &
   runner=$!
+  [ "$monitor" -eq 1 ] || set +m
   printf '%s\n' "$runner" > "$dir/runner"
   while [ ! -f "$dir/result" ] && [ "$SECONDS" -lt "$deadline" ]; do
     sleep 0.1

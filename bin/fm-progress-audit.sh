@@ -482,9 +482,6 @@ classify_read() {
         return 0
       fi
       case "$cs" in
-        "state: unknown · source: run-step"*)
-          BUCKET=waiting REASON="audit incomplete: validation state unconfirmed" UNCONFIRMED=1
-          return 0 ;;
         "state: working · source: run-step"*|"state: parked · source: run-step"*)
           BUCKET=waiting
           REASON="validation run: $(one_line "${cs#state: }" 100)"

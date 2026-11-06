@@ -662,3 +662,64 @@ assert_not_contains "$(cat "$T/held2.out")" "tick incomplete" "a persisting inco
 kill -0 "$SENTINEL_PID" 2>/dev/null || fail "a held tick's recorded process was signalled"
 assert_present "$STATE/.progress-audit/.owned-tick/owner" "the held tick's ownership record is kept"
 pass "a held tick wakes firstmate once per window without killing its recorded process"
+
+# A nested crew runner that its timeout primitive cannot reap yet (as with
+# GNU/BSD timeout waiting on a kernel-stuck read) holds only its own crew's
+# slot: the tick slot is released and the next tick still audits other crews.
+NEST_HOME="$T/nested-home"
+mkdir -p "$NEST_HOME"/{state,data} "$T/nest-bin"
+STATE="$NEST_HOME/state"
+REAL_GIT=$(command -v git)
+cat > "$T/nest-bin/git" <<SH
+#!/usr/bin/env bash
+if [ -f "$T/nest-stall" ]; then
+  printf '%s\n' "\$\$" > "$T/nest-git.pid"
+  rm -f "$T/nest-stall"
+  sleep 12
+  exit 1
+fi
+exec "$REAL_GIT" "\$@"
+SH
+chmod +x "$T/nest-bin/git"
+crew a-stuck
+crew b-silent
+mkdir -p "$STATE/.progress-audit"
+nested_tick() {
+  PATH="$T/nest-bin:$T/deferred-bin:$PATH" FM_TIMEOUT_MECHANISM_OVERRIDE=timeout \
+    FM_HOME="$NEST_HOME" FM_TEST_STUBS="$STUBS" FM_PROGRESS_AUDIT_BUDGET_SECS=4 \
+    FM_PROGRESS_AUDIT_NOW="$((REAL_NOW + WINDOW + 600))" \
+    FM_PROGRESS_AGENT_STATE_BIN="$STUBS/agent-state" \
+    FM_PROGRESS_CREW_STATE_BIN="$STUBS/crew-state" "$AUDIT" tick
+}
+fm_touch_epoch "$((REAL_NOW - 700))" "$STATE/.progress-audit/.last-tick"
+: > "$T/nest-stall"
+rc=0; OUT=$(nested_tick) || rc=$?
+assert_present "$T/nest-git.pid" "the unreaped nested Git must actually start"
+expect_code 0 "$rc" "a held nested crew runner must not hold the tick"
+assert_contains "$OUT" "audit evidence unconfirmed for 1 crew (a-stuck)" "the held crew is unknown, not missing or done"
+assert_absent "$STATE/.progress-audit/.owned-tick" "the tick slot is released"
+assert_present "$STATE/.progress-audit/.owned-task-a-stuck" "the held crew keeps its own duplicate-suppressing slot"
+fm_touch_epoch "$((REAL_NOW - 700))" "$STATE/.progress-audit/.last-tick"
+rc=0; OUT=$(nested_tick) || rc=$?
+expect_code 0 "$rc" "the next tick runs while the nested runner is still held"
+assert_contains "$OUT" "b-silent stalled no-progress" "other crews are still audited and their stall alert surfaces"
+assert_not_contains "$OUT" "a-stuck stalled" "the held crew is never judged from unknown evidence"
+kill -0 "$(cat "$T/nest-git.pid")" 2>/dev/null || fail "the held nested read was signalled"
+kill -0 "$SENTINEL_PID" 2>/dev/null || fail "nested runner handling signalled the pre-existing sentinel"
+kill "$(cat "$T/nest-git.pid")" 2>/dev/null || true
+pass "a held nested crew runner never suppresses later audits of other crews"
+
+# A cancelled or otherwise unknown validation run is a confirmed outcome, not a
+# read timeout: a crew past its window still stalls by cause.
+STATE="$T/runstep-state"
+mkdir -p "$STATE"
+crew runstep-cancelled
+echo "state: unknown · source: run-step · cancelled -> unknown" > "$STUBS/cs-runstep-cancelled"
+OUT=$(FM_HOME="$T" FM_STATE_OVERRIDE="$STATE" FM_TEST_STUBS="$STUBS" \
+  FM_PROGRESS_AUDIT_NOW="$((REAL_NOW + WINDOW + 600))" \
+  FM_PROGRESS_AGENT_STATE_BIN="$STUBS/agent-state" \
+  FM_PROGRESS_CREW_STATE_BIN="$STUBS/crew-state" \
+  "$AUDIT" account runstep-cancelled) || fail "account for a cancelled run failed"
+assert_contains "$OUT" "runstep-cancelled · stalled · no-progress" "a cancelled validation run keeps the stall judgement"
+assert_not_contains "$OUT" "unconfirmed" "a cancelled run is not incomplete evidence"
+pass "an unknown run-step outcome keeps its stall judgement"
