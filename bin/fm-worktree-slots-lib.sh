@@ -49,6 +49,10 @@ if ! command -v fm_meta_get >/dev/null 2>&1; then
   # shellcheck source=bin/fm-backend.sh
   . "${BASH_SOURCE[0]%/*}/fm-backend.sh"
 fi
+if ! command -v fm_run_timed >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-timeout-lib.sh
+  . "${BASH_SOURCE[0]%/*}/fm-timeout-lib.sh"
+fi
 if ! command -v secondmate_registry_parse_line >/dev/null 2>&1; then
   # shellcheck source=bin/fm-secondmate-registry-lib.sh
   . "${BASH_SOURCE[0]%/*}/fm-secondmate-registry-lib.sh"
@@ -57,6 +61,7 @@ fi
 FM_WORKTREE_SLOT_CAP_FILE="worktree-slot-cap"
 FM_WORKTREE_SLOT_CAP=
 FM_WORKTREE_SLOTS_ERROR=
+FM_WORKTREE_SLOTS_LIB="${BASH_SOURCE[0]}"
 
 fm_worktree_slots_canonical_dir() {  # <dir>
   [ -n "$1" ] && [ -d "$1" ] || return 1
@@ -347,7 +352,87 @@ fm_worktree_slot_reclaimable() {  # <index> <record-state>
 # Returns 0 for room (allow) and 1 for no room (refuse); a malformed cap or an
 # unreadable pool refuses, because an unproved bound is not room.
 # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+# The room check reads Git registrations, pool state and slot directories, which
+# live on the machine drive; a stalled drive holds those reads in the kernel
+# with no timeout. With a cap configured, the read runs in a child bounded by
+# FM_WORKTREE_SLOTS_READ_SECS (default 10) through fm_run_timed, and its
+# results return through a file, never the caller's output, so a child the
+# bound cannot kill leaves no capture waiting. On the bound the check refuses
+# with FM_WORKTREE_SLOT_ROOM_TIMED_OUT=1 and no reclaim candidates. A timed-out
+# read marks the attempt's FM_PLACEMENT_ATTEMPT_MEMO (bin/fm-placement.py owns
+# it), and a read in an attempt already marked refuses without waiting.
+fm_worktree_slots_stalled() {  # <what>; refuse at once when this attempt saw a stall
+  [ -n "${FM_PLACEMENT_ATTEMPT_MEMO:-}" ] && [ -e "$FM_PLACEMENT_ATTEMPT_MEMO" ] || return 1
+  FM_WORKTREE_SLOT_ROOM_TIMED_OUT=1
+  FM_WORKTREE_SLOT_ROOM_REASON="worktree slot $1 skipped: the drive did not answer an earlier check in this attempt (required machine drive unavailable)"
+}
+
+fm_worktree_slots_mark_stalled() {
+  [ -z "${FM_PLACEMENT_ATTEMPT_MEMO:-}" ] || : >> "$FM_PLACEMENT_ATTEMPT_MEMO" 2>/dev/null || true
+}
+
 fm_worktree_slot_room() {  # <config-dir> <projects-dir> <project-dir> <record-state>
+  local secs=${FM_WORKTREE_SLOTS_READ_SECS:-10} out rc=0 name
+  FM_WORKTREE_SLOT_ROOM_TIMED_OUT=0
+  FM_WORKTREE_SLOT_ROOM_REASON=
+  FM_WORKTREE_SLOT_HELD=0
+  FM_WORKTREE_SLOT_RECLAIMABLE=0
+  if ! fm_worktree_slot_cap_read "$1"; then
+    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap unreadable: $FM_WORKTREE_SLOTS_ERROR"
+    return 1
+  fi
+  if [ -z "$FM_WORKTREE_SLOT_CAP" ]; then
+    FM_WORKTREE_SLOT_ROOM_REASON="no worktree slot cap configured"
+    return 0
+  fi
+  ! fm_worktree_slots_stalled 'room' || return 1
+  case "$secs" in ''|0*|*[!0-9]*) secs=10 ;; esac
+  out=$(mktemp "${TMPDIR:-/tmp}/fm-slot-room.XXXXXX") || {
+    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: no scratch file for the bounded room read"
+    return 1
+  }
+  # shellcheck disable=SC2016 # expanded by the child shell
+  fm_run_timed "$secs" bash -c '
+    lib=$1 out=$2
+    shift 2
+    . "$lib" || exit 2
+    rc=0
+    fm_worktree_slot_room_read "$@" || rc=$?
+    {
+      for name in FM_WORKTREE_SLOT_CAP FM_WORKTREE_SLOT_HELD FM_WORKTREE_SLOT_RECLAIMABLE \
+          FM_WORKTREE_SLOT_ROOM_REASON FM_WORKTREE_SLOT_POOLS FM_WORKTREE_SLOTS_ERROR; do
+        printf "%s=%q\n" "$name" "${!name}"
+      done
+      for name in FM_WORKTREE_SLOT_PATHS FM_WORKTREE_SLOT_STATUSES FM_WORKTREE_SLOT_PROJECTS; do
+        eval "set -- \${${name}[@]+\"\${${name}[@]}\"}"
+        printf "%s=(" "$name"
+        [ "$#" -eq 0 ] || printf " %q" "$@"
+        printf " )\n"
+      done
+      printf "FM_WORKTREE_SLOT_ROOM_RC=%s\n" "$rc"
+    } > "$out" || exit 2
+    exit "$rc"' bash "$FM_WORKTREE_SLOTS_LIB" "$out" "$@" </dev/null >/dev/null 2>&1 || rc=$?
+  if fm_timed_out "$rc"; then
+    rm -f "$out"
+    fm_worktree_slots_mark_stalled
+    FM_WORKTREE_SLOT_ROOM_TIMED_OUT=1
+    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: room unavailable, the pool read did not finish within ${secs}s (required machine drive unavailable or pool unreadable)"
+    return 1
+  fi
+  FM_WORKTREE_SLOT_ROOM_RC=
+  # The child wrote only %q-quoted assignments to this file it was given.
+  # shellcheck disable=SC1090
+  [ -s "$out" ] && . "$out"
+  rm -f "$out"
+  name=$FM_WORKTREE_SLOT_ROOM_RC
+  case "$name" in
+    0|1) return "$name" ;;
+  esac
+  FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP: room check failed (exit $rc)"
+  return 1
+}
+
+fm_worktree_slot_room_read() {  # <config-dir> <projects-dir> <project-dir> <record-state>
   local config=$1 projects=$2 project=$3 record_state=$4 i rc pools
   FM_WORKTREE_SLOT_ROOM_REASON=
   FM_WORKTREE_SLOT_HELD=0
@@ -389,6 +474,7 @@ fm_worktree_slot_room() {  # <config-dir> <projects-dir> <project-dir> <record-s
     esac
   done
   pools=$(printf '%s' "$FM_WORKTREE_SLOT_POOLS" | awk -F'\t' 'NF == 2 { n = split($1, p, "/"); printf "%s%s %s", (c++ ? ", " : ""), p[n], $2 }')
+  # shellcheck disable=SC2034 # Output global, written back by the bounded wrapper.
   FM_WORKTREE_SLOT_ROOM_REASON="worktree slot cap $FM_WORKTREE_SLOT_CAP reached: $FM_WORKTREE_SLOT_HELD slots held (pools: $pools); $FM_WORKTREE_SLOT_RECLAIMABLE possible reclaim candidates (Treehouse merge proof still required)"
   return 1
 }
@@ -482,6 +568,40 @@ fm_worktree_slot_remove_returned() {  # <project-dir> <slot> <record-state> <own
 # Prints one line per slot considered:
 #   reclaimed: <slot> | candidate (...): <slot> | kept: <slot>: <why>
 # and sets FM_WORKTREE_SLOT_RECLAIMED to the count removed (or previewed).
+# Spawn's at-cap reclaim reads and removes slots on the machine drive, so it
+# runs in a child under the same FM_WORKTREE_SLOTS_READ_SECS bound, rescanning
+# there; its report comes back through a file. On the bound, or in an attempt
+# that already saw the drive stall, it sets FM_WORKTREE_SLOT_ROOM_TIMED_OUT=1
+# with a refusal reason and returns 124, and the caller refuses without
+# recounting. Removal still goes only through Treehouse's safe destroy under
+# the slot's project lock, so a stopped reclaim leaves at most a partly
+# removed slot Treehouse had already judged disposable.
+fm_worktree_slots_reclaim_bounded() {  # <projects-dir> <project-dir> <record-state> <held-lock> <limit>
+  local secs=${FM_WORKTREE_SLOTS_READ_SECS:-10} out rc=0
+  FM_WORKTREE_SLOT_ROOM_TIMED_OUT=0
+  ! fm_worktree_slots_stalled 'reclaim' || return 124
+  case "$secs" in ''|0*|*[!0-9]*) secs=10 ;; esac
+  out=$(mktemp "${TMPDIR:-/tmp}/fm-slot-reclaim.XXXXXX") || return 1
+  # shellcheck disable=SC2016 # expanded by the child shell
+  fm_run_timed "$secs" bash -c '
+    lib=$1 projects=$2 project=$3 record_state=$4 held=$5 limit=$6
+    . "$lib" || exit 2
+    fm_worktree_slots_scan "$projects" "$project" || exit 2
+    fm_worktree_slots_reclaim "$record_state" "$held" apply "$limit"' \
+    bash "$FM_WORKTREE_SLOTS_LIB" "$@" </dev/null >"$out" 2>&1 || rc=$?
+  cat "$out"
+  rm -f "$out"
+  if fm_timed_out "$rc"; then
+    fm_worktree_slots_mark_stalled
+    # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+    FM_WORKTREE_SLOT_ROOM_TIMED_OUT=1
+    # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+    FM_WORKTREE_SLOT_ROOM_REASON="worktree slot reclaim did not finish within ${secs}s (required machine drive unavailable or pool unreadable)"
+    return 124
+  fi
+  return "$rc"
+}
+
 fm_worktree_slots_reclaim() {  # <record-state> <held-lock> <apply|dry-run> <limit>
   local record_state=$1 held=$2 mode=$3 limit=$4 i rc lock slot project took
   FM_WORKTREE_SLOT_RECLAIMED=0

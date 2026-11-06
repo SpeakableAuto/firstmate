@@ -381,6 +381,13 @@ WORK=$(mktemp -d) || die "mktemp failed"
 QUOTA="$WORK/quota.json"
 SEND_TEXT="$WORK/send-text"
 trap 'rm -rf "$RULES" "$WORK"' EXIT
+# One resolve is one placement attempt unless a live spawn attempt called it:
+# a machine drive that stalls one check refuses the rest at once.
+case "${FM_PLACEMENT_ATTEMPT_MEMO:-}" in
+  */drive-stalled) [ -d "${FM_PLACEMENT_ATTEMPT_MEMO%/*}" ] || FM_PLACEMENT_ATTEMPT_MEMO="$WORK/drive-stalled" ;;
+  *) FM_PLACEMENT_ATTEMPT_MEMO="$WORK/drive-stalled" ;;
+esac
+export FM_PLACEMENT_ATTEMPT_MEMO
 
 [ "$RULE_COUNT" -gt 0 ] || no_rules
 

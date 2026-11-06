@@ -511,6 +511,9 @@ It includes every entry in a discovered pool, including reservations; a pool wit
 A new spawn conservatively requires room for one additional slot, even when Treehouse might reuse one.
 The [slot-safety lease retry](architecture.md#delivery-modes-are-explicit-per-task) runs after that admission check, so retaining a legacy slot still named by another task can raise the count above the cap until that task's teardown returns it.
 At capacity, spawn attempts safe reclamation and recounts; if room cannot be proved, it refuses with the cap and pool counts.
+The count reads pool state on the machine drive in a child bounded by `FM_WORKTREE_SLOTS_READ_SECS` seconds, default 10; a read that does not finish refuses with `room unavailable` and names the drive, and spawn neither reclaims nor recounts after it.
+Spawn's reclamation runs in a child under the same bound and, on it, refuses without recounting; it removes only through Treehouse's safe destroy under the project lock, so a stopped reclaim can leave at most a partly removed slot Treehouse had already judged disposable.
+Both share the placement attempt's stalled-drive mark described under crew placement.
 External Treehouse users and independently configured homes are outside this home's admission lock and can consume shared pools, so this is an admission bound rather than a machine-wide storage quota.
 
 With this setting enabled, teardown also attempts to remove the returned slot after it proves the task's PR merge, or after the existing scout completion gate passes.
@@ -1452,6 +1455,7 @@ A Treehouse root that fails only because its drive is unavailable is still named
 Placement makes every drive and data-volume read (mount, directory, write-probe, free-space and Treehouse root checks) in a child process with a deadline of `FM_PLACEMENT_DRIVE_SECS` seconds, default 10.
 A drive that does not answer in time refuses with `required machine drive unavailable` and a data volume with `machine disk measurement unavailable`, so spawn and the dispatch resolver move on instead of waiting.
 The timed-out reader is killed and reaped for at most one second, then abandoned, because a read stuck in the kernel may not die on a signal; it holds none of the caller's output, so the command still returns.
+Within one spawn, or one resolver run not started by a spawn, the first read that times out marks that attempt, and every later drive check in it refuses at once instead of waiting again; the mark is removed when the attempt ends, so the next attempt checks the drive afresh.
 
 Drive profiles require a repository-local, non-symlinked `treehouse.toml` with an absolute literal top-level `root` naming an existing real directory under the drive.
 Quoted string values and ordinary top-level assignments are supported; complex root syntax, multiline assignments and custom `worktree_path` layouts are refused.

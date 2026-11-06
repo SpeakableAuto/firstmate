@@ -732,6 +732,7 @@ spawn_env = dict(inherited, **stall, FM_ROOT_OVERRIDE='', FM_HOME=home, HOME=hom
                  PATH=fakebin + ':' + os.environ['PATH'])
 os.makedirs(home + '/user-home', exist_ok=True)
 log = base / 'stalled.log'
+started_at = time.time() - 1
 
 
 def spawn(name, env):
@@ -763,8 +764,8 @@ if got:
         failures.append('stalled spawn did not refuse the drive by name')
     if elapsed > 30:
         failures.append(f'stalled spawn took {elapsed:.2f}s')
-    if not readers:
-        failures.append('stalled spawn never reached the stalled drive read')
+    if len(readers) != 1:
+        failures.append(f'stalled spawn waited on the drive {len(readers)} times, not once: {readers}')
     for reader in readers:
         try:
             os.kill(reader, 0)
@@ -785,6 +786,57 @@ if got:
         failures.append('stalled spawn published worker metadata')
     if Path(home, 'state', '.placement-admission.lock').exists():
         failures.append('stalled spawn kept the admission lock')
+# With a worktree slot cap, spawn also reads the pool's Git registrations
+# before placement; a git that blocks `worktree list` stands in for that read.
+shim = base / 'git-shim'
+shim.mkdir(exist_ok=True)
+real_git = subprocess.run(['/bin/sh', '-c', 'command -v git'], capture_output=True, text=True).stdout.strip()
+(shim / 'git').write_text('#!/usr/bin/env bash\ncase " $* " in *" worktree list "*)\n'
+                          '  printf "%s git\\n" "$$" >> "$FM_TEST_STALL_LOG"\n  exec 3< "$FM_TEST_STALL_FIFO" ;;\nesac\n'
+                          'exec ' + real_git + ' "$@"\n')
+(shim / 'git').chmod(0o755)
+Path(home, 'config', 'worktree-slot-cap').write_text('2\n')
+got = spawn('stalled spawn with a slot cap', dict(spawn_env, PATH=str(shim) + ':' + spawn_env['PATH'],
+                                                  FM_WORKTREE_SLOTS_READ_SECS='2'))
+Path(home, 'config', 'worktree-slot-cap').unlink()
+if got:
+    rc, out, elapsed, readers, decision = got
+    print(f'stalled spawn with a slot cap: blocked log: {log.read_text().split() if log.exists() else []}')
+    if rc != 1 or 'worktree slot room skipped' not in out or 'required machine drive unavailable' not in out:
+        failures.append('stalled spawn with a slot cap did not refuse room and drive by name')
+    if 'slots' not in decision['failed'] or 'drive' not in decision['failed']:
+        failures.append('stalled spawn with a slot cap did not record slots and drive: ' + ','.join(decision['failed']))
+    if log.read_text().splitlines() != [f'{readers[0]} git'] if readers else True:
+        failures.append('stalled spawn with a slot cap did not wait exactly once, on the pool read')
+    if elapsed > 30:
+        failures.append(f'stalled spawn with a slot cap took {elapsed:.2f}s')
+# The whole command at the default deadlines: one 10-second wait per attempt.
+defaults = {k: v for k, v in spawn_env.items() if k not in ('FM_PLACEMENT_DRIVE_SECS', 'FM_WORKTREE_SLOTS_READ_SECS')}
+for name, env, cap in [('stalled spawn, default deadline', defaults, False),
+                       ('stalled spawn with a slot cap, default deadline',
+                        dict(defaults, PATH=str(shim) + ':' + defaults['PATH']), True)]:
+    if cap:
+        Path(home, 'config', 'worktree-slot-cap').write_text('2\n')
+    got = spawn(name, env)
+    if cap:
+        Path(home, 'config', 'worktree-slot-cap').unlink()
+    if got:
+        rc, out, elapsed, readers, decision = got
+        if rc != 1 or 'required machine drive unavailable' not in out or len(readers) != 1:
+            failures.append(f'{name}: did not refuse after exactly one drive wait: {readers}')
+        if not 9.5 < elapsed < 20:
+            failures.append(f'{name}: took {elapsed:.2f}s, not one ten-second wait')
+# The next attempt on an answering drive is not refused by the earlier stall.
+got = spawn('healthy spawn after the stall', dict(spawn_env, FM_TEST_STALL_PREFIX=str(base / 'not-the-drive')))
+if got:
+    checks = got[4]['checks']
+    for key in ('fit', 'quota', 'drive', 'data-disk'):
+        if checks[key]['status'] != 'pass':
+            failures.append(f'healthy spawn after the stall failed {key}: {json.dumps(checks[key])}')
+leftover = sorted(p.name for p in Path(os.environ.get('TMPDIR', '/tmp')).glob('fm-placement-attempt.*')
+                  if p.stat().st_mtime >= started_at)
+if leftover:
+    failures.append(f'spawn attempts left their notes behind: {leftover}')
 got = run('stalled resolver machine evidence',
           ['bash', '-c', 'SCRIPT_DIR=$1/bin; . "$SCRIPT_DIR/fm-backend.sh"; . "$SCRIPT_DIR/fm-live-workers-lib.sh"; . "$SCRIPT_DIR/fm-quota-balance-lib.sh"; fm_quota_balance_machine_state "$2" "$3"',
            'bash', root, home + '/config', home + '/state'], spawn_env)

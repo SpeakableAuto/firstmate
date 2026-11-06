@@ -26,6 +26,9 @@ urgent-live counts the named live tasks it marks, from backlog JSON on stdin.
 pool, assess and worktree read the machine drive and data volume only in a
 child process (see bounded() below); FM_PLACEMENT_DRIVE_SECS (default 10) is
 that read's deadline, after which placement refuses the drive and moves on.
+FM_PLACEMENT_ATTEMPT_MEMO names one attempt's note (fm-spawn.sh and
+fm-dispatch-resolve.sh set it): once a read times out, later reads in the same
+attempt refuse at once instead of waiting their own deadline.
 """
 
 import fcntl
@@ -130,6 +133,9 @@ def bounded(probe, *args):
     unkillable child is abandoned: it holds no descriptor of this process's
     caller, so a command substitution around this command still returns.
     """
+    memo = os.environ.get("FM_PLACEMENT_ATTEMPT_MEMO", "")
+    if memo and os.path.exists(memo):
+        raise Stalled("skipped: the drive did not answer an earlier check in this attempt")
     deadline = drive_seconds()
     child = subprocess.Popen([sys.executable, os.path.abspath(__file__), "probe", probe],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -148,6 +154,11 @@ def bounded(probe, *args):
         for stream in (child.stdin, child.stdout):
             try:
                 stream.close()
+            except OSError:
+                pass
+        if memo:
+            try:
+                open(memo, "a").close()
             except OSError:
                 pass
         raise Stalled(f"did not finish within {deadline:g}s") from None

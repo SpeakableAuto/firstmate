@@ -162,3 +162,97 @@ fm_worktree_slot_remove_returned "$PROJECT" "$SLOT" "$FM_HOME/state" "$FM_HOME/s
 [ ! -d "$SLOT" ] || fail 'returned slot remains'
 [ -f "$FM_HOME/state/.capacity-freed" ] || fail 'merge-proved slot removal did not signal capacity'
 pass 'merge-proved returned slot removal signals automatic capacity recheck'
+
+# A stalled pool read refuses room within its bound instead of waiting forever.
+# The fixture's git blocks `worktree list` in a real kernel wait (opening a
+# FIFO that never gets a writer); it does not reproduce a stalled disk's I/O.
+make_case stalled
+printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
+mkfifo "$CASE/never-written"
+SLOT_TEST_REAL_GIT=$(PATH=$ORIGINAL_PATH command -v git)
+export SLOT_TEST_REAL_GIT SLOT_TEST_STALL_LOG="$CASE/stall.log" SLOT_TEST_STALL_FIFO="$CASE/never-written"
+cat > "$CASE/bin/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" worktree list "*)
+    printf '%s\n' "$$" >> "$SLOT_TEST_STALL_LOG"
+    exec 3< "$SLOT_TEST_STALL_FIFO" ;;
+esac
+exec "$SLOT_TEST_REAL_GIT" "$@"
+EOF
+chmod +x "$CASE/bin/git"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$ROOT/bin/fm-timeout-lib.sh"
+started=$(date +%s)
+# The outer bound only keeps a regression from hanging this suite.
+out=$(FM_WORKTREE_SLOTS_READ_SECS=2 fm_run_timed 30 "$ROOT/bin/fm-worktree-slots.sh" room "$PROJECT" 2>&1) && rc=0 || rc=$?
+elapsed=$(( $(date +%s) - started ))
+printf 'stalled room CLI: exit=%s elapsed=%ss output=%s\n' "$rc" "$elapsed" "$out"
+[ "$rc" = 1 ] || fail "stalled room CLI did not refuse (exit $rc after ${elapsed}s)"
+assert_contains "$out" 'refuse: worktree slot cap 1: room unavailable, the pool read did not finish within 2s' 'stalled room names its bound'
+assert_contains "$out" 'required machine drive unavailable' 'stalled room names the drive refusal'
+[ "$elapsed" -le 8 ] || fail "stalled room CLI took ${elapsed}s"
+[ -s "$SLOT_TEST_STALL_LOG" ] || fail 'stalled room never reached the blocked pool read'
+sleep 1
+while IFS= read -r reader; do
+  if kill -0 "$reader" 2>/dev/null; then fail "stalled room left blocked reader $reader running"; fi
+done < "$SLOT_TEST_STALL_LOG"
+: > "$SLOT_TEST_STALL_LOG"
+started=$(date +%s)
+if FM_WORKTREE_SLOTS_READ_SECS=2 room; then fail 'stalled room allowed in-process'; fi
+elapsed=$(( $(date +%s) - started ))
+printf 'stalled room in-process: elapsed=%ss timed_out=%s reclaimable=%s\n' "$elapsed" "$FM_WORKTREE_SLOT_ROOM_TIMED_OUT" "$FM_WORKTREE_SLOT_RECLAIMABLE"
+assert_equals '1:0' "$FM_WORKTREE_SLOT_ROOM_TIMED_OUT:$FM_WORKTREE_SLOT_RECLAIMABLE" 'stalled room marks the bound and offers no reclaim'
+[ "$elapsed" -le 8 ] || fail "stalled room in-process took ${elapsed}s"
+[ -s "$SLOT_TEST_STALL_LOG" ] || fail 'in-process stalled room never reached the blocked pool read'
+rm "$CASE/bin/git"
+printf '2\n' > "$FM_HOME/config/worktree-slot-cap"
+room || fail "healthy room after the stall: $FM_WORKTREE_SLOT_ROOM_REASON"
+assert_equals '0:1' "$FM_WORKTREE_SLOT_ROOM_TIMED_OUT:$FM_WORKTREE_SLOT_HELD" 'healthy room after the stall counts through the bounded read'
+pass 'a stalled pool read refuses room within its bound, CLI and in-process'
+
+# A reclaim that stalls on the drive stops at its bound and leaves the slot.
+make_case stalled-reclaim
+printf '1\n' > "$FM_HOME/config/worktree-slot-cap"
+mkfifo "$CASE/never-written"
+export SLOT_TEST_STALL_LOG="$CASE/stall.log" SLOT_TEST_STALL_FIFO="$CASE/never-written"
+cat > "$CASE/bin/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" status --porcelain "*)
+    if [ -n "${SLOT_TEST_STALL_STATUS:-}" ]; then
+      printf '%s\n' "$$" >> "$SLOT_TEST_STALL_LOG"
+      exec 3< "$SLOT_TEST_STALL_FIFO"
+    fi ;;
+esac
+exec "$SLOT_TEST_REAL_GIT" "$@"
+EOF
+chmod +x "$CASE/bin/git"
+if room; then fail 'stalled reclaim fixture: room unexpectedly allowed'; fi
+assert_equals '0:1' "$FM_WORKTREE_SLOT_ROOM_TIMED_OUT:$FM_WORKTREE_SLOT_RECLAIMABLE" 'stalled reclaim fixture starts with one candidate'
+started=$(date +%s)
+# shellcheck disable=SC2016 # expanded by the bounded child
+out=$(SLOT_TEST_STALL_STATUS=1 FM_WORKTREE_SLOTS_READ_SECS=2 fm_run_timed 30 bash -c '
+  . "$1/bin/fm-worktree-slots-lib.sh"
+  rc=0
+  fm_worktree_slots_reclaim_bounded "$FM_HOME/projects" "$2" "$FM_HOME/state" "" 1 || rc=$?
+  printf "rc=%s timed_out=%s reason=%s\n" "$rc" "$FM_WORKTREE_SLOT_ROOM_TIMED_OUT" "$FM_WORKTREE_SLOT_ROOM_REASON"' bash "$ROOT" "$PROJECT" 2>&1) && rc=0 || rc=$?
+elapsed=$(( $(date +%s) - started ))
+printf 'stalled reclaim: exit=%s elapsed=%ss output=%s\n' "$rc" "$elapsed" "$out"
+[ "$rc" = 0 ] || fail "stalled reclaim did not return (exit $rc after ${elapsed}s)"
+assert_contains "$out" 'rc=124 timed_out=1' 'stalled reclaim reports its bound'
+assert_contains "$out" 'worktree slot reclaim did not finish within 2s (required machine drive unavailable' 'stalled reclaim names the drive refusal'
+[ "$elapsed" -le 8 ] || fail "stalled reclaim took ${elapsed}s"
+[ -s "$SLOT_TEST_STALL_LOG" ] || fail 'stalled reclaim never reached the blocked slot read'
+[ -d "$SLOT" ] || fail 'stalled reclaim removed the slot'
+[ ! -e "$SLOT_TEST_LOG" ] || fail 'stalled reclaim reached Treehouse destroy'
+sleep 1
+while IFS= read -r reader; do
+  if kill -0 "$reader" 2>/dev/null; then fail "stalled reclaim left blocked reader $reader running"; fi
+done < "$SLOT_TEST_STALL_LOG"
+fm_worktree_slots_reclaim_bounded "$FM_HOME/projects" "$PROJECT" "$FM_HOME/state" "" 1 > "$CASE/reclaimed" ||
+  fail "healthy bounded reclaim failed: $FM_WORKTREE_SLOT_ROOM_REASON"
+assert_contains "$(cat "$CASE/reclaimed")" "reclaimed: $SLOT" 'healthy bounded reclaim reports and removes the slot'
+[ ! -d "$SLOT" ] || fail 'healthy bounded reclaim kept the slot'
+room || fail "room after a healthy bounded reclaim: $FM_WORKTREE_SLOT_ROOM_REASON"
+pass 'a stalled reclaim stops at its bound and keeps the slot; a healthy bounded reclaim still frees room'

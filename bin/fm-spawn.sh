@@ -1325,6 +1325,7 @@ parse_orca_worktree_result() {
 
 spawn_abort_cleanup() {
   local status=$?
+  [ -z "${SPAWN_PLACEMENT_ATTEMPT_DIR:-}" ] || rm -rf "$SPAWN_PLACEMENT_ATTEMPT_DIR"
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] &&
     [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] &&
     [ -n "$SPAWN_META_TMP" ] &&
@@ -1695,6 +1696,11 @@ spawn_require_relocated_queued_work() {
     exit 1
   fi
 }
+# One spawn is one placement attempt, never an inherited one: once a machine
+# drive read times out, every later drive check of this attempt refuses at
+# once (bin/fm-placement.py). The note is removed when this spawn exits.
+SPAWN_PLACEMENT_ATTEMPT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-placement-attempt.XXXXXX") || exit 1
+export FM_PLACEMENT_ATTEMPT_MEMO="$SPAWN_PLACEMENT_ATTEMPT_DIR/drive-stalled"
 if [ "$KIND" != secondmate ]; then
   fm_placement_begin "$ID" || exit 1
 fi
@@ -3379,10 +3385,12 @@ if [ "$KIND" != secondmate ] && {
     . "$SCRIPT_DIR/fm-worktree-slots-lib.sh"
     if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; then
       if [ "$FM_WORKTREE_SLOT_RECLAIMABLE" -gt 0 ]; then
-        fm_worktree_slots_reclaim "$STATE" "$SPAWN_TREEHOUSE_PROJECT_LOCK" apply \
+        fm_worktree_slots_reclaim_bounded "$PROJECTS" "$PROJ_ABS" "$STATE" "$SPAWN_TREEHOUSE_PROJECT_LOCK" \
           "$((FM_WORKTREE_SLOT_HELD - FM_WORKTREE_SLOT_CAP + 1))" || true
       fi
-      if ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE" && [ "$FM_PLACEMENT_ACTIVE" != 1 ]; then
+      # A room read or reclaim that hit its bound is not re-read: it refuses at once.
+      if { [ "$FM_WORKTREE_SLOT_ROOM_TIMED_OUT" = 1 ] || ! fm_worktree_slot_room "$CONFIG" "$PROJECTS" "$PROJ_ABS" "$STATE"; } \
+        && [ "$FM_PLACEMENT_ACTIVE" != 1 ]; then
         echo "error: refusing spawn: $FM_WORKTREE_SLOT_ROOM_REASON" >&2
         exit 1
       fi
