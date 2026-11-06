@@ -650,10 +650,10 @@ no_session_case() {
   cat > "$FAKEBIN/quota-axi" <<'SH'
 #!/usr/bin/env bash
 [ -z "${FM_TEST_QUOTA_FAIL:-}" ] || exit 1
-cat "$FM_TEST_QUOTA"
+cat "$FM_TEST_WEEKLY_QUOTA"
 SH
   chmod +x "$FAKEBIN/quota-axi"
-  export FM_TEST_QUOTA="$CASE/quota.json"
+  export FM_TEST_WEEKLY_QUOTA="$CASE/quota.json"
 }
 weekly_reading() {
   jq -n --argjson weekly "$1" '{schemaVersion:5,providers:[{provider:"claude",state:{status:"fresh",stale:false},
@@ -662,10 +662,10 @@ weekly_reading() {
       {id:"extra_usage",kind:"extra_usage",enabled:true}],
     quotaSemantics:{status:"known",effectiveAvailability:[
       {scope:"all_models",status:"known",effectivePercentRemaining:$weekly,runway:{status:"through_reset"}},
-      {scope:"model:fable",status:"known",effectivePercentRemaining:$weekly,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_QUOTA"
+      {scope:"model:fable",status:"known",effectivePercentRemaining:$weekly,runway:{status:"through_reset"}}]}}]}' > "$FM_TEST_WEEKLY_QUOTA"
 }
 reshape_reading() { # <jq-filter>
-  jq "$1" "$FM_TEST_QUOTA" > "$CASE/reshaped.json" && cp "$CASE/reshaped.json" "$FM_TEST_QUOTA"
+  jq "$1" "$FM_TEST_WEEKLY_QUOTA" > "$CASE/reshaped.json" && cp "$CASE/reshaped.json" "$FM_TEST_WEEKLY_QUOTA"
 }
 no_session_check() { # [floor-scope] [floor-min-percent] [model] [P0]
   fm_claude_admission_check "$HOME_DIR/config" "$HOME_DIR/state" candidate "${IDENTITY:-ordinary}" \
@@ -683,7 +683,7 @@ test_claude_admission_admits_a_weekly_only_reading() (
   weekly_reading 14
   out=$(no_session_check); rc=$?
   expect_code 0 "$rc" "a fresh reading with weekly 14% and no session row admits against the weekly floor: $out"
-  out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_QUOTA")
+  out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_WEEKLY_QUOTA")
   assert_equals '{"pct":14,"window":"seven_day"}' "$(jq -c .session <<<"$out")" \
     "dispatch state reads the weekly window when no session window is in force"
   out=$(no_session_check all_models 10); rc=$?
@@ -757,7 +757,7 @@ test_claude_admission_without_a_session_window_still_fails_closed() (
   out=$(no_session_check); rc=$?
   expect_code 1 "$rc" "a reading with neither a session nor a weekly row refuses: $out"
   assert_contains "$out" 'quota floor is unverifiable' 'absent weekly evidence fails closed'
-  out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_QUOTA")
+  out=$(fm_claude_admission_state "$HOME_DIR/config" "$HOME_DIR/state" "$FM_TEST_WEEKLY_QUOTA")
   assert_equals true "$(jq '.session.unknown != null' <<<"$out")" 'dispatch state stays unknown without a weekly row'
   for weekly in 'null' '"14"' '-1' '101'; do
     weekly_reading 80
