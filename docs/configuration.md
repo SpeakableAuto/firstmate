@@ -1534,6 +1534,7 @@ A pinned Claude account is guarded from its own reading but is still ranked from
 A snapshot without that evidence, or with an unprovable account, makes that machine's Claude candidates ineligible rather than assumed healthy.
 
 Admission obtains one bounded, read-only Claude quota result through the shared snapshot reader and refuses a known five-hour percentage below `min_session_percent`, regardless of spend priority or weekly reset timing.
+A fresh, error-free reading (`state.status` `fresh`, no `state.error`) that carries no five-hour row has no session window in force, so admission applies the same floor to its `seven_day` weekly window instead; a present but unmeasured five-hour row never falls back, and a reading with neither row still refuses as unverifiable.
 The selected Claude row must have `state.stale` explicitly `false`, including any bounded cached recovery under [Quota snapshot reuse](#quota-snapshot-reuse); an absent or malformed freshness signal is incomplete evidence and refuses admission.
 Explicit config roots use a profile-only quota read with higher-precedence credentials removed; the ordinary account uses a default read with those credentials and `CLAUDE_CONFIG_DIR` unset.
 The selected Claude candidate's own optional `floor` is carried by the resolver's concrete profile line as `--profile-floor-scope` and `--profile-floor-min-percent`; a manual selection passes the same pair.
