@@ -60,6 +60,145 @@ _FM_CLASSIFY_UNAME_S=${_FM_UNAME:-$(uname -s 2>/dev/null)}
 # or no-mistakes install; absent, it points at the real sibling script.
 FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 
+# crew_state_read <id>: print one fm-crew-state.sh verdict line under a hard
+# bound, or return 1 having learned nothing. A worktree on a slow or hung drive
+# makes that reader's Git calls block, and a caller looping over every parked or
+# held crew would otherwise stall for as long as the drive does.
+# FM_CREW_STATE_READ_SECS (default 10, whole seconds 1..60) bounds one read;
+# zero, zero-padded zero or anything else invalid falls back to the default,
+# because a zero bound disables the timeout instead of tightening it.
+# FM_CREW_STATE_DEADLINE, when a caller sets it to an epoch, is a read-admission
+# deadline: no new read starts at or past it (a read already running keeps its
+# own bound), except that with FM_CREW_STATE_OWN_STATE set the first eligible
+# read of a cycle is admitted even after the deadline (see coverage below), so
+# one read of up to FM_CREW_STATE_READ_SECS can start late. It is not a bound on
+# the whole scan.
+# FM_CREW_STATE_OWN_STATE, when a caller sets it to its state directory, adds
+# protections for a caller that reads repeatedly (the watcher):
+#   - ownership: the read runs through fm_progress_audit_run
+#     (bin/fm-progress-audit-bound-lib.sh) in slot crew-state-<id>, so a reader
+#     that survives its kill in uninterruptible I/O keeps its ownership record,
+#     and no second read for that crew starts until the first is gone; nothing
+#     here signals a recorded process;
+#   - nested readers: the reader's own bounded calls (fm_run_timed in
+#     bin/fm-timeout-lib.sh, fm_nm_bounded in bin/fm-nm-run-lib.sh) give their
+#     children process groups the outer kill cannot reach, so the read sets
+#     FM_TIMEOUT_GROUP_RECORD=.crew-state-nested-<slot>, and each such child
+#     records its group there before it leaves the reader's group or runs, or
+#     does not run at all. The bash timeout fallback cannot publish first, so
+#     where it is the resolved mechanism the owned read is unavailable before
+#     the reader starts (and the fallback itself refuses an owned call, status
+#     125, before creating any group). The file lives outside the reclaimable slot, and no
+#     new read of that crew starts while any recorded group is still alive.
+#     The read also sets FM_CREW_STATE_NO_FORGE=1: the watcher's consumers use
+#     only the state and source, never the passed-run PR detail a forge read
+#     would add;
+#   - retry backoff: a timed-out read stamps .crew-state-backoff-<id>, and that
+#     crew is not read again for FM_CREW_STATE_RETRY_SECS (default 300);
+#   - coverage: a read refused by the admission deadline marks the round
+#     incomplete (.crew-state-round-incomplete, holding that cycle's deadline).
+#     The marker stays until a stale scan completes with no refusal, so a cycle
+#     that wakes or restarts early keeps the round. The watcher keeps the round
+#     (.crew-state-round) while the previous cycle left it incomplete, and in
+#     such a catch-up cycle a crew already tried in this round
+#     (.crew-state-tried-<slot>, written by every admitted read) is deferred at
+#     no cost, so the cycle's budget goes to crews not yet tried. The first
+#     read a cycle admits is never refused by the deadline, so each catch-up
+#     cycle tries at least one untried crew, and every crew is tried before
+#     any is tried twice, however many reads time out ahead of it.
+# Without it, a single bounded read writes to a temporary file rather than a
+# pipe, so a surviving reader cannot hold the caller's output open.
+# The reader's own exit status is ignored when it printed a `state:` verdict,
+# as callers always did; a failure with no verdict line (the reader, or the
+# ownership runner around it, could not run) is unavailable, never an empty
+# verdict that would read as `none`.
+crew_state_read() {  # <id>
+  local id=$1 secs=${FM_CREW_STATE_READ_SECS:-10} deadline=${FM_CREW_STATE_DEADLINE:-}
+  local own=${FM_CREW_STATE_OWN_STATE:-} retry=${FM_CREW_STATE_RETRY_SECS:-300} now tmp rc=0 slot stamp
+  local nested group live round tried
+  case "$secs" in ''|*[!0-9]*) secs=10 ;; esac
+  secs=$((10#$secs))
+  [ "$secs" -ge 1 ] || secs=10
+  [ "$secs" -le 60 ] || secs=60
+  case "$retry" in ''|*[!0-9]*) retry=300 ;; esac
+  retry=$((10#$retry))
+  now=$(date +%s)
+  [ -z "$own" ] || declare -F fm_progress_audit_run >/dev/null || own=
+  # An owned read needs every nested bound to publish its group first, which
+  # the bash timeout fallback cannot do (bin/fm-timeout-lib.sh). On a host left
+  # with only that mechanism the read is unavailable before anything starts:
+  # running the reader would let a refused nested call surface as an ordinary
+  # verdict (a refused delivery check reads as blocked) instead of unknown.
+  if [ -n "$own" ] && [ "$(fm_timeout_mechanism)" = bash ]; then
+    return 1
+  fi
+  case "$deadline" in
+    ''|*[!0-9]*) ;;
+    *)
+      # With ownership on, the first admitted read of a cycle is never refused
+      # (.crew-state-cycle-read names the cycle that already started one), so
+      # every cycle makes progress however long its earlier work took.
+      if [ "$now" -ge "$((10#$deadline))" ] \
+        && { [ -z "$own" ] || [ "$(cat "$own/.crew-state-cycle-read" 2>/dev/null)" = "$deadline" ]; }; then
+        [ -z "$own" ] || printf '%s\n' "$deadline" > "$own/.crew-state-round-incomplete" 2>/dev/null || true
+        return 1
+      fi
+      ;;
+  esac
+  if [ -n "$own" ]; then
+    slot="crew-state-$(printf '%s' "$id" | tr -c 'A-Za-z0-9._-' '_')"
+    stamp="$own/.crew-state-backoff-$slot"
+    nested="$own/.crew-state-nested-$slot"
+    tried="$own/.crew-state-tried-$slot"
+    if [ -e "$nested" ]; then
+      live=0
+      while read -r group; do
+        case "$group" in ''|0|1|*[!0-9]*) continue ;; esac
+        if kill -0 -- "-$group" 2>/dev/null; then live=1; break; fi
+      done < "$nested"
+      [ "$live" -eq 0 ] || return 1
+      rm -f "$nested"
+    fi
+    if [ -s "$stamp" ]; then
+      read -r rc < "$stamp" 2>/dev/null || rc=0
+      case "$rc" in ''|*[!0-9]*) rc=0 ;; esac
+      [ "$((now - rc))" -ge "$retry" ] || return 1
+    fi
+    round=$(cat "$own/.crew-state-round" 2>/dev/null) || round=0
+    if [ -e "$own/.crew-state-catchup" ] && [ -s "$tried" ]; then
+      read -r live group < "$tried" 2>/dev/null || live=''
+      # Tried in this round by an earlier cycle: defer. A second read in the
+      # same cycle (same deadline) is still admitted.
+      [ "$live" != "$round" ] || [ "$group" = "$deadline" ] || return 1
+    fi
+    printf '%s %s\n' "$round" "$deadline" > "$tried" 2>/dev/null || true
+    printf '%s\n' "$deadline" > "$own/.crew-state-cycle-read" 2>/dev/null || true
+    rc=0
+    tmp=$(fm_progress_audit_run "$own" "$slot" "$secs" \
+      env "FM_TIMEOUT_GROUP_RECORD=$nested" FM_CREW_STATE_NO_FORGE=1 "$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || rc=$?
+    if fm_timed_out "$rc"; then
+      printf '%s\n' "$now" > "$stamp" 2>/dev/null || true
+      return 1
+    fi
+    case "$tmp" in state:*) ;; *) [ "$rc" -eq 0 ] && [ -n "$tmp" ] || return 1 ;; esac
+    rm -f "$stamp"
+    printf '%s\n' "$tmp"
+    return 0
+  fi
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-crew-state.XXXXXX") || return 1
+  fm_run_timed "$secs" "$FM_CREW_STATE_BIN" "$id" > "$tmp" 2>/dev/null < /dev/null || rc=$?
+  if fm_timed_out "$rc"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ] && ! grep -q '^state:' "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    return 1
+  fi
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
 # fm_run_timed, the shared hard bound the worktree write probe below puts around
 # its one filesystem walk. bin/fm-timeout-lib.sh owns bounded execution for this
 # repo, so nothing here re-derives the coreutils/BSD/perl selection. That library
@@ -2492,7 +2631,11 @@ status_span_has_actionable() {  # <status-file> <start-offset>
 #   paused  - the crew's authoritative current state is a declared external-wait
 #             pause (paused:), which is EXPECTED to idle;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
-#             torn-down/unknown crew, or an unreadable verdict).
+#             torn-down/unknown crew, or an unreadable verdict);
+#   unknown - crew_state_read below produced no verdict at all: the read hit its
+#             bound or the caller's cycle budget was already spent. Nothing about
+#             the crew was learned, so a caller must neither absorb nor judge it
+#             on this answer.
 # One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state
 # authoritatively (not the status log) is what keeps run-step precedence: a crew
 # that appended paused: but then STARTED a run reports working, never paused.
@@ -2502,7 +2645,7 @@ status_span_has_actionable() {  # <status-file> <start-offset>
 crew_absorb_class() {  # <id>
   local id=$1 line state src
   [ -n "$id" ] || { printf 'none'; return; }
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  line=$(crew_state_read "$id") || { printf 'unknown'; return; }
   case "$line" in state:*) ;; *) printf 'none'; return ;; esac
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi
@@ -2560,11 +2703,12 @@ FM_GATE_HUMAN_DECISION='ask-user: authority decision'
 # then tie a decision to this gate.
 # Same cost and the same caveat as crew_absorb_class: one fm-crew-state.sh read,
 # which may make a bounded no-mistakes call, so callers take it only where they
-# already accept that cost.
+# already accept that cost. Returns 2, not 1, when crew_state_read produced no
+# verdict, so a caller can tell "not a human gate" from "could not look".
 crew_gate_awaits_human_decision() {  # <id> -> <run-id> on stdout
   local id=$1 line state src rest part human='' run=''
   [ -n "$id" ] || return 1
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  line=$(crew_state_read "$id") || return 2
   case "$line" in state:*) ;; *) return 1 ;; esac
   state=${line#state: }; state=${state%% *}
   [ "$state" = parked ] || return 1

@@ -6616,6 +6616,745 @@ test_paused_until_that_passed_is_rechecked_before_the_cadence() {
   pass "a declared wait whose until time has passed is rechecked at once, then held to the cadence"
 }
 
+# --- a slow or hung worktree drive: bounded crew-state reads -----------------
+# fm-crew-state.sh reads Git in each crew's worktree. On a slow or hung drive
+# that read blocks, and the stale scan reaches it for every parked or held crew,
+# so the beacon touched at the top of the cycle aged past the guard's grace.
+# hung_crew_state <fakebin>: replace the case's fake reader with one that blocks
+# for 30 seconds before answering, like Git on a hung drive.
+hung_crew_state() {  # <fakebin>
+  cat > "$1/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "${1:-}" >> "$FM_FAKE_CREW_STATE_LOG"
+sleep 30
+printf '%s\n' 'state: paused · source: status-log · answered after the drive recovered'
+SH
+  chmod +x "$1/fm-crew-state.sh"
+}
+
+test_crew_state_read_is_bounded() {
+  local dir fakebin started elapsed got log
+  dir=$(make_case crew-state-read-bound); fakebin="$dir/fakebin"; log="$dir/reads.log"
+  # Responsive reader: the verdict passes through unchanged.
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: paused · source: status-log · waiting' crew_absorb_class a)
+  [ "$got" = paused ] || fail "a responsive crew-state read was not classed paused (got $got)"
+  hung_crew_state "$fakebin"
+  started=$(date +%s)
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_READ_SECS=1 crew_absorb_class a)
+  elapsed=$(( $(date +%s) - started ))
+  [ "$got" = unknown ] || fail "a timed-out crew-state read was not classed unknown (got $got)"
+  [ "$elapsed" -lt 8 ] || fail "a hung crew-state read was not bounded (${elapsed}s)"
+  FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_READ_SECS=1 \
+    crew_gate_awaits_human_decision a >/dev/null && fail "a timed-out read was read as a human-owed gate"
+  # A spent cycle budget skips the read entirely and still answers unknown.
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_CREW_STATE_LOG="$log" \
+    FM_CREW_STATE_DEADLINE=$(( $(date +%s) - 1 )) crew_absorb_class a)
+  [ "$got" = unknown ] || fail "a read past the cycle deadline was not classed unknown (got $got)"
+  [ ! -s "$log" ] || fail "a read past the cycle deadline still ran the reader"
+  pass "a crew-state read is bounded, and a timed-out or skipped read is unknown, never paused or none"
+}
+
+# hung_paused_fixture <name>: a declared-pause crew whose stale pane is due for
+# classification, with a reader that hangs. Prints the case dir.
+hung_paused_fixture() {  # <name>
+  local dir state fakebin window key statusf
+  dir=$(make_case "$1"); state="$dir/state"; fakebin="$dir/fakebin"
+  window="test:fm-held"
+  printf 'idle, holding for upstream' > "$dir/pane.txt"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/held.meta"
+  statusf="$state/held.status"
+  printf 'paused: holding for the upstream tool release\n' > "$statusf"
+  printf '%s' "$(seen_sig "$statusf")" > "$state/.seen-held_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf '%s' "$(hash_text "idle, holding for upstream")" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  hung_crew_state "$fakebin"
+  printf '%s\n' "$dir"
+}
+
+hung_paused_watch() {  # <dir> [extra env assignments...]
+  local dir=$1
+  shift
+  PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-held" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$dir/state" \
+    FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_CREW_STATE_READ_SECS=1 env "$@" "$WATCH" > "$dir/watch.out" &
+  HUNG_PID=$!
+}
+
+# The actual scan path: with the notice already raised (fresh marker), a hung
+# reader no longer holds the cycle. The watcher keeps completing cycles, judges
+# nothing on the missing verdict, and records why.
+test_hung_crew_state_keeps_the_watcher_cycling() {
+  local dir state key
+  dir=$(hung_paused_fixture hung-crew-state-cycles); state="$dir/state"
+  key=test_fm-held
+  date +%s > "$state/.crew-state-unavailable"
+  hung_paused_watch "$dir"
+  if ! wait_poll_cycle "$state" "$HUNG_PID" 150 || ! wait_poll_cycle "$state" "$HUNG_PID" 150; then
+    reap "$HUNG_PID"; fail "the watcher did not keep cycling through a hung crew-state read: $(cat "$dir/watch.out")"
+  fi
+  reap "$HUNG_PID"
+  [ ! -s "$dir/watch.out" ] || fail "an unknown crew state printed a wake while the notice was fresh: $(cat "$dir/watch.out")"
+  [ ! -s "$state/.wake-queue" ] || fail "an unknown crew state enqueued a wake while the notice was fresh"
+  [ ! -e "$state/.paused-$key" ] || fail "an unknown crew state was recorded as a declared pause"
+  [ ! -e "$state/.stale-$key" ] || fail "an unknown crew state advanced the stale suppressor (absorbed on no evidence)"
+  [ ! -e "$state/.stale-since-$key" ] || fail "an unknown crew state started the wedge timer"
+  grep -F 'crew state unknown' "$state/.watch-triage.log" >/dev/null \
+    || fail "the unknown crew state was not recorded in the triage log"
+  pass "a hung crew-state read is bounded in the stale scan: cycles continue and nothing is judged on it"
+}
+
+# Counterpart: the first unknown in a resurface window reaches firstmate once,
+# so a hung drive cannot leave a crew silently unsupervised.
+test_hung_crew_state_surfaces_once() {
+  local dir state drain_out
+  dir=$(hung_paused_fixture hung-crew-state-surfaces); state="$dir/state"; drain_out="$dir/drain.out"
+  hung_paused_watch "$dir"
+  wait_for_exit "$HUNG_PID" 100 || { reap "$HUNG_PID"; fail "an unknown crew state never reached firstmate"; }
+  grep -F 'check: crew-state: current-state read unavailable this cycle for: held' "$dir/watch.out" >/dev/null \
+    || fail "the unknown crew-state notice was not printed: $(cat "$dir/watch.out")"
+  grep -F 'possible wedge' "$dir/watch.out" >/dev/null && fail "an unknown crew state was escalated as a wedge"
+  [ -e "$state/.crew-state-unavailable" ] || fail "the notice throttle marker was not recorded"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the crew-state notice failed"
+  grep -F 'crew-state' "$drain_out" >/dev/null || fail "the crew-state notice was not queued durably"
+  pass "an unknown crew state reaches firstmate once per resurface window, never as a wedge"
+}
+
+# No fake freshness: the beacon is only touched at the top of a cycle. While one
+# bounded read is blocked, the beacon visibly ages, so a watcher wedged anywhere
+# the bound does not reach would still go stale for the guard.
+test_beacon_not_refreshed_inside_a_blocked_read() {
+  local dir state i m now age max=0
+  dir=$(hung_paused_fixture hung-crew-state-beacon); state="$dir/state"
+  date +%s > "$state/.crew-state-unavailable"
+  hung_paused_watch "$dir" FM_CREW_STATE_READ_SECS=5
+  wait_live "$HUNG_PID" 20 || { reap "$HUNG_PID"; fail "the watcher exited before its first read"; }
+  i=0
+  while [ "$i" -lt 80 ]; do
+    m=$(file_mtime "$state/.last-watcher-beat")
+    if [ -n "$m" ]; then
+      now=$(date +%s); age=$(( now - m ))
+      [ "$age" -le "$max" ] || max=$age
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  reap "$HUNG_PID"
+  [ "$max" -ge 3 ] || fail "the beacon was refreshed while a crew-state read was blocked (max age ${max}s)"
+  [ "$max" -lt 10 ] || fail "the beacon aged past the read bound (max age ${max}s)"
+  pass "the beacon is not refreshed inside a blocked read, and ages only as long as the bound"
+}
+
+# selective_crew_state <fakebin>: a reader that blocks for 30 seconds for any
+# task id starting with "hung" and answers FM_FAKE_CREW_STATE for the rest, so
+# one fixture holds crews on a hung drive next to crews on a healthy one.
+selective_crew_state() {  # <fakebin>
+  cat > "$1/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "${1:-}" >> "$FM_FAKE_CREW_STATE_LOG"
+case "${1:-}" in hung*) sleep 30 ;; esac
+printf '%s\n' "${FM_FAKE_CREW_STATE:-state: unknown · source: none · fake default}"
+SH
+  chmod +x "$1/fm-crew-state.sh"
+}
+
+# Zero and zero-padded zero would disable the timeout, so they fall back to the
+# default bound instead of reaching the runner.
+test_crew_state_read_rejects_zero_bounds() {
+  local dir fakebin v started elapsed got
+  dir=$(make_case crew-state-zero-bound); fakebin="$dir/fakebin"
+  hung_crew_state "$fakebin"
+  for v in 00 000; do
+    started=$(date +%s)
+    got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_READ_SECS=$v crew_absorb_class a)
+    elapsed=$(( $(date +%s) - started ))
+    [ "$got" = unknown ] || fail "FM_CREW_STATE_READ_SECS=$v did not bound the read (got $got)"
+    [ "$elapsed" -lt 20 ] || fail "FM_CREW_STATE_READ_SECS=$v left the read unbounded (${elapsed}s)"
+  done
+  pass "zero and zero-padded zero read bounds fall back to the default bound"
+}
+
+# With ownership on, a reader still recorded as alive blocks another read of the
+# same crew (no accumulation behind a stuck drive), and a timed-out crew backs
+# off while other crews are still read.
+test_crew_state_read_ownership_and_backoff() {
+  local dir state fakebin log holder got slotdir
+  dir=$(make_case crew-state-owned); state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/reads.log"
+  selective_crew_state "$fakebin"
+  # A surviving reader from an earlier call: its owner, runner and group are a
+  # live process this test owns.
+  sleep 60 & holder=$!
+  slotdir="$state/.progress-audit/.owned-crew-state-held"
+  mkdir -p "$slotdir"
+  printf '%s\n' "$holder" > "$slotdir/owner"; printf '%s\n' "$holder" > "$slotdir/runner"
+  printf '%s\n' "$(ps -o pgid= -p "$holder" | tr -d ' ')" > "$slotdir/group"
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" \
+    FM_FAKE_CREW_STATE_LOG="$log" FM_CREW_STATE_READ_SECS=1 bash -c '
+      . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"; crew_absorb_class held' _ "$ROOT")
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  [ "$got" = unknown ] || fail "a still-owned reader did not make the next read unknown (got $got)"
+  [ ! -s "$log" ] || fail "a second reader started while the first was still owned"
+  [ -d "$slotdir" ] || fail "the surviving reader's ownership record was discarded"
+  # Backoff: the first timed-out read stamps the crew; the next is skipped at no
+  # cost, while a healthy crew is still read.
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" \
+    FM_FAKE_CREW_STATE_LOG="$log" FM_CREW_STATE_READ_SECS=1 \
+    FM_FAKE_CREW_STATE='state: paused · source: status-log · waiting' bash -c '
+      . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"
+      crew_absorb_class hunga; printf " "; crew_absorb_class hunga; printf " "; crew_absorb_class ok' _ "$ROOT")
+  [ "$got" = "unknown unknown paused" ] || fail "backoff did not skip the hung crew and still read the healthy one (got $got)"
+  [ "$(grep -c '^hunga$' "$log")" -eq 1 ] || fail "a backed-off crew was read again inside its backoff"
+  FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_READ_SECS=1 \
+    crew_gate_awaits_human_decision hungb >/dev/null
+  [ "$?" -eq 2 ] || fail "a timed-out gate read was not reported as unavailable (status 2)"
+  pass "an owned reader blocks a second read, a timed-out crew backs off, and an unread gate is reported unavailable"
+}
+
+# Fairness on the actual scan: a healthy crew listed after a hung one is skipped
+# when the hung read spends the cycle's admission budget, then classified on a
+# later cycle once the hung crew backs off. The hung crew's terminal stale is
+# never committed on no verdict.
+test_hung_crew_does_not_starve_a_later_crew() {
+  local dir state fakebin out capture_file hung_key ok_key
+  dir=$(make_case crew-state-fair); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  selective_crew_state "$fakebin"
+  printf 'finished, awaiting review' > "$capture_file"
+  printf 'window=test:fm-hung\nkind=ship\n' > "$state/hung.meta"
+  printf 'window=test:fm-ok\nkind=ship\n' > "$state/ok.meta"
+  printf 'done: PR https://example.test/pr/1\n' > "$state/hung.status"
+  printf 'done: PR https://example.test/pr/2\n' > "$state/ok.status"
+  printf '%s' "$(seen_sig "$state/hung.status")" > "$state/.seen-hung_status"
+  printf '%s' "$(seen_sig "$state/ok.status")" > "$state/.seen-ok_status"
+  hung_key=test_fm-hung; ok_key=test_fm-ok
+  printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-$hung_key"
+  printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-$ok_key"
+  printf '1\n' > "$state/.count-$hung_key"; printf '1\n' > "$state/.count-$ok_key"
+  date +%s > "$state/.crew-state-unavailable"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-hung\nfm-ok')" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_CREW_STATE_READ_SECS=1 FM_CREW_STATE_CYCLE_BUDGET_SECS=1 "$WATCH" > "$out" &
+  HUNG_PID=$!
+  wait_for_exit "$HUNG_PID" 150 || { reap "$HUNG_PID"; fail "the healthy crew behind a hung one was never classified: $(cat "$out")"; }
+  grep -Fx 'stale: test:fm-ok' "$out" >/dev/null || fail "the healthy crew's terminal stale did not surface: $(cat "$out")"
+  grep -F 'stale: test:fm-hung' "$out" >/dev/null && fail "the hung crew was surfaced as stale on no verdict"
+  [ ! -e "$state/.stale-$hung_key" ] || fail "the hung crew's terminal stale was committed on no verdict"
+  grep -F 'crew state unknown' "$state/.watch-triage.log" >/dev/null || fail "the skipped reads were not recorded"
+  pass "a hung crew backs off and cannot starve a later crew, and its terminal stale is not committed on no verdict"
+}
+
+# Progress-conditioned beacon: a scan that keeps finishing windows refreshes the
+# beacon at each completed window once it is old enough, while each single
+# blocked read still lets it age.
+test_beacon_follows_completed_scan_work() {
+  local dir state fakebin capture_file i m now age max=0 n
+  dir=$(make_case crew-state-progress-beat); state="$dir/state"; fakebin="$dir/fakebin"
+  capture_file="$dir/pane.txt"
+  selective_crew_state "$fakebin"
+  printf 'idle, holding' > "$capture_file"
+  date +%s > "$state/.crew-state-unavailable"
+  for n in hunga hungb hungc; do
+    printf 'window=test:fm-%s\nkind=ship\n' "$n" > "$state/$n.meta"
+    printf 'done: PR https://example.test/pr/%s\n' "$n" > "$state/$n.status"
+    printf '%s' "$(seen_sig "$state/$n.status")" > "$state/.seen-${n}_status"
+    printf '%s' "$(hash_text 'idle, holding')" > "$state/.hash-test_fm-$n"
+    printf '1\n' > "$state/.count-test_fm-$n"
+  done
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-hunga\nfm-hungb\nfm-hungc')" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_CREW_STATE_READ_SECS=3 FM_WATCHER_PROGRESS_BEAT_SECS=1 "$WATCH" > "$dir/watch.out" &
+  HUNG_PID=$!
+  wait_live "$HUNG_PID" 20 || { reap "$HUNG_PID"; fail "the watcher exited before its scan"; }
+  i=0
+  while [ "$i" -lt 120 ]; do
+    m=$(file_mtime "$state/.last-watcher-beat")
+    if [ -n "$m" ]; then
+      now=$(date +%s); age=$(( now - m ))
+      [ "$age" -le "$max" ] || max=$age
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  reap "$HUNG_PID"
+  # Three blocked 3s reads in one cycle: without progress checkpoints the beacon
+  # would age past 9s; with them it ages about one read at a time.
+  [ "$max" -ge 2 ] || fail "the beacon was refreshed inside a blocked read (max age ${max}s)"
+  [ "$max" -le 6 ] || fail "the beacon did not follow completed scan work (max age ${max}s)"
+  pass "the beacon follows completed scan work and still ages inside a blocked read"
+}
+
+# nested_crew_state <fakebin>: a reader that, like the real one, runs its slow
+# call through fm_nm_bounded, whose timeout puts that call in a process group of
+# its own. The call outlives the reader's outer bound.
+nested_crew_state() {  # <fakebin>
+  cat > "$1/fm-crew-state.sh" <<SH
+#!/usr/bin/env bash
+[ -z "\${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "\${1:-}" >> "\$FM_FAKE_CREW_STATE_LOG"
+. "$ROOT/bin/fm-nm-run-lib.sh"
+fm_nm_bounded "\$PWD" 30 sleep 30
+printf '%s\n' 'state: paused · source: status-log · answered late'
+SH
+  chmod +x "$1/fm-crew-state.sh"
+}
+
+# The real nested reader path: the inner group survives the outer kill, is
+# recorded, and blocks the next read of that crew until it is gone.
+test_nested_reader_group_blocks_the_next_read() {
+  local dir state fakebin log got nested group
+  dir=$(make_case crew-state-nested); state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/reads.log"
+  nested_crew_state "$fakebin"
+  read_nested() {
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" FM_CREW_STATE_RETRY_SECS=0 \
+      FM_FAKE_CREW_STATE_LOG="$log" FM_CREW_STATE_READ_SECS=1 bash -c '
+        . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"; crew_absorb_class nest' _ "$ROOT"
+  }
+  got=$(read_nested)
+  [ "$got" = unknown ] || fail "the timed-out nested read was not unknown (got $got)"
+  nested="$state/.crew-state-nested-crew-state-nest"
+  [ -s "$nested" ] || fail "the nested timeout group was not recorded"
+  read -r group < "$nested"
+  kill -0 -- "-$group" 2>/dev/null || fail "fixture: the nested group did not outlive the outer bound"
+  got=$(read_nested)
+  [ "$got" = unknown ] || fail "a read started while the nested group was alive (got $got)"
+  [ "$(wc -l < "$log" | tr -d ' ')" -eq 1 ] || fail "a second reader started behind a live nested group"
+  # The test owns that group; once it is gone the crew is read again.
+  kill -KILL -- "-$group" 2>/dev/null
+  sleep 0.3
+  got=$(read_nested)
+  [ "$(wc -l < "$log" | tr -d ' ')" -eq 2 ] || fail "the crew was not read again after its nested group ended"
+  [ "$got" = unknown ] || fail "fixture: the third nested read should also time out (got $got)"
+  read -r group < "$nested"; kill -KILL -- "-$group" 2>/dev/null
+  pass "a nested reader group that outlives its bound is recorded and blocks the next read until it ends"
+}
+
+# Ownership-runner setup failure is unavailable evidence, not a negative verdict:
+# a terminal stale is neither committed nor surfaced on it.
+test_crew_state_helper_failure_is_unknown() {
+  local dir state fakebin out capture_file key got
+  dir=$(make_case crew-state-helper-failure); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  : > "$state/.progress-audit"   # obstructs the ownership runner's directory
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" \
+    FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' bash -c '
+      . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"; crew_absorb_class done' _ "$ROOT")
+  [ "$got" = unknown ] || fail "an ownership-runner setup failure was not unknown (got $got)"
+  printf 'finished, awaiting review' > "$capture_file"
+  printf 'window=test:fm-done\nkind=ship\n' > "$state/done.meta"
+  printf 'done: PR https://example.test/pr/3\n' > "$state/done.status"
+  printf '%s' "$(seen_sig "$state/done.status")" > "$state/.seen-done_status"
+  key=test_fm-done
+  printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  date +%s > "$state/.crew-state-unavailable"
+  date +%s > "$state/.progress-audit-unavailable"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-done FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_CREW_STATE_READ_SECS=1 "$WATCH" > "$out" &
+  HUNG_PID=$!
+  if ! wait_poll_cycle "$state" "$HUNG_PID" 150 || ! wait_poll_cycle "$state" "$HUNG_PID" 150; then
+    reap "$HUNG_PID"; fail "the watcher stopped on a helper failure: $(cat "$out")"
+  fi
+  reap "$HUNG_PID"
+  grep -F 'stale: test:fm-done' "$out" >/dev/null && fail "a terminal stale surfaced on a helper failure"
+  [ ! -e "$state/.stale-$key" ] || fail "a terminal stale was committed on a helper failure"
+  pass "an ownership-runner setup failure is unknown, and no stale record is committed on it"
+}
+
+# Coverage with backoffs that expire before the scan reaches a later crew: four
+# hung crews, a one-second budget and one-second backoff. The round deferral
+# still gets the trailing healthy crew read.
+test_coverage_outlasts_expiring_backoffs() {
+  local dir state fakebin out capture_file n
+  dir=$(make_case crew-state-coverage); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  selective_crew_state "$fakebin"
+  printf 'finished, awaiting review' > "$capture_file"
+  for n in hunga hungb hungc hungd zok; do
+    printf 'window=test:fm-%s\nkind=ship\n' "$n" > "$state/$n.meta"
+    printf 'done: PR https://example.test/pr/%s\n' "$n" > "$state/$n.status"
+    printf '%s' "$(seen_sig "$state/$n.status")" > "$state/.seen-${n}_status"
+    printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-test_fm-$n"
+    printf '1\n' > "$state/.count-test_fm-$n"
+  done
+  date +%s > "$state/.crew-state-unavailable"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-hunga\nfm-hungb\nfm-hungc\nfm-hungd\nfm-zok')" \
+    FM_FAKE_TMUX_CAPTURE="$capture_file" FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_CREW_STATE_READ_SECS=1 FM_CREW_STATE_CYCLE_BUDGET_SECS=1 FM_CREW_STATE_RETRY_SECS=1 "$WATCH" > "$out" &
+  HUNG_PID=$!
+  wait_for_exit "$HUNG_PID" 400 || { reap "$HUNG_PID"; tail -20 "$state/.watch-triage.log" >&2; fail "the trailing healthy crew was never read: $(cat "$out")"; }
+  grep -Fx 'stale: test:fm-zok' "$out" >/dev/null || fail "the trailing healthy crew's stale did not surface: $(cat "$out")"
+  grep -F 'stale: test:fm-hung' "$out" >/dev/null && fail "a hung crew was surfaced as stale on no verdict"
+  pass "every crew is read in turn even when backoffs expire before the scan reaches a later crew"
+}
+
+# End to end at the wedge threshold: an unavailable parked-gate read holds the
+# escalation without resetting the timer or claiming a verified wait.
+test_unavailable_gate_read_keeps_the_wedge_timer() {
+  local dir state fakebin out capture window key before after n
+  local escalated='needs-decision [key=nm-01RUNGATE-review]: the gate raised an authority question
+working: still parked at that gate'
+  dir=$(wedge_threshold_fixture parked-gate-unavailable "$escalated" 2000 500)
+  arm_parked_gate "$dir"
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  hung_crew_state "$fakebin"
+  date +%s > "$state/.crew-state-unavailable"
+  before=$(cat "$state/.stale-since-$key")
+  export FM_CREW_STATE_READ_SECS=1
+  n=1
+  while [ "$n" -le 2 ]; do
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" '' absorb \
+      || { unset FM_CREW_STATE_READ_SECS; fail "an unavailable gate read escalated or stopped the watcher: $(cat "$out")"; }
+    n=$((n + 1))
+  done
+  unset FM_CREW_STATE_READ_SECS
+  after=$(cat "$state/.stale-since-$key" 2>/dev/null)
+  [ "$after" = "$before" ] || fail "an unavailable gate read reset the wedge timer ($before -> $after)"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "an unavailable gate read counted an escalation"
+  grep -F 'verified wait' "$out" >/dev/null && fail "an unavailable gate read was reported as a verified wait"
+  grep -F 'gate evidence unavailable' "$state/.watch-triage.log" >/dev/null \
+    || fail "the held escalation was not recorded"
+  pass "an unavailable parked-gate read holds the escalation and keeps the wedge timer and history"
+}
+
+# Registration interrupted after fork: the record cannot be written (a FIFO no
+# one reads blocks the open), the outer bound fires, and the nested command must
+# never have run outside the outer group, for both nested runners.
+test_interrupted_group_registration_never_runs() {
+  local dir fifo mark runner started record
+  dir=$(make_case crew-state-registration); fifo="$dir/record.fifo"
+  mkfifo "$fifo"
+  # nested_run <record> <runner> <mark>: inside an outer 2s bound, start a 30s
+  # nested bounded command that marks when it runs. As in crew_state_read, the
+  # record is set for the bounded reader only, not for the outer bound.
+  nested_run() {
+    bash -c '
+      . "$1/bin/fm-timeout-lib.sh"
+      fm_run_timed 2 env FM_TIMEOUT_GROUP_RECORD="$4" bash -c '\''
+        . "$3/bin/fm-timeout-lib.sh"; . "$3/bin/fm-nm-run-lib.sh"
+        if [ "$1" = fm_nm_bounded ]; then
+          fm_nm_bounded "$PWD" 30 sh -c "touch \"\$0\"; sleep 30" "$2"
+        else
+          fm_run_timed 30 sh -c "touch \"\$0\"; sleep 30" "$2"
+        fi
+      '\'' _ "$2" "$3" "$1"' _ "$ROOT" "$2" "$3" "$1" >/dev/null 2>&1
+  }
+  for runner in fm_nm_bounded fm_run_timed; do
+    # Control: with a writable record the nested command runs, escapes the
+    # outer bound, and its group is the one recorded.
+    record="$dir/record-$runner"
+    nested_run "$record" "$runner" "$dir/control-$runner"
+    sleep 1
+    [ -e "$dir/control-$runner" ] || fail "$runner: control: the nested command never ran"
+    read -r started < "$record" || fail "$runner: control: no group was recorded"
+    kill -0 -- "-$started" 2>/dev/null || fail "$runner: control: the recorded group is not the escaped one"
+    kill -KILL -- "-$started" 2>/dev/null   # the test's own escaped group
+    # Interrupted: the record cannot be written, the outer bound fires, and the
+    # nested command must never run.
+    mark="$dir/ran-$runner"
+    started=$(date +%s)
+    nested_run "$fifo" "$runner" "$mark"
+    [ "$(( $(date +%s) - started ))" -lt 10 ] || fail "$runner: the outer bound did not end the blocked registration"
+    sleep 1
+    [ ! -e "$mark" ] || fail "$runner: the nested command ran although its group was never recorded"
+  done
+  rm -f "$fifo"
+  pass "a nested group whose registration is interrupted never runs its command"
+}
+
+# The watcher's owned read runs the reader with the forge lookup off and the
+# nested-group record on.
+test_owned_read_skips_the_forge_and_records_groups() {
+  local dir state fakebin log got
+  dir=$(make_case crew-state-no-forge); state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/env.log"
+  cat > "$fakebin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'no_forge=%s record=%s\n' "${FM_CREW_STATE_NO_FORGE:-}" "${FM_TIMEOUT_GROUP_RECORD:-}" >> "$FM_TEST_ENV_LOG"
+printf '%s\n' 'state: done · source: run-step · run passed: PR state unknown (forge read skipped)'
+SH
+  chmod +x "$fakebin/fm-crew-state.sh"
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" FM_TEST_ENV_LOG="$log" bash -c '
+    . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"; crew_absorb_class done' _ "$ROOT")
+  [ "$got" = none ] || fail "a done verdict without forge detail did not class none (got $got)"
+  grep -Fx "no_forge=1 record=$state/.crew-state-nested-crew-state-done" "$log" >/dev/null \
+    || fail "the owned read did not turn the forge lookup off and the group record on: $(cat "$log")"
+  pass "the watcher's owned read skips the forge lookup and records nested groups"
+}
+
+# An early wake after a budget-limited scan must not discard the incomplete
+# round: the restarted watcher wakes on a pending status before its stale scan,
+# and the round, its marker and catch-up all survive for the next watcher.
+test_incomplete_round_survives_an_early_wake() {
+  local dir state fakebin out capture_file n i round_before
+  dir=$(make_case crew-state-round-restart); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  selective_crew_state "$fakebin"
+  printf 'finished, awaiting review' > "$capture_file"
+  for n in hunga zok; do
+    printf 'window=test:fm-%s\nkind=ship\n' "$n" > "$state/$n.meta"
+    printf 'done: PR https://example.test/pr/%s\n' "$n" > "$state/$n.status"
+    printf '%s' "$(seen_sig "$state/$n.status")" > "$state/.seen-${n}_status"
+    printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-test_fm-$n"
+    printf '1\n' > "$state/.count-test_fm-$n"
+  done
+  date +%s > "$state/.crew-state-unavailable"
+  round_watch() {
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-hunga\nfm-zok')" \
+      FM_FAKE_TMUX_CAPTURE="$capture_file" FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" \
+      FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' \
+      FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+      FM_CREW_STATE_READ_SECS=1 FM_CREW_STATE_CYCLE_BUDGET_SECS=1 FM_CREW_STATE_RETRY_SECS=1 "$WATCH" >> "$out" &
+    HUNG_PID=$!
+  }
+  # Watcher A: its first scan reads the hung crew, runs out of budget and
+  # leaves the trailing crew unread.
+  round_watch
+  i=0
+  while [ ! -e "$state/.crew-state-round-incomplete" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  reap "$HUNG_PID"
+  [ -e "$state/.crew-state-round-incomplete" ] || fail "fixture: the budget-limited scan left no incomplete round"
+  round_before=$(cat "$state/.crew-state-round")
+  # Watcher B: a pending captain-relevant status wakes it before its stale scan.
+  printf 'window=test:fm-sig\nkind=ship\n' > "$state/sig.meta"
+  printf 'needs-decision: pick a release target\n' > "$state/sig.status"
+  round_watch
+  wait_for_exit "$HUNG_PID" 100 || { reap "$HUNG_PID"; fail "the restarted watcher did not wake on the pending status"; }
+  # Any ordinary wake before the stale scan finishes is the case (here the
+  # re-arm notice after A was stopped, or the pending status); a completed
+  # scan would instead have read the trailing crew and surfaced it.
+  [ -s "$out" ] || fail "fixture: the restarted watcher exited without a wake"
+  grep -F 'stale: test:fm-zok' "$out" >/dev/null && fail "fixture: the restarted watcher completed its scan"
+  [ -e "$state/.crew-state-round-incomplete" ] || fail "an early wake discarded the incomplete round"
+  [ "$(cat "$state/.crew-state-round")" = "$round_before" ] || fail "an early wake started a new round"
+  [ -e "$state/.crew-state-catchup" ] || fail "an early wake left catch-up off"
+  pass "an incomplete read round survives an early wake and restart until a scan completes"
+}
+
+# The bash timeout fallback cannot record a group before job control creates
+# it, so an owned call refuses before creating anything: no child, no job, no
+# group, no record. The unowned fallback is unchanged, and through the watcher's
+# read the refusal leaves the crew unknown on every retry.
+test_owned_bash_timeout_refuses_before_any_group() {
+  local dir state fakebin out got
+  dir=$(make_case crew-state-bash-refusal); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/primitive.out"
+  # Every command fm_run_bash_timeout executes is traced (DEBUG trap with
+  # function tracing), so the owned call is shown to stop before mktemp, job
+  # control or any launch, not merely to leave nothing behind afterwards. The
+  # unowned control's trace shows the same instrumentation does see them.
+  FM_TIMEOUT_MECHANISM_OVERRIDE=bash bash -c '
+    . "$1/bin/fm-timeout-lib.sh"; d=$2
+    [ "$(fm_timeout_mechanism)" = bash ] || { echo mechanism-not-bash; exit 1; }
+    traced() {  # <trace-file> <command...>
+      local out=$1; shift
+      set -T
+      trap '\''[ "${FUNCNAME[0]:-}" = fm_run_bash_timeout ] && printf "%s\n" "$BASH_COMMAND" >> "$TRACE_OUT"'\'' DEBUG
+      TRACE_OUT=$out "$@"
+      local rc=$?
+      trap - DEBUG; set +T
+      return "$rc"
+    }
+    started=$(date +%s)
+    FM_TIMEOUT_GROUP_RECORD="$d/record" traced "$d/owned.trace" fm_run_bash_timeout 5 sh -c "touch \"\$0\"; sleep 30" "$d/owned-ran"
+    echo "owned_rc=$? owned_secs=$(( $(date +%s) - started ))"
+    pgrep -P "$$" > "$d/children" 2>/dev/null
+    echo "children=$(wc -l < "$d/children" | tr -d " ") jobs=$(jobs -p | wc -l | tr -d " ")"
+    # Control: unowned, the fallback still runs and bounds the command.
+    traced "$d/unowned.trace" fm_run_bash_timeout 1 sh -c "touch \"\$0\"; sleep 30" "$d/unowned-ran"
+    echo "unowned_rc=$?"
+  ' _ "$ROOT" "$dir" > "$out" 2>&1
+  grep -Fx 'owned_rc=125 owned_secs=0' "$out" >/dev/null || fail "the owned bash call did not refuse at once: $(cat "$out")"
+  grep -Fx 'children=0 jobs=0' "$out" >/dev/null || fail "the owned bash call left a child or job behind: $(cat "$out")"
+  [ -s "$dir/owned.trace" ] || fail "instrumentation: the owned call produced no trace"
+  # The first traced line is the caller's own call (the trap fires on entry).
+  grep -v 'TRACE_OUT=' "$dir/owned.trace" | grep -E 'mktemp|set -m|set \+m' >/dev/null \
+    && fail "the owned bash call reached a launch step before refusing: $(cat "$dir/owned.trace")"
+  # Exactly: its local declaration, shift, the record test, return 125.
+  [ "$(grep -vc 'TRACE_OUT=' "$dir/owned.trace")" -eq 4 ] \
+    || fail "the owned bash call ran more than its refusal: $(cat "$dir/owned.trace")"
+  grep -F 'return 125' "$dir/owned.trace" >/dev/null || fail "the owned bash call did not stop at its refusal: $(cat "$dir/owned.trace")"
+  grep -F 'mktemp' "$dir/unowned.trace" >/dev/null \
+    || fail "instrumentation: the unowned control's trace missed mktemp: $(cat "$dir/unowned.trace")"
+  grep -F 'set -m' "$dir/unowned.trace" >/dev/null \
+    || fail "instrumentation: the unowned control's trace missed job control: $(cat "$dir/unowned.trace")"
+  [ ! -e "$dir/owned-ran" ] || fail "the owned bash call ran its command"
+  [ ! -s "$dir/record" ] || fail "the owned bash call wrote a group record: $(cat "$dir/record")"
+  grep -Fx 'unowned_rc=124' "$out" >/dev/null || fail "the unowned bash fallback no longer bounds its command: $(cat "$out")"
+  [ -e "$dir/unowned-ran" ] || fail "control: the unowned bash fallback did not run its command"
+  # Through the watcher's owned read: a reader whose nested call is refused
+  # prints no verdict, so the crew is unknown, on a retry too, and nothing ran.
+  cat > "$fakebin/fm-crew-state.sh" <<SH
+#!/usr/bin/env bash
+. "$ROOT/bin/fm-timeout-lib.sh"
+fm_run_timed 5 sh -c 'touch "\$0"; sleep 30' "$dir/reader-ran" || exit 3
+printf '%s\n' 'state: done · source: status-log · verified'
+SH
+  chmod +x "$fakebin/fm-crew-state.sh"
+  got=$(FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" \
+    FM_CREW_STATE_RETRY_SECS=0 FM_CREW_STATE_READ_SECS=5 bash -c '
+      . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"
+      crew_absorb_class bashcrew; printf " "; crew_absorb_class bashcrew' _ "$ROOT")
+  [ "$got" = "unknown unknown" ] || fail "a refused nested bash call did not leave the crew unknown on read and retry (got $got)"
+  [ ! -e "$dir/reader-ran" ] || fail "the reader's nested bash call ran its command"
+  [ ! -s "$state/.crew-state-nested-crew-state-bashcrew" ] || fail "a nested bash group was recorded: $(cat "$state/.crew-state-nested-crew-state-bashcrew")"
+  pass "an owned bash timeout refuses before creating any group, the unowned fallback is unchanged, and the crew stays unknown"
+}
+
+# The real reader on a host whose only timeout mechanism is the bash fallback.
+# The fixture is an idle direct-PR ship (a live grok pane, so the endpoint
+# reads alive and idle) whose canonical `done: PR <gerrit url> published for
+# review` sends delivery verification to Gerrit (bin/fm-dod-lib.sh
+# fm_dod_gerrit_change_carries_head, a bounded nested read). Controls first
+# prove the real reader reaches that read and that it decides the verdict; then
+# the watcher's owned read on the bash fallback must hold the crew unknown with
+# its stale hash, wedge timer and write tracking untouched.
+gerrit_done_fixture() {  # <dir>
+  local dir=$1 state="$1/state" fakebin="$1/fakebin"
+  mkdir -p "$dir/wt"
+  git -C "$dir/wt" init -q
+  git -C "$dir/wt" -c user.email=t@example.test -c user.name=t commit -q --allow-empty -m init
+  cat > "$fakebin/gerrit-axi" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = show ] || exit 1
+printf '%s\n' "$*" >> "$FM_TEST_GERRIT_LOG"
+printf '{"ok":true,"op":"show","changes":[{"change":%s,"status":"NEW","url":null,"revision":"%s"}]}\n' "${2:-0}" "$FM_TEST_GERRIT_REVISION"
+SH
+  chmod +x "$fakebin/gerrit-axi"
+  # A hermetic no-mistakes: the reader looks one up for a ship branch whenever
+  # the command exists, and whether the host has one on PATH must not change
+  # the fixture. It logs "<process group> <pid> <args>": the group is what
+  # fm_nm_bounded records for it on every mechanism (perl: the child that
+  # leads the group and execs this; GNU/BSD timeout: the timeout process that
+  # leads the group, with this as its child), so C3 can tell those
+  # legitimately published lookups from anything else.
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+pg=$(ps -o pgid= -p "$$" | tr -d ' ')
+printf '%s %s %s\n' "$pg" "$$" "$*" >> "$FM_TEST_NM_LOG"
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
+  # SIMULATED GNU timeout (fixture only, used by the second C3 run): like GNU
+  # timeout without --foreground it leads a new process group and runs the
+  # command as its child, so the recorded group differs from the command's pid.
+  # It is not GNU coreutils; it exercises fm_nm_bounded's GNU branch shape on a
+  # host that has no GNU timeout.
+  mkdir -p "$dir/simgnu"
+  cat > "$dir/simgnu/timeout" <<'PL'
+#!/usr/bin/perl
+my $t = shift; $t =~ s/s$//;
+setpgrp(0, 0);
+my $pid = fork; die "fork" unless defined $pid;
+if (!$pid) { exec @ARGV or exit 127 }
+local $SIG{ALRM} = sub { kill 'TERM', $pid; exit 124 };
+alarm $t; waitpid $pid, 0;
+exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+PL
+  chmod +x "$dir/simgnu/timeout"
+  printf 'idle at the prompt' > "$dir/pane.txt"
+  printf 'window=test:fm-gdone\nkind=ship\nmode=direct-PR\nworktree=%s\nproject=fp\nbackend=tmux\nharness=grok\n' "$dir/wt" > "$state/gdone.meta"
+  printf 'done: PR https://gerrit.example.test/c/fp/+/12 published for review\n' > "$state/gdone.status"
+}
+
+# gerrit_reader <dir> <mechanism> <revision> [record]: one real reader call.
+gerrit_reader() {
+  local dir=$1
+  PATH="${GERRIT_EXTRA_PATH:+$GERRIT_EXTRA_PATH:}$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_STATE_OVERRIDE="$dir/state" FM_TEST_GERRIT_LOG="$dir/gerrit.log" \
+    FM_TEST_NM_LOG="$dir/nm.log" FM_TIMEOUT_MECHANISM_OVERRIDE="$2" FM_TEST_GERRIT_REVISION="$3" env ${4:+"FM_TIMEOUT_GROUP_RECORD=$4"} \
+    perl -e 'alarm 60; exec @ARGV' "$ROOT/bin/fm-crew-state.sh" gdone 2>"$dir/reader.err"
+}
+
+# gerrit_c3_check <dir> <head> <label> <record>: control C3 (see the test
+# below). Bash fallback with a group record, exactly as an owned read would run
+# it: the nested Gerrit read is refused before it starts (no call, no record),
+# and the reader turns that into an ordinary blocked verdict - the defect the
+# entry guard exists for. The reader's no-mistakes lookups run through
+# fm_nm_bounded, which picks its own mechanism (GNU/BSD timeout if present,
+# else perl) and so does publish their groups; exactly those, one per lookup,
+# may appear in the record.
+gerrit_c3_check() {
+  local dir=$1 head=$2 label=$3 record=$4 line nm_before nm_c3 group gerrit_before
+  gerrit_before=$(wc -l < "$dir/gerrit.log" | tr -d ' ')
+  nm_before=$(wc -l < "$dir/nm.log" 2>/dev/null | tr -d ' '); nm_before=${nm_before:-0}
+  line=$(gerrit_reader "$dir" bash "$head" "$record")
+  case "$line" in "state: blocked · source: status-log"*"could not be read"*) ;;
+    *) fail "control C3 $label: a refused nested Gerrit read did not surface as blocked: $line $(cat "$dir/reader.err")" ;; esac
+  [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq "$gerrit_before" ] || fail "control C3 $label: the refused nested read still reached Gerrit"
+  nm_c3=$(sed -n "$((nm_before + 1)),\$p" "$dir/nm.log" 2>/dev/null)
+  printf '%s\n' "$nm_c3" > "$dir/nm-c3-$label.log"
+  [ -n "$nm_c3" ] || fail "control C3 $label: fixture: the reader made no no-mistakes lookup"
+  [ "$(wc -l < "$record" | tr -d ' ')" -eq "$(printf '%s\n' "$nm_c3" | wc -l | tr -d ' ')" ] \
+    || fail "control C3 $label: the record holds other than one group per no-mistakes lookup: $(tr '\n' ' ' < "$record") / $(printf '%s' "$nm_c3" | tr '\n' ' ')"
+  while read -r group; do
+    printf '%s\n' "$nm_c3" | grep -q "^$group " \
+      || fail "control C3 $label: the refused nested read recorded a group ($group is no no-mistakes lookup's group)"
+  done < "$record"
+}
+
+test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
+  local dir state fakebin out key since head line
+  dir=$(make_case crew-state-gerrit-bash); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  gerrit_done_fixture "$dir"
+  head=$(git -C "$dir/wt" rev-parse HEAD)
+  # C1: perl, the change carries HEAD's tree: the real reader asks Gerrit and
+  # accepts the delivery.
+  line=$(gerrit_reader "$dir" perl "$head")
+  case "$line" in "state: done · source: status-log"*) ;; *) fail "control C1: the reader did not accept a verified Gerrit delivery: $line" ;; esac
+  [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq 1 ] || fail "control C1: the reader did not read the Gerrit change"
+  # C2: perl, the change carries another revision: the same read now refuses
+  # the delivery, so the Gerrit verification is what decides the verdict.
+  line=$(gerrit_reader "$dir" perl "$(printf 'a%.0s' $(seq 40))")
+  case "$line" in "state: blocked · source: status-log"*"is not the published content of https://gerrit.example.test/c/fp/+/12"*) ;;
+    *) fail "control C2: a mismatched Gerrit revision did not block the delivery: $line" ;; esac
+  [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq 2 ] || fail "control C2: the reader did not read the Gerrit change"
+  gerrit_c3_check "$dir" "$head" host "$dir/c3.record"
+  # The same check through fm_nm_bounded's GNU-timeout branch, SIMULATED with
+  # the fixture's own timeout (this proves the group identity logic for that
+  # shape, not GNU coreutils itself): the recorded group must be the timeout
+  # process's, which differs from the fake no-mistakes' own pid.
+  GERRIT_EXTRA_PATH="$dir/simgnu" gerrit_c3_check "$dir" "$head" simulated-gnu "$dir/c3-gnu.record"
+  awk '$1 != $2 { found = 1 } END { exit !found }' "$dir/nm-c3-simulated-gnu.log" \
+    || fail "control C3 simulated-gnu: fixture: the lookup ran in its own group, not as the timeout process's child"
+  # The watcher's owned read on the bash fallback: unknown, nothing changed.
+  printf '%s' "$(seen_sig "$state/gdone.status")" > "$state/.seen-gdone_status"
+  key=test_fm-gdone
+  printf '%s' "$(hash_text 'idle at the prompt')" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  since=$(( $(date +%s) - 100 ))
+  printf '%s\n' "$since" > "$state/.stale-since-$key"
+  date +%s > "$state/.writing-since-$key"
+  date +%s > "$state/.crew-state-unavailable"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$ROOT/bin/fm-crew-state.sh" \
+    FM_TEST_GERRIT_LOG="$dir/gerrit.log" FM_TEST_GERRIT_REVISION="$head" FM_TEST_NM_LOG="$dir/nm.log" \
+    FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_CREW_STATE_READ_SECS=5 "$WATCH" > "$out" &
+  HUNG_PID=$!
+  if ! wait_poll_cycle "$state" "$HUNG_PID" 200 || ! wait_poll_cycle "$state" "$HUNG_PID" 200; then
+    reap "$HUNG_PID"; fail "the watcher acted on the refused Gerrit verification: $(cat "$out")"
+  fi
+  reap "$HUNG_PID"
+  grep -F 'stale: test:fm-gdone' "$out" >/dev/null && fail "a stale wake was raised on a read that could not run"
+  [ ! -e "$state/.stale-$key" ] || fail "the stale hash was committed on a read that could not run"
+  [ "$(cat "$state/.stale-since-$key" 2>/dev/null)" = "$since" ] || fail "the wedge timer was changed on a read that could not run"
+  [ -e "$state/.writing-since-$key" ] || fail "write tracking was cleared on a read that could not run"
+  # (Gerrit calls are not counted here: the watcher's other unowned readers,
+  # such as the progress-audit tick, read crew state on their own bounds. That
+  # the guarded stale-scan read never starts the reader is
+  # test_owned_bash_timeout_refuses_before_any_group's reader-level check.)
+  grep -F 'crew state unknown' "$state/.watch-triage.log" >/dev/null || fail "the unavailable read was not recorded"
+  pass "the real reader reaches the Gerrit verification (controls), and on the bash fallback the watcher holds the crew unknown with its stale records untouched"
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -6765,3 +7504,20 @@ test_paused_until_near_future_is_quiet_before_the_cadence
 test_paused_until_beyond_the_cadence_is_quiet_until_that_time
 test_paused_until_eight_days_ahead_stays_quiet
 test_paused_until_that_passed_is_rechecked_before_the_cadence
+test_crew_state_read_is_bounded
+test_hung_crew_state_keeps_the_watcher_cycling
+test_hung_crew_state_surfaces_once
+test_beacon_not_refreshed_inside_a_blocked_read
+test_crew_state_read_rejects_zero_bounds
+test_crew_state_read_ownership_and_backoff
+test_hung_crew_does_not_starve_a_later_crew
+test_beacon_follows_completed_scan_work
+test_nested_reader_group_blocks_the_next_read
+test_crew_state_helper_failure_is_unknown
+test_coverage_outlasts_expiring_backoffs
+test_unavailable_gate_read_keeps_the_wedge_timer
+test_interrupted_group_registration_never_runs
+test_owned_read_skips_the_forge_and_records_groups
+test_incomplete_round_survives_an_early_wake
+test_owned_bash_timeout_refuses_before_any_group
+test_real_reader_gerrit_done_on_bash_fallback_stays_unknown

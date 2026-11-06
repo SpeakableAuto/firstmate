@@ -87,9 +87,23 @@ fm_timeout_mechanism() {
   fi
 }
 
+# FM_TIMEOUT_GROUP_RECORD, when set, names a file that receives the id of every
+# process group a bounded run here creates, written BEFORE that group leaves its
+# caller's group or runs the command. A caller whose own bound cannot reach
+# those groups (bin/fm-classify-lib.sh crew_state_read) then knows of every one
+# that could outlive it; if the id cannot be written the command is never run
+# (status 125). The perl and GNU/BSD timeout paths publish that way. The bash
+# fallback cannot: job control puts its child in a new group at fork, before
+# anything can record it, so with a record requested it refuses (125) before
+# enabling job control or starting anything. Nothing here reads the file or
+# signals what it names.
+
 fm_run_bash_timeout() {
   local seconds=$1 command_status deadline_status child_pid watchdog_pid command_rc recorded_rc monitor_was_on=0
   shift
+  # Owned run requested (FM_TIMEOUT_GROUP_RECORD above): refuse before any group
+  # exists rather than create one nobody can account for.
+  [ -z "${FM_TIMEOUT_GROUP_RECORD:-}" ] || return 125
   command_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-command.XXXXXX" 2>/dev/null) || return 124
   deadline_status="${command_status}.deadline"
   case $- in *m*) monitor_was_on=1 ;; esac
@@ -142,7 +156,13 @@ fm_run_external_timeout() {
   # ignores TERM; timeout then considers the command finished and does not send
   # its configured KILL. Explicitly reap that leftover group on a real timeout.
   # shellcheck disable=SC2016  # Expansion is deliberately deferred to the child shell.
-  "$runner" -k 1 "$seconds" bash -c '
+  # With FM_TIMEOUT_GROUP_RECORD set, a bash that records its own pid and then
+  # execs the runner stands in front of it, so the pid in $! is still the
+  # runner's and its group is published before the command starts.
+  if [ -n "${FM_TIMEOUT_GROUP_RECORD:-}" ]; then
+    # shellcheck disable=SC2016  # Expanded by the child shell.
+    bash -c 'printf "%s\n" "$$" >> "$FM_TIMEOUT_GROUP_RECORD" || exit 125; exec "$@"' _ \
+      "$runner" -k 1 "$seconds" bash -c '
     status_file=$1
     shift
     "$@"
@@ -150,6 +170,16 @@ fm_run_external_timeout() {
     printf "%s\n" "$command_rc" > "$status_file"
     exit "$command_rc"
   ' _ "$status_file" "$@" &
+  else
+    "$runner" -k 1 "$seconds" bash -c '
+    status_file=$1
+    shift
+    "$@"
+    command_rc=$?
+    printf "%s\n" "$command_rc" > "$status_file"
+    exit "$command_rc"
+  ' _ "$status_file" "$@" &
+  fi
   runner_pid=$!
   if wait "$runner_pid"; then
     runner_rc=0
@@ -185,7 +215,7 @@ fm_run_timed() {  # <seconds> <command...>
     timeout) fm_run_external_timeout timeout "$seconds" "$@" ;;
     gtimeout) fm_run_external_timeout gtimeout "$seconds" "$@" ;;
     perl)
-      perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit(($? & 127) ? 128 + ($? & 127) : $? >> 8)' \
+      perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { if (my $rec = $ENV{FM_TIMEOUT_GROUP_RECORD}) { open(my $fh, ">>", $rec) or exit 125; print {$fh} "$$\n" or exit 125; close($fh) or exit 125 } setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit(($? & 127) ? 128 + ($? & 127) : $? >> 8)' \
         "$seconds" "$@"
       ;;
     bash) fm_run_bash_timeout "$seconds" "$@" ;;
