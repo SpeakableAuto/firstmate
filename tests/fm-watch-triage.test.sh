@@ -6888,6 +6888,144 @@ test_beacon_follows_completed_scan_work() {
   pass "the beacon follows completed scan work and still ages inside a blocked read"
 }
 
+# nested_crew_state <fakebin>: a reader that, like the real one, runs its slow
+# call through fm_nm_bounded, whose timeout puts that call in a process group of
+# its own. The call outlives the reader's outer bound.
+nested_crew_state() {  # <fakebin>
+  cat > "$1/fm-crew-state.sh" <<SH
+#!/usr/bin/env bash
+[ -z "\${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "\${1:-}" >> "\$FM_FAKE_CREW_STATE_LOG"
+. "$ROOT/bin/fm-nm-run-lib.sh"
+fm_nm_bounded "\$PWD" 30 sleep 30
+printf '%s\n' 'state: paused · source: status-log · answered late'
+SH
+  chmod +x "$1/fm-crew-state.sh"
+}
+
+# The real nested reader path: the inner group survives the outer kill, is
+# recorded, and blocks the next read of that crew until it is gone.
+test_nested_reader_group_blocks_the_next_read() {
+  local dir state fakebin log got nested group
+  dir=$(make_case crew-state-nested); state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/reads.log"
+  nested_crew_state "$fakebin"
+  read_nested() {
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" FM_CREW_STATE_RETRY_SECS=0 \
+      FM_FAKE_CREW_STATE_LOG="$log" FM_CREW_STATE_READ_SECS=1 bash -c '
+        . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"; crew_absorb_class nest' _ "$ROOT"
+  }
+  got=$(read_nested)
+  [ "$got" = unknown ] || fail "the timed-out nested read was not unknown (got $got)"
+  nested="$state/.crew-state-nested-crew-state-nest"
+  [ -s "$nested" ] || fail "the nested timeout group was not recorded"
+  read -r group < "$nested"
+  kill -0 -- "-$group" 2>/dev/null || fail "fixture: the nested group did not outlive the outer bound"
+  got=$(read_nested)
+  [ "$got" = unknown ] || fail "a read started while the nested group was alive (got $got)"
+  [ "$(wc -l < "$log" | tr -d ' ')" -eq 1 ] || fail "a second reader started behind a live nested group"
+  # The test owns that group; once it is gone the crew is read again.
+  kill -KILL -- "-$group" 2>/dev/null
+  sleep 0.3
+  got=$(read_nested)
+  [ "$(wc -l < "$log" | tr -d ' ')" -eq 2 ] || fail "the crew was not read again after its nested group ended"
+  [ "$got" = unknown ] || fail "fixture: the third nested read should also time out (got $got)"
+  read -r group < "$nested"; kill -KILL -- "-$group" 2>/dev/null
+  pass "a nested reader group that outlives its bound is recorded and blocks the next read until it ends"
+}
+
+# Ownership-runner setup failure is unavailable evidence, not a negative verdict:
+# a terminal stale is neither committed nor surfaced on it.
+test_crew_state_helper_failure_is_unknown() {
+  local dir state fakebin out capture_file key got
+  dir=$(make_case crew-state-helper-failure); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  : > "$state/.progress-audit"   # obstructs the ownership runner's directory
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" \
+    FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' bash -c '
+      . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"; crew_absorb_class done' _ "$ROOT")
+  [ "$got" = unknown ] || fail "an ownership-runner setup failure was not unknown (got $got)"
+  printf 'finished, awaiting review' > "$capture_file"
+  printf 'window=test:fm-done\nkind=ship\n' > "$state/done.meta"
+  printf 'done: PR https://example.test/pr/3\n' > "$state/done.status"
+  printf '%s' "$(seen_sig "$state/done.status")" > "$state/.seen-done_status"
+  key=test_fm-done
+  printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  date +%s > "$state/.crew-state-unavailable"
+  date +%s > "$state/.progress-audit-unavailable"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-done FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_CREW_STATE_READ_SECS=1 "$WATCH" > "$out" &
+  HUNG_PID=$!
+  if ! wait_poll_cycle "$state" "$HUNG_PID" 150 || ! wait_poll_cycle "$state" "$HUNG_PID" 150; then
+    reap "$HUNG_PID"; fail "the watcher stopped on a helper failure: $(cat "$out")"
+  fi
+  reap "$HUNG_PID"
+  grep -F 'stale: test:fm-done' "$out" >/dev/null && fail "a terminal stale surfaced on a helper failure"
+  [ ! -e "$state/.stale-$key" ] || fail "a terminal stale was committed on a helper failure"
+  pass "an ownership-runner setup failure is unknown, and no stale record is committed on it"
+}
+
+# Coverage with backoffs that expire before the scan reaches a later crew: four
+# hung crews, a one-second budget and one-second backoff. The round deferral
+# still gets the trailing healthy crew read.
+test_coverage_outlasts_expiring_backoffs() {
+  local dir state fakebin out capture_file n
+  dir=$(make_case crew-state-coverage); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  selective_crew_state "$fakebin"
+  printf 'finished, awaiting review' > "$capture_file"
+  for n in hunga hungb hungc hungd zok; do
+    printf 'window=test:fm-%s\nkind=ship\n' "$n" > "$state/$n.meta"
+    printf 'done: PR https://example.test/pr/%s\n' "$n" > "$state/$n.status"
+    printf '%s' "$(seen_sig "$state/$n.status")" > "$state/.seen-${n}_status"
+    printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-test_fm-$n"
+    printf '1\n' > "$state/.count-test_fm-$n"
+  done
+  date +%s > "$state/.crew-state-unavailable"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-hunga\nfm-hungb\nfm-hungc\nfm-hungd\nfm-zok')" \
+    FM_FAKE_TMUX_CAPTURE="$capture_file" FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_CREW_STATE_READ_SECS=1 FM_CREW_STATE_CYCLE_BUDGET_SECS=1 FM_CREW_STATE_RETRY_SECS=1 "$WATCH" > "$out" &
+  HUNG_PID=$!
+  wait_for_exit "$HUNG_PID" 400 || { reap "$HUNG_PID"; tail -20 "$state/.watch-triage.log" >&2; fail "the trailing healthy crew was never read: $(cat "$out")"; }
+  grep -Fx 'stale: test:fm-zok' "$out" >/dev/null || fail "the trailing healthy crew's stale did not surface: $(cat "$out")"
+  grep -F 'stale: test:fm-hung' "$out" >/dev/null && fail "a hung crew was surfaced as stale on no verdict"
+  pass "every crew is read in turn even when backoffs expire before the scan reaches a later crew"
+}
+
+# End to end at the wedge threshold: an unavailable parked-gate read holds the
+# escalation without resetting the timer or claiming a verified wait.
+test_unavailable_gate_read_keeps_the_wedge_timer() {
+  local dir state fakebin out capture window key before after n
+  local escalated='needs-decision [key=nm-01RUNGATE-review]: the gate raised an authority question
+working: still parked at that gate'
+  dir=$(wedge_threshold_fixture parked-gate-unavailable "$escalated" 2000 500)
+  arm_parked_gate "$dir"
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+  hung_crew_state "$fakebin"
+  date +%s > "$state/.crew-state-unavailable"
+  before=$(cat "$state/.stale-since-$key")
+  export FM_CREW_STATE_READ_SECS=1
+  n=1
+  while [ "$n" -le 2 ]; do
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" '' absorb \
+      || { unset FM_CREW_STATE_READ_SECS; fail "an unavailable gate read escalated or stopped the watcher: $(cat "$out")"; }
+    n=$((n + 1))
+  done
+  unset FM_CREW_STATE_READ_SECS
+  after=$(cat "$state/.stale-since-$key" 2>/dev/null)
+  [ "$after" = "$before" ] || fail "an unavailable gate read reset the wedge timer ($before -> $after)"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "an unavailable gate read counted an escalation"
+  grep -F 'verified wait' "$out" >/dev/null && fail "an unavailable gate read was reported as a verified wait"
+  grep -F 'gate evidence unavailable' "$state/.watch-triage.log" >/dev/null \
+    || fail "the held escalation was not recorded"
+  pass "an unavailable parked-gate read holds the escalation and keeps the wedge timer and history"
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -7045,3 +7183,7 @@ test_crew_state_read_rejects_zero_bounds
 test_crew_state_read_ownership_and_backoff
 test_hung_crew_does_not_starve_a_later_crew
 test_beacon_follows_completed_scan_work
+test_nested_reader_group_blocks_the_next_read
+test_crew_state_helper_failure_is_unknown
+test_coverage_outlasts_expiring_backoffs
+test_unavailable_gate_read_keeps_the_wedge_timer

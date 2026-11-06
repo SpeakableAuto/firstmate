@@ -77,16 +77,32 @@ FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 #     that survives its kill in uninterruptible I/O keeps its ownership record,
 #     and no second read for that crew starts until the first is gone; nothing
 #     here signals a recorded process;
+#   - nested readers: fm_nm_bounded (bin/fm-nm-run-lib.sh) gives its own child
+#     a separate process group the outer kill cannot reach, so the read exports
+#     FM_NM_GROUP_RECORD=.crew-state-nested-<slot> and that runner appends each
+#     group it creates; the file lives outside the reclaimable slot, and no new
+#     read of that crew starts while any recorded group is still alive;
 #   - retry backoff: a timed-out read stamps .crew-state-backoff-<id>, and that
-#     crew is not read again for FM_CREW_STATE_RETRY_SECS (default 300), so crews
-#     on a hung drive cannot spend every cycle's budget ahead of healthy ones.
+#     crew is not read again for FM_CREW_STATE_RETRY_SECS (default 300);
+#   - coverage: a read refused by the admission deadline marks the round
+#     incomplete (.crew-state-round-incomplete). The watcher keeps the round
+#     (.crew-state-round) while the previous cycle left it incomplete, and in
+#     such a catch-up cycle a crew already tried in this round
+#     (.crew-state-tried-<slot>, written by every admitted read) is deferred at
+#     no cost, so the cycle's budget goes to crews not yet tried. The first
+#     read a cycle admits is never refused by the deadline, so each catch-up
+#     cycle tries at least one untried crew, and every crew is tried before
+#     any is tried twice, however many reads time out ahead of it.
 # Without it, a single bounded read writes to a temporary file rather than a
 # pipe, so a surviving reader cannot hold the caller's output open.
-# The reader's own exit status is ignored, as callers always did; only the
-# bound, the deadline, ownership or backoff makes this return 1.
+# The reader's own exit status is ignored when it printed a `state:` verdict,
+# as callers always did; a failure with no verdict line (the reader, or the
+# ownership runner around it, could not run) is unavailable, never an empty
+# verdict that would read as `none`.
 crew_state_read() {  # <id>
   local id=$1 secs=${FM_CREW_STATE_READ_SECS:-10} deadline=${FM_CREW_STATE_DEADLINE:-}
   local own=${FM_CREW_STATE_OWN_STATE:-} retry=${FM_CREW_STATE_RETRY_SECS:-300} now tmp rc=0 slot stamp
+  local nested group live round tried
   case "$secs" in ''|*[!0-9]*) secs=10 ;; esac
   secs=$((10#$secs))
   [ "$secs" -ge 1 ] || secs=10
@@ -94,24 +110,56 @@ crew_state_read() {  # <id>
   case "$retry" in ''|*[!0-9]*) retry=300 ;; esac
   retry=$((10#$retry))
   now=$(date +%s)
+  [ -z "$own" ] || declare -F fm_progress_audit_run >/dev/null || own=
   case "$deadline" in
     ''|*[!0-9]*) ;;
-    *) [ "$now" -lt "$((10#$deadline))" ] || return 1 ;;
+    *)
+      # With ownership on, the first admitted read of a cycle is never refused
+      # (.crew-state-cycle-read names the cycle that already started one), so
+      # every cycle makes progress however long its earlier work took.
+      if [ "$now" -ge "$((10#$deadline))" ] \
+        && { [ -z "$own" ] || [ "$(cat "$own/.crew-state-cycle-read" 2>/dev/null)" = "$deadline" ]; }; then
+        [ -z "$own" ] || : > "$own/.crew-state-round-incomplete" 2>/dev/null || true
+        return 1
+      fi
+      ;;
   esac
-  if [ -n "$own" ] && declare -F fm_progress_audit_run >/dev/null; then
+  if [ -n "$own" ]; then
     slot="crew-state-$(printf '%s' "$id" | tr -c 'A-Za-z0-9._-' '_')"
     stamp="$own/.crew-state-backoff-$slot"
+    nested="$own/.crew-state-nested-$slot"
+    tried="$own/.crew-state-tried-$slot"
+    if [ -e "$nested" ]; then
+      live=0
+      while read -r group; do
+        case "$group" in ''|0|1|*[!0-9]*) continue ;; esac
+        if kill -0 -- "-$group" 2>/dev/null; then live=1; break; fi
+      done < "$nested"
+      [ "$live" -eq 0 ] || return 1
+      rm -f "$nested"
+    fi
     if [ -s "$stamp" ]; then
       read -r rc < "$stamp" 2>/dev/null || rc=0
       case "$rc" in ''|*[!0-9]*) rc=0 ;; esac
       [ "$((now - rc))" -ge "$retry" ] || return 1
     fi
+    round=$(cat "$own/.crew-state-round" 2>/dev/null) || round=0
+    if [ -e "$own/.crew-state-catchup" ] && [ -s "$tried" ]; then
+      read -r live group < "$tried" 2>/dev/null || live=''
+      # Tried in this round by an earlier cycle: defer. A second read in the
+      # same cycle (same deadline) is still admitted.
+      [ "$live" != "$round" ] || [ "$group" = "$deadline" ] || return 1
+    fi
+    printf '%s %s\n' "$round" "$deadline" > "$tried" 2>/dev/null || true
+    printf '%s\n' "$deadline" > "$own/.crew-state-cycle-read" 2>/dev/null || true
     rc=0
-    tmp=$(fm_progress_audit_run "$own" "$slot" "$secs" "$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || rc=$?
+    tmp=$(fm_progress_audit_run "$own" "$slot" "$secs" \
+      env "FM_NM_GROUP_RECORD=$nested" "$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || rc=$?
     if fm_timed_out "$rc"; then
       printf '%s\n' "$now" > "$stamp" 2>/dev/null || true
       return 1
     fi
+    case "$tmp" in state:*) ;; *) [ "$rc" -eq 0 ] && [ -n "$tmp" ] || return 1 ;; esac
     rm -f "$stamp"
     printf '%s\n' "$tmp"
     return 0
@@ -119,6 +167,10 @@ crew_state_read() {  # <id>
   tmp=$(mktemp "${TMPDIR:-/tmp}/fm-crew-state.XXXXXX") || return 1
   fm_run_timed "$secs" "$FM_CREW_STATE_BIN" "$id" > "$tmp" 2>/dev/null < /dev/null || rc=$?
   if fm_timed_out "$rc"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ] && ! grep -q '^state:' "$tmp" 2>/dev/null; then
     rm -f "$tmp"
     return 1
   fi

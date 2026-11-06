@@ -1349,12 +1349,10 @@ wedge_wait_evidence() {  # <task> -> one wait_record on stdout
   [ -e "$CONFIG/wedge-defer-parked-gate" ] || return 1
   status_has_open_needs_decision "$statusf" || return 1
   run=$(crew_gate_awaits_human_decision "$task") || {
-    # Could not look: defer on the recheck cadence rather than escalate a
-    # wedge the gate read might have explained.
+    # Could not look: status 3 tells wedge_timer_check the evidence is
+    # unavailable, which is neither a verified wait nor its absence.
     [ "$?" -eq 2 ] || return 1
-    wait_record 'gate unverified (crew-state read unavailable)' 'current-state read timed out or was skipped' \
-      supervisor 'inspect the crew directly; its worktree drive may be slow or hung' ''
-    return 0
+    return 3
   }
   if status_has_open_needs_decision "$statusf" "$run"; then
     wait_record 'verified wait at a parked gate' "awaiting firstmate's ask-user decision" \
@@ -1556,7 +1554,7 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
 # already own on their existing bounded cadences and only a pane that would
 # otherwise alarm pays for a backend read.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task> <pane-hash>
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence evidence_rc
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -1570,7 +1568,18 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
       fm_epoch_seconds_to age
       age=$(( age - since ))
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
-        if evidence=$(wedge_wait_evidence "$task") &&
+        evidence_rc=0
+        evidence=$(wedge_wait_evidence "$task") || evidence_rc=$?
+        if [ "$evidence_rc" -eq 3 ]; then
+          # The gate read that might explain the quiet could not run. Hold this
+          # escalation without touching the timer, its write tracking or the
+          # escalation count, so the next poll decides on a real verdict, and
+          # list the crew in the unavailable-read notice.
+          triage_log "held $label escalation: gate evidence unavailable, timer and history kept: $win"
+          crew_state_unknown "$win" "$task"
+          return 0
+        fi
+        if [ "$evidence_rc" -eq 0 ] &&
            wedge_defer_wait "$win" "$since_file" "$label" "$age" "$evidence"; then
           return 0
         fi
@@ -1782,6 +1791,25 @@ crew_state_unknown_report() {
   fm_wake_append check crew-state "$msg" || exit 1
   date +%s > "$STATE/.crew-state-unavailable"
   wake "$msg"
+}
+
+# crew_state_round_start: one read round lasts until a cycle finishes without
+# the read-admission deadline refusing any read. While the last cycle left the
+# round incomplete, the round number is kept and catch-up is on, so
+# crew_state_read (bin/fm-classify-lib.sh) defers crews already tried in it and
+# spends the budget on crews not yet tried; otherwise a new round starts and
+# catch-up is off. The files persist, so a restarted watcher keeps its place.
+crew_state_round_start() {
+  local round
+  if [ -e "$STATE/.crew-state-round-incomplete" ]; then
+    rm -f "$STATE/.crew-state-round-incomplete"
+    : > "$STATE/.crew-state-catchup"
+    return 0
+  fi
+  round=$(cat "$STATE/.crew-state-round" 2>/dev/null) || round=0
+  case "$round" in ''|*[!0-9]*) round=0 ;; esac
+  printf '%s\n' "$((10#$round + 1))" > "$STATE/.crew-state-round"
+  rm -f "$STATE/.crew-state-catchup"
 }
 
 # watcher_progress_beat: refresh the liveness beacon at a completed-work
@@ -2783,6 +2811,7 @@ while :; do
   # child outliving the cycle must not inherit it.
   FM_CREW_STATE_DEADLINE=$(( $(date +%s) + CREW_STATE_CYCLE_BUDGET_SECS ))
   CREW_STATE_UNKNOWN_TASKS=
+  crew_state_round_start
 
   # A handling successor must surface rows added after its inherited baseline
   # before slower fleet checks can hold this cycle for minutes.

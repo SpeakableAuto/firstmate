@@ -5,8 +5,8 @@
 PR: https://github.com/SpeakableAuto/firstmate/pull/63
 The watcher's stale scan reads each parked or held crew's current state, and that read runs Git in the crew's task folder; on a slow or hung drive it blocked with no limit and the monitoring heartbeat went stale.
 Each read now has a 10-second limit, and no new read starts 120 seconds into a cycle (`FM_CREW_STATE_READ_SECS`, `FM_CREW_STATE_CYCLE_BUDGET_SECS`).
-A crew whose read timed out is not read again for 5 minutes (`FM_CREW_STATE_RETRY_SECS`), so healthy crews behind it still get checked, and a reader stuck on the drive keeps its ownership record so reads cannot pile up behind it.
-A read that hits the limit is recorded as unknown: nothing is absorbed, paused, surfaced as finished or escalated on it, and firstmate gets one notice listing every such crew per recheck window.
+A crew whose read timed out is not read again for 5 minutes (`FM_CREW_STATE_RETRY_SECS`), and while a cycle runs out of read time, crews already tried wait until every crew has had a turn, so healthy crews behind slow ones are always reached. A reader stuck on the drive, including its inner no-mistakes call, keeps an ownership record so reads cannot pile up behind it.
+A read that hits the limit, or could not run at all, is recorded as unknown: nothing is absorbed, paused, surfaced as finished or escalated on it, no wedge timer is reset, and firstmate gets one notice listing every such crew per recheck window.
 During a long scan the heartbeat moves only when a window or check finishes (`FM_WATCHER_PROGRESS_BEAT_SECS`), so a watcher stuck on one operation still shows as stale.
 Watch for repeated crew-state notices: they mean a task folder's drive is slow, which this does not fix.
 Deployed: no; no operating home was changed.
