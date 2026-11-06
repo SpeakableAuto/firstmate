@@ -7208,31 +7208,77 @@ SH
   pass "an owned bash timeout refuses before creating any group, the unowned fallback is unchanged, and the crew stays unknown"
 }
 
-# The real reader on a host whose only timeout mechanism is the bash fallback:
-# an idle direct-PR ship whose done: names a Gerrit change needs a bounded live
-# verification the fallback cannot run owned. The watcher must hold that crew
-# unknown - no stale wake, and its stale hash, wedge timer and write tracking
-# untouched - rather than act on a "blocked" verdict the refusal would produce.
-test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
-  local dir state fakebin out capture_file key since
-  dir=$(make_case crew-state-gerrit-bash); state="$dir/state"; fakebin="$dir/fakebin"
-  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+# The real reader on a host whose only timeout mechanism is the bash fallback.
+# The fixture is an idle direct-PR ship (a live grok pane, so the endpoint
+# reads alive and idle) whose canonical `done: PR <gerrit url> published for
+# review` sends delivery verification to Gerrit (bin/fm-dod-lib.sh
+# fm_dod_gerrit_change_carries_head, a bounded nested read). Controls first
+# prove the real reader reaches that read and that it decides the verdict; then
+# the watcher's owned read on the bash fallback must hold the crew unknown with
+# its stale hash, wedge timer and write tracking untouched.
+gerrit_done_fixture() {  # <dir>
+  local dir=$1 state="$1/state" fakebin="$1/fakebin"
   mkdir -p "$dir/wt"
   git -C "$dir/wt" init -q
   git -C "$dir/wt" -c user.email=t@example.test -c user.name=t commit -q --allow-empty -m init
-  printf 'finished, change published' > "$capture_file"
-  printf 'window=test:fm-gdone\nkind=ship\nmode=direct-PR\nworktree=%s\nproject=fp\nbackend=tmux\n' "$dir/wt" > "$state/gdone.meta"
-  printf 'done: published https://gerrit.example.test/c/fp/+/12\n' > "$state/gdone.status"
+  cat > "$fakebin/gerrit-axi" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = show ] || exit 1
+printf '%s\n' "$*" >> "$FM_TEST_GERRIT_LOG"
+printf '{"ok":true,"op":"show","changes":[{"change":%s,"status":"NEW","url":null,"revision":"%s"}]}\n' "${2:-0}" "$FM_TEST_GERRIT_REVISION"
+SH
+  chmod +x "$fakebin/gerrit-axi"
+  printf 'idle at the prompt' > "$dir/pane.txt"
+  printf 'window=test:fm-gdone\nkind=ship\nmode=direct-PR\nworktree=%s\nproject=fp\nbackend=tmux\nharness=grok\n' "$dir/wt" > "$state/gdone.meta"
+  printf 'done: PR https://gerrit.example.test/c/fp/+/12 published for review\n' > "$state/gdone.status"
+}
+
+# gerrit_reader <dir> <mechanism> <revision> [record]: one real reader call.
+gerrit_reader() {
+  local dir=$1
+  PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_STATE_OVERRIDE="$dir/state" FM_TEST_GERRIT_LOG="$dir/gerrit.log" \
+    FM_TIMEOUT_MECHANISM_OVERRIDE="$2" FM_TEST_GERRIT_REVISION="$3" env ${4:+"FM_TIMEOUT_GROUP_RECORD=$4"} \
+    perl -e 'alarm 60; exec @ARGV' "$ROOT/bin/fm-crew-state.sh" gdone 2>"$dir/reader.err"
+}
+
+test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
+  local dir state fakebin out key since head line
+  dir=$(make_case crew-state-gerrit-bash); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  gerrit_done_fixture "$dir"
+  head=$(git -C "$dir/wt" rev-parse HEAD)
+  # C1: perl, the change carries HEAD's tree: the real reader asks Gerrit and
+  # accepts the delivery.
+  line=$(gerrit_reader "$dir" perl "$head")
+  case "$line" in "state: done · source: status-log"*) ;; *) fail "control C1: the reader did not accept a verified Gerrit delivery: $line" ;; esac
+  [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq 1 ] || fail "control C1: the reader did not read the Gerrit change"
+  # C2: perl, the change carries another revision: the same read now refuses
+  # the delivery, so the Gerrit verification is what decides the verdict.
+  line=$(gerrit_reader "$dir" perl "$(printf 'a%.0s' $(seq 40))")
+  case "$line" in "state: blocked · source: status-log"*"is not the published content of https://gerrit.example.test/c/fp/+/12"*) ;;
+    *) fail "control C2: a mismatched Gerrit revision did not block the delivery: $line" ;; esac
+  [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq 2 ] || fail "control C2: the reader did not read the Gerrit change"
+  # C3: bash fallback with a group record, exactly as an owned read would run
+  # it: the nested Gerrit read is refused before it starts (no call, no
+  # record), and the reader turns that into an ordinary blocked verdict - the
+  # defect the entry guard exists for.
+  line=$(gerrit_reader "$dir" bash "$head" "$dir/c3.record")
+  case "$line" in "state: blocked · source: status-log"*"could not be read"*) ;;
+    *) fail "control C3: a refused nested Gerrit read did not surface as blocked: $line $(cat "$dir/reader.err")" ;; esac
+  [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq 2 ] || fail "control C3: the refused nested read still reached Gerrit"
+  [ ! -s "$dir/c3.record" ] || fail "control C3: the refused nested read recorded a group"
+  # The watcher's owned read on the bash fallback: unknown, nothing changed.
   printf '%s' "$(seen_sig "$state/gdone.status")" > "$state/.seen-gdone_status"
   key=test_fm-gdone
-  printf '%s' "$(hash_text 'finished, change published')" > "$state/.hash-$key"
+  printf '%s' "$(hash_text 'idle at the prompt')" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
   since=$(( $(date +%s) - 100 ))
   printf '%s\n' "$since" > "$state/.stale-since-$key"
   date +%s > "$state/.writing-since-$key"
   date +%s > "$state/.crew-state-unavailable"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$ROOT/bin/fm-crew-state.sh" \
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$ROOT/bin/fm-crew-state.sh" \
+    FM_TEST_GERRIT_LOG="$dir/gerrit.log" FM_TEST_GERRIT_REVISION="$head" \
     FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_CREW_STATE_READ_SECS=5 "$WATCH" > "$out" &
   HUNG_PID=$!
@@ -7244,8 +7290,12 @@ test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
   [ ! -e "$state/.stale-$key" ] || fail "the stale hash was committed on a read that could not run"
   [ "$(cat "$state/.stale-since-$key" 2>/dev/null)" = "$since" ] || fail "the wedge timer was changed on a read that could not run"
   [ -e "$state/.writing-since-$key" ] || fail "write tracking was cleared on a read that could not run"
+  # (Gerrit calls are not counted here: the watcher's other unowned readers,
+  # such as the progress-audit tick, read crew state on their own bounds. That
+  # the guarded stale-scan read never starts the reader is
+  # test_owned_bash_timeout_refuses_before_any_group's reader-level check.)
   grep -F 'crew state unknown' "$state/.watch-triage.log" >/dev/null || fail "the unavailable read was not recorded"
-  pass "the real reader's Gerrit done check on the bash fallback leaves the crew unknown and its stale records untouched"
+  pass "the real reader reaches the Gerrit verification (controls), and on the bash fallback the watcher holds the crew unknown with its stale records untouched"
 }
 
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
