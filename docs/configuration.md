@@ -1449,6 +1449,9 @@ A drive profile also requires `data_volume.path` and a positive `data_volume.min
 Missing measurements, missing or unwritable directories, unmounted drives and insufficient internal Data space each produce a named refusal.
 The capacity ledger retains each condition and sends one ordinary wake when it first fails, with another allowed only after recovery or a different condition.
 A Treehouse root that fails only because its drive is unavailable is still named in the refusal but does not raise its own wake, so one drive outage produces one wake.
+Placement makes every drive and data-volume read (mount, directory, write-probe, free-space and Treehouse root checks) in a child process with a deadline of `FM_PLACEMENT_DRIVE_SECS` seconds, default 10.
+A drive that does not answer in time refuses with `required machine drive unavailable` and a data volume with `machine disk measurement unavailable`, so spawn and the dispatch resolver move on instead of waiting.
+The timed-out reader is killed and reaped for at most one second, then abandoned, because a read stuck in the kernel may not die on a signal; it holds none of the caller's output, so the command still returns.
 
 Drive profiles require a repository-local, non-symlinked `treehouse.toml` with an absolute literal top-level `root` naming an existing real directory under the drive.
 Quoted string values and ordinary top-level assignments are supported; complex root syntax, multiline assignments and custom `worktree_path` layouts are refused.

@@ -23,6 +23,9 @@ due emits 'due' on a 900-second cadence or a changed resource fingerprint;
 it never launches work. The watcher owns rechecks and normal wake delivery.
 urgent prints yes or no for the reserved-slot rule (see urgent() below);
 urgent-live counts the named live tasks it marks, from backlog JSON on stdin.
+pool, assess and worktree read the machine drive and data volume only in a
+child process (see bounded() below); FM_PLACEMENT_DRIVE_SECS (default 10) is
+that read's deadline, after which placement refuses the drive and moves on.
 """
 
 import fcntl
@@ -32,6 +35,7 @@ import math
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -99,6 +103,95 @@ def result(passed, reason):
 
 def failure(reason, condition):
     return dict(result(False, reason), condition=condition, alert=True)
+
+
+DRIVE_SECS = 10
+DRIVE_UNAVAILABLE = "required machine drive unavailable"
+
+
+class Stalled(Exception):
+    """A drive or volume read did not finish within its deadline."""
+
+
+def drive_seconds():
+    try:
+        value = float(os.environ.get("FM_PLACEMENT_DRIVE_SECS", ""))
+    except ValueError:
+        return DRIVE_SECS
+    return value if math.isfinite(value) and value > 0 else DRIVE_SECS
+
+
+def bounded(probe, *args):
+    """Run one drive-touching read in a child process with a deadline.
+
+    A stalled drive can hold stat, statvfs, access or open in the kernel with
+    no timeout, so only the child ever makes those reads. On the deadline the
+    child's own group is killed, the reap waits at most one second, and an
+    unkillable child is abandoned: it holds no descriptor of this process's
+    caller, so a command substitution around this command still returns.
+    """
+    deadline = drive_seconds()
+    child = subprocess.Popen([sys.executable, os.path.abspath(__file__), "probe", probe],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             cwd="/", start_new_session=True)
+    try:
+        out, _ = child.communicate(json.dumps(args).encode(), timeout=deadline)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            child.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        for stream in (child.stdin, child.stdout):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        raise Stalled(f"did not finish within {deadline:g}s") from None
+    try:
+        answer = json.loads(out)
+    except ValueError:
+        raise OSError(f"drive check exited {child.returncode} without a result") from None
+    if "error" in answer:
+        kind = {"KeyError": KeyError, "TypeError": TypeError, "OSError": OSError}.get(answer.get("type"), ValueError)
+        raise kind(answer["error"])
+    return answer["value"]
+
+
+def drive_ready(drive):
+    drive = Path(drive)
+    return real_directory(drive) and drive.is_mount() and os.access(drive, os.W_OK)
+
+
+def free_gib(path):
+    stat = os.statvfs(path)
+    return stat.f_bavail * stat.f_frsize / 1024**3
+
+
+def probe(name):
+    """Child side of bounded(): JSON arguments on stdin, one JSON answer out."""
+    function = {"external": external_checks, "treehouse": treehouse_root,
+                "drive": drive_ready, "free": free_gib}[name]
+    try:
+        answer = {"value": function(*json.load(sys.stdin))}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        kind = next(k.__name__ for k in (KeyError, TypeError, OSError, ValueError) if isinstance(error, k))
+        answer = {"error": error.args[0] if kind == "KeyError" and error.args else str(error), "type": kind}
+    print(json.dumps(answer, separators=(",", ":"), allow_nan=False))
+
+
+def stalled_external(profile, project, error):
+    """The refusal for a drive that stopped answering: one alert, for the drive."""
+    drive = profile.get("drive")
+    if drive is None:
+        return {}
+    unavailable = f"{DRIVE_UNAVAILABLE}: {drive} (drive checks {error})"
+    return {"drive": failure(unavailable, f"stalled:{drive}"),
+            "data-disk": result(False, f"data volume not measured: {unavailable}"),
+            "treehouse-root": result(False, f"treehouse-root: not checked for {project} (drive unavailable)")}
 
 
 def real_directory(path):
@@ -352,7 +445,9 @@ def assess(config, data, task, harness, model, effort):
         if checks["slots"].get("status") == "not-installed":
             checks["slots"] = result(False, "slot room seam absent")
         try:
-            checks.update(external_checks(profile, evidence.get("project", "")))
+            checks.update(bounded("external", profile, evidence.get("project", "")))
+        except Stalled as stalled:
+            checks.update(stalled_external(profile, evidence.get("project", ""), stalled))
         except (ValueError, TypeError, OSError) as error:
             checks["drive"] = failure(f"external placement configuration invalid: {error}", "invalid-external-config")
     decision["failed"] = [key for key, value in checks.items() if value["status"] != "pass"]
@@ -506,13 +601,19 @@ def pool(config, count, live_urgent=0):
         if free < profile["min_free_memory_percent"] or swap > profile["max_swap_mib"]:
             raise ValueError("machine memory or swap limit")
         if profile.get("drive"):
-            drive = Path(profile["drive"])
-            if not real_directory(drive) or not drive.is_mount() or not os.access(drive, os.W_OK):
-                raise ValueError("required machine drive unavailable")
+            try:
+                ready = bounded("drive", profile["drive"])
+            except Stalled as stalled:
+                raise ValueError(f"{DRIVE_UNAVAILABLE} (drive check {stalled})") from None
+            if not ready:
+                raise ValueError(DRIVE_UNAVAILABLE)
         volume = profile.get("data_volume")
         if volume:
-            stat = os.statvfs(volume["path"])
-            if stat.f_bavail * stat.f_frsize / 1024**3 < volume["min_free_gib"]:
+            try:
+                free = bounded("free", volume["path"])
+            except Stalled as stalled:
+                raise ValueError(f"machine disk measurement unavailable (data volume check {stalled})") from None
+            if free < volume["min_free_gib"]:
                 raise ValueError("machine disk below floor")
         return {"configured": True, "available": True, "profile": profile, "crew_count": count,
                 "reserved_only": reserved_only}
@@ -522,6 +623,9 @@ def pool(config, count, live_urgent=0):
 
 def main():
     operation, *args = sys.argv[1:]
+    if operation == "probe":
+        probe(*args)
+        return
     if operation == "pool":
         output = pool(Path(args[0]), int(args[1]), int(args[2]) if len(args) > 2 else 0)
     elif operation == "urgent":
@@ -540,8 +644,12 @@ def main():
         config, project, *worktrees = args
         if len(worktrees) > 1:
             raise ValueError("worktree accepts CONFIG PROJECT [WORKTREE]")
-        output = treehouse_root(read(Path(config) / "crew-placement.json"), project,
-                                worktrees[0] if worktrees else None)
+        profile = read(Path(config) / "crew-placement.json")
+        try:
+            output = bounded("treehouse", profile, project, worktrees[0] if worktrees else None)
+        except Stalled as stalled:
+            output = failure(f"treehouse-root: {DRIVE_UNAVAILABLE}: {profile.get('drive')} (pool root check {stalled})",
+                             f"treehouse-root:{project}:stalled")
     elif operation == "assess":
         config, data, task, harness, model, effort = args
         output = assess(Path(config), Path(data), task, harness, model, effort)

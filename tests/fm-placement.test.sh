@@ -486,3 +486,316 @@ pass 'rejected allocation returns only a clean, unrecorded freshly owned slot'
   assert_equals 1 "$(fm_placement_count)" 'candidate and secondmates excluded'
 ) || exit 1
 pass 'crew count requires positive liveness or launch grace and refuses only unreadable liveness'
+
+# A stalled machine drive refuses placement within the drive-check deadline.
+# The fixture blocks every stat, lstat, statvfs, access, open, scandir and
+# listdir under one directory in a real kernel wait (opening a FIFO that never
+# gets a writer). It proves the parent never waits on such a read; it does not
+# reproduce a stalled disk's kernel I/O, whose reader may not die on a signal.
+python3 - "$TOOL" "$TMP_ROOT" <<'PY'
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+tool = sys.argv[1]
+base = Path(sys.argv[2]).resolve() / 'stalled'
+site = base / 'site'
+site.mkdir(parents=True)
+drive = base / 'drive'
+relative = ['Build/Tmp', 'Caches/npm']
+for name in relative + ['pool/slot']:
+    (drive / name).mkdir(parents=True)
+internal = base / 'internal'
+internal.mkdir()
+fifo = base / 'never-written'
+os.mkfifo(fifo)
+log = base / 'stalled.log'
+escaped = base / 'escaped.pid'
+(site / 'sitecustomize.py').write_text('''
+import os
+_prefix = os.environ.get("FM_TEST_STALL_PREFIX")
+_mount = os.environ.get("FM_TEST_FAKE_MOUNT")
+if _prefix:
+    _open = os.open
+    def _stall(path):
+        try:
+            path = os.fsdecode(os.fspath(path))
+        except TypeError:
+            return
+        if path != _prefix and not path.startswith(_prefix + "/"):
+            return
+        fd = _open(os.environ["FM_TEST_STALL_LOG"], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        os.write(fd, ("%d %s\\n" % (os.getpid(), path)).encode())
+        os.close(fd)
+        record = os.environ.get("FM_TEST_STALL_ESCAPE")
+        if record and not os.path.exists(record):
+            # A descendant in its own session keeps every inherited pipe open.
+            import subprocess
+            child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+            with open(record, "w") as stream:
+                stream.write(str(child.pid))
+        _open(os.environ["FM_TEST_STALL_FIFO"], os.O_RDONLY)
+    class _Stalled:
+        # An instance, not a function, so Python 3.9 pathlib's accessor
+        # class attributes (stat = os.stat) never bind it as a method.
+        def __init__(self, real):
+            self.real = real
+        def __call__(self, path=".", *args, **kwargs):
+            _stall(path)
+            return self.real(path, *args, **kwargs)
+    for _name in ("stat", "lstat", "statvfs", "access", "open", "scandir", "listdir"):
+        setattr(os, _name, _Stalled(getattr(os, _name)))
+if _mount:
+    import pathlib
+    _is_mount = pathlib.Path.is_mount
+    pathlib.Path.is_mount = lambda self: os.fspath(self) == _mount or _is_mount(self)
+''')
+config = base / 'config'
+config.mkdir()
+(config / 'crew-placement.json').write_text(json.dumps(dict(
+    version=1, workloads=['backend'], max_crew=2, min_free_memory_percent=0.001, max_swap_mib=1048575,
+    drive=str(drive), required_drive_dirs=relative,
+    data_volume=dict(path=str(internal), min_free_gib=0.001))))
+project = base / 'repo'
+project.mkdir()
+(project / 'treehouse.toml').write_text('root = ' + json.dumps(str(drive / 'pool')) + '\n')
+evidence = json.dumps(dict(project=str(project)))
+failures = []
+DEADLINE = 2
+BOUND = 15
+
+
+def run(name, args, stall=None, escape=False, stdin='', deadline=DEADLINE):
+    """Run the CLI in its own group; the test, not the CLI, bounds a hang."""
+    # Only this fixture's seams are set; inherited values cannot select them.
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_TEST_STALL', 'FM_PLACEMENT_'))}
+    env.update(PYTHONPATH=str(site), FM_TEST_FAKE_MOUNT=str(drive),
+               FM_TEST_STALL_FIFO=str(fifo), FM_TEST_STALL_LOG=str(log))
+    if deadline is not None:
+        env['FM_PLACEMENT_DRIVE_SECS'] = str(deadline)
+    if stall:
+        env['FM_TEST_STALL_PREFIX'] = str(stall)
+    if escape:
+        env['FM_TEST_STALL_ESCAPE'] = str(escaped)
+    if log.exists():
+        log.unlink()
+    started = time.monotonic()
+    proc = subprocess.Popen([sys.executable, tool, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, env=env, start_new_session=True)
+    try:
+        out, err = proc.communicate(stdin, timeout=BOUND)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        blocked = log.read_text().split() if log.exists() else []
+        where = 'the placement command itself' if blocked[:1] == [str(proc.pid)] else 'a descendant'
+        failures.append(f'{name}: still running after {BOUND}s; blocked reader was {where}: {" ".join(blocked)}')
+        print(f'not ok - {name}: hung {BOUND}s (blocked in {where})')
+        return None
+    elapsed = time.monotonic() - started
+    print(f'{name}: exit={proc.returncode} elapsed={elapsed:.2f}s stdout={out.strip()} stderr={err.strip()}')
+    readers = [int(line.split()[0]) for line in log.read_text().splitlines()] if log.exists() else []
+    return dict(rc=proc.returncode, out=out, elapsed=elapsed, pid=proc.pid, readers=readers)
+
+
+def check(name, condition, detail=''):
+    if not condition:
+        failures.append(f'{name} {detail}')
+        print(f'not ok - {name} {detail}')
+
+
+healthy = run('healthy pool', ['pool', str(config), '0'])
+if healthy:
+    check('healthy pool admits', json.loads(healthy['out']).get('available') is True, healthy['out'])
+healthy = run('healthy assess', ['assess', str(config), str(base / 'data'), 'task', 'codex', 'test', 'high'], stdin=evidence)
+if healthy:
+    checks = json.loads(healthy['out'])['checks']
+    for key in ['drive', 'drive-dir:' + relative[0], 'drive-dir:' + relative[1], 'data-disk', 'treehouse-root']:
+        check(f'healthy assess passes {key}', checks.get(key, {}).get('status') == 'pass', json.dumps(checks.get(key)))
+    check('healthy probes clean up', not list(drive.rglob('.fm-placement-*')))
+healthy = run('healthy worktree', ['worktree', str(config), str(project), str(drive / 'pool' / 'slot')])
+if healthy:
+    check('healthy worktree passes', json.loads(healthy['out'])['status'] == 'pass', healthy['out'])
+
+for name, args, stdin, escape in [
+        ('stalled pool', ['pool', str(config), '0'], '', False),
+        ('stalled pool, escaped descendant', ['pool', str(config), '0'], '', True),
+        ('stalled assess', ['assess', str(config), str(base / 'data'), 'task', 'codex', 'test', 'high'], evidence, False),
+        ('stalled worktree', ['worktree', str(config), str(project)], '', False)]:
+    got = run(name, args, stall=drive, escape=escape, stdin=stdin)
+    if escaped.exists():
+        # Stop only the descendant this fixture started and recorded.
+        try:
+            os.kill(int(escaped.read_text()), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        escaped.unlink()
+    if not got:
+        continue
+    check(f'{name} returns within the deadline', got['elapsed'] < DEADLINE + 3, f"elapsed={got['elapsed']:.2f}")
+    check(f'{name} reached the stalled read', got['readers'] != [], 'no blocked reader logged')
+    check(f'{name} never blocks the placement command itself', got['pid'] not in got['readers'], str(got['readers']))
+    value = json.loads(got['out'] or 'null')
+    if args[0] == 'pool':
+        check(f'{name} refuses the machine', value.get('available') is False, got['out'])
+        reason = value.get('reason', '')
+    elif args[0] == 'assess':
+        check(f'{name} refuses placement', value.get('admitted') is False and 'drive' in value.get('failed', []), got['out'])
+        check(f'{name} alerts once, for the drive', value['checks']['drive'].get('alert') is True
+              and not value['checks']['treehouse-root'].get('alert'), got['out'])
+        reason = value['checks']['drive']['reason']
+    else:
+        check(f'{name} refuses the pool root', value.get('status') == 'fail', got['out'])
+        reason = value.get('reason', '')
+    check(f'{name} names the existing drive refusal', 'required machine drive unavailable' in reason, reason)
+    time.sleep(0.5)
+    for reader in got['readers']:
+        try:
+            os.kill(reader, 0)
+            check(f'{name} stops its blocked reader', False, f'pid {reader} still alive')
+        except ProcessLookupError:
+            pass
+
+got = run('stalled pool, default deadline', ['pool', str(config), '0'], stall=drive, deadline=None)
+if got:
+    check('the default deadline is ten seconds', 9.5 < got['elapsed'] < 15, f"elapsed={got['elapsed']:.2f}")
+    check('the default deadline refuses the drive', 'required machine drive unavailable'
+          in json.loads(got['out']).get('reason', ''), got['out'])
+
+got = run('stalled data volume', ['pool', str(config), '0'], stall=internal)
+if got:
+    value = json.loads(got['out'])
+    check('stalled data volume refuses within the deadline', value.get('available') is False and got['elapsed'] < DEADLINE + 3, got['out'])
+    check('stalled data volume is named as the disk, not the drive',
+          'machine disk measurement unavailable' in value.get('reason', ''), got['out'])
+
+if failures:
+    print('\n'.join('FAIL: ' + f for f in failures))
+    sys.exit(1)
+print('ok - a stalled drive or data volume refuses placement within the deadline; healthy checks still pass')
+PY
+expect_code 0 "$?" 'stalled drive placement is bounded'
+
+# The reported path: a real spawn and the dispatch resolver's machine evidence
+# stop waiting on the stalled drive, refuse it by name and leave routing free.
+STALL_HOME="$TMP_ROOT/stall-home"
+fm_test_spawn_home "$STALL_HOME" codex
+fm_test_spawn_brief "$STALL_HOME" drive-task 'backend work that needs the machine drive'
+cp "$TMP_ROOT/stalled/config/crew-placement.json" "$CONFIG/crew-dispatch.json" "$STALL_HOME/config/"
+hash=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$STALL_HOME/data/drive-task/brief.md")
+jq -n --arg hash "$hash" '{version:1,workload:"backend",requires_drive:true,priority:"P1",dispatch_rule:0,brief_sha256:$hash}' > "$STALL_HOME/data/drive-task/placement.json"
+printf '## Queued\n- [ ] drive-task - Drive fixture (impact: P1)\n' > "$STALL_HOME/data/backlog.md"
+python3 - "$ROOT" "$TMP_ROOT" "$STALL_HOME" "$SPAWN_PROJECT" "$SPAWN_BIN" <<'PY'
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+root, base, home, project, fakebin = sys.argv[1], Path(sys.argv[2]).resolve() / 'stalled', sys.argv[3], sys.argv[4], sys.argv[5]
+BOUND = 60
+stall = dict(PYTHONPATH=str(base / 'site'), FM_TEST_FAKE_MOUNT=str(base / 'drive'),
+             FM_TEST_STALL_PREFIX=str(base / 'drive'), FM_TEST_STALL_FIFO=str(base / 'never-written'),
+             FM_TEST_STALL_LOG=str(base / 'stalled.log'), FM_PLACEMENT_DRIVE_SECS='2')
+failures = []
+
+
+def run(name, command, env):
+    started = time.monotonic()
+    proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, env=env, start_new_session=True)
+    try:
+        out, _ = proc.communicate(timeout=BOUND)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        failures.append(f'{name}: still running after {BOUND}s')
+        print(f'not ok - {name}: hung {BOUND}s')
+        return None
+    elapsed = time.monotonic() - started
+    print(f'{name}: exit={proc.returncode} elapsed={elapsed:.2f}s output={out.strip()}')
+    return proc.returncode, out, elapsed
+
+
+# Same environment as tests/fixtures.sh fm_test_run_spawn, plus the stall.
+inherited = {k: v for k, v in os.environ.items() if not k.startswith(('FM_TEST_STALL', 'FM_PLACEMENT_'))}
+spawn_env = dict(inherited, **stall, FM_ROOT_OVERRIDE='', FM_HOME=home, HOME=home + '/user-home',
+                 CLAUDE_CONFIG_DIR='', FM_STATE_OVERRIDE=home + '/state', FM_DATA_OVERRIDE=home + '/data',
+                 FM_PROJECTS_OVERRIDE=home + '/projects', FM_CONFIG_OVERRIDE=home + '/config',
+                 FM_SPAWN_NO_GUARD='1', FM_FAKE_PANE_PATH=project, TMUX=os.environ.get('TMUX', 'fake,1,0'),
+                 PATH=fakebin + ':' + os.environ['PATH'])
+os.makedirs(home + '/user-home', exist_ok=True)
+log = base / 'stalled.log'
+
+
+def spawn(name, env):
+    log.unlink(missing_ok=True)
+    got = run(name, [root + '/bin/fm-spawn.sh', 'drive-task', project, '--scout',
+                     '--harness', 'codex', '--model', 'test', '--effort', 'high'], env)
+    if not got:
+        return None
+    readers = [int(line.split()[0]) for line in log.read_text().splitlines()] if log.exists() else []
+    decision = [d for d in json.loads(Path(home, 'state', 'capacity.json').read_text())['decisions']
+                if d['task'] == 'drive-task'][-1]
+    print(f'{name} blocked readers: {readers}; failed checks: {",".join(decision["failed"])}')
+    return got + (readers, decision)
+
+
+# Control: the same spawn with the drive answering passes quota and every drive check.
+got = spawn('healthy spawn', dict(spawn_env, FM_TEST_STALL_PREFIX=str(base / 'not-the-drive')))
+if got:
+    checks = got[4]['checks']
+    for key in ('fit', 'quota', 'drive', 'data-disk'):
+        if checks[key]['status'] != 'pass':
+            failures.append(f'healthy spawn control failed {key}: {json.dumps(checks[key])}')
+    if got[3]:
+        failures.append('healthy spawn control reached the stall')
+got = spawn('stalled spawn', spawn_env)
+if got:
+    rc, out, elapsed, readers, decision = got
+    if rc != 1 or 'placement refused' not in out or 'required machine drive unavailable' not in out:
+        failures.append('stalled spawn did not refuse the drive by name')
+    if elapsed > 30:
+        failures.append(f'stalled spawn took {elapsed:.2f}s')
+    if not readers:
+        failures.append('stalled spawn never reached the stalled drive read')
+    for reader in readers:
+        try:
+            os.kill(reader, 0)
+            failures.append(f'stalled spawn left blocked reader {reader} running')
+        except ProcessLookupError:
+            pass
+    checks = decision['checks']
+    if checks['fit']['status'] != 'pass' or checks['drive']['status'] != 'fail':
+        failures.append('stalled spawn was not refused on its drive: ' + json.dumps(checks))
+    # The balance gate's pool evidence passes this machine over, so the
+    # requested local profile is no longer a candidate: routing moved on.
+    if 'not a candidate' not in checks['quota'].get('reason', ''):
+        failures.append('stalled machine was not passed over by the balance gate: ' + json.dumps(checks['quota']))
+    wait = json.loads(Path(home, 'state', 'capacity.json').read_text())['waits'].get('drive-task', {})
+    if wait.get('state') != 'capacity' or 'drive' not in wait.get('failed', []):
+        failures.append(f'stalled spawn left no capacity wait naming the drive: {wait}')
+    if Path(home, 'state', 'drive-task.meta').exists():
+        failures.append('stalled spawn published worker metadata')
+    if Path(home, 'state', '.placement-admission.lock').exists():
+        failures.append('stalled spawn kept the admission lock')
+got = run('stalled resolver machine evidence',
+          ['bash', '-c', 'SCRIPT_DIR=$1/bin; . "$SCRIPT_DIR/fm-backend.sh"; . "$SCRIPT_DIR/fm-live-workers-lib.sh"; . "$SCRIPT_DIR/fm-quota-balance-lib.sh"; fm_quota_balance_machine_state "$2" "$3"',
+           'bash', root, home + '/config', home + '/state'], spawn_env)
+if got:
+    rc, out, elapsed = got
+    value = json.loads(out.strip().splitlines()[-1]) if rc == 0 and out.strip() else {}
+    if value.get('available') is not False or 'required machine drive unavailable' not in value.get('reason', ''):
+        failures.append(f'resolver evidence did not pass the stalled machine over: {out.strip()}')
+if failures:
+    print('\n'.join('FAIL: ' + f for f in failures))
+    sys.exit(1)
+print('ok - a real spawn and the resolver machine evidence refuse a stalled drive within seconds')
+PY
+expect_code 0 "$?" 'stalled drive spawn and resolver evidence are bounded'

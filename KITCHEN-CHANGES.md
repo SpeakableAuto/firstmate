@@ -1,5 +1,15 @@
 # Changes
 
+## 7 November 2026: a stalled machine drive refuses placement within seconds
+
+PR: pending.
+Placement checks the machine drive (mounted, writable, its required folders, free space, the worktree pool root) before a crew starts, and those reads had no time limit; when the drive stalled, the check waited for an hour and a half and nothing could start.
+Every drive and data-volume read in placement now runs in a separate short-lived process with a 10-second limit (`FM_PLACEMENT_DRIVE_SECS`); on the limit it is stopped and placement refuses with the existing "required machine drive unavailable" reason, so starting a crew and choosing where it runs both move on.
+A reader that cannot be stopped, as can happen with a drive stuck in the operating system, is left behind rather than waited on.
+Watch for repeated drive-unavailable refusals: they mean the drive is stalled, which this does not fix, and each placement check still spends up to 10 seconds finding that out.
+The worktree slot count, when a slot cap is configured, still reads the pool through Git without this limit.
+Deployed: no; no operating home was changed.
+
 ## 7 November 2026: bound crew-state reads in the watcher's stale scan
 
 PR: https://github.com/SpeakableAuto/firstmate/pull/63
