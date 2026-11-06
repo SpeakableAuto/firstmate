@@ -1,5 +1,15 @@
 # Changes
 
+## 7 November 2026: bound crew-state reads in the watcher's stale scan
+
+PR: pending (this branch, fm/watcher-scan-bound).
+The watcher's stale scan reads each parked or held crew's current state, and that read runs Git in the crew's task folder; on a slow or hung drive it blocked with no limit and the monitoring heartbeat went stale.
+Each read now has a 10-second limit and each poll cycle a 120-second shared budget (`FM_CREW_STATE_READ_SECS`, `FM_CREW_STATE_CYCLE_BUDGET_SECS`).
+A read that hits the limit is recorded as unknown: nothing is absorbed, paused or escalated on it, the crew is judged again next cycle, and firstmate gets one notice per recheck window.
+The heartbeat is still written only at the top of each cycle, so a watcher stuck anywhere else still shows as stale.
+Watch for repeated crew-state notices: they mean a task folder's drive is slow, which this does not fix.
+Deployed: no; no operating home was changed.
+
 ## 5 November 2026: bound progress-audit reads
 
 PR: pending no-mistakes publication.
