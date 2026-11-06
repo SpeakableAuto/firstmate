@@ -92,29 +92,24 @@ fm_timeout_mechanism() {
 # caller's group or runs the command. A caller whose own bound cannot reach
 # those groups (bin/fm-classify-lib.sh crew_state_read) then knows of every one
 # that could outlive it; if the id cannot be written the command is never run
-# (status 125). Nothing here reads the file or signals what it names.
-
-# Inside an already separate job-control group: record that group's id.
-fm_timeout_group_publish_self() {
-  local me
-  [ -n "${FM_TIMEOUT_GROUP_RECORD:-}" ] || return 0
-  me=${BASHPID:-$(exec /bin/sh -c 'printf "%s\n" "$PPID"')}
-  me=$(ps -o pgid= -p "$me" 2>/dev/null) || return 1
-  me=${me//[[:space:]]/}
-  [ -n "$me" ] || return 1
-  printf '%s\n' "$me" >> "$FM_TIMEOUT_GROUP_RECORD" || return 1
-}
+# (status 125). The perl and GNU/BSD timeout paths publish that way. The bash
+# fallback cannot: job control puts its child in a new group at fork, before
+# anything can record it, so with a record requested it refuses (125) before
+# enabling job control or starting anything. Nothing here reads the file or
+# signals what it names.
 
 fm_run_bash_timeout() {
   local seconds=$1 command_status deadline_status child_pid watchdog_pid command_rc recorded_rc monitor_was_on=0
   shift
+  # Owned run requested (FM_TIMEOUT_GROUP_RECORD above): refuse before any group
+  # exists rather than create one nobody can account for.
+  [ -z "${FM_TIMEOUT_GROUP_RECORD:-}" ] || return 125
   command_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-command.XXXXXX" 2>/dev/null) || return 124
   deadline_status="${command_status}.deadline"
   case $- in *m*) monitor_was_on=1 ;; esac
   set -m
   (
     set +m
-    fm_timeout_group_publish_self || exit 125
     "$@"
     command_rc=$?
     printf '%s\n' "$command_rc" > "$command_status"

@@ -7139,6 +7139,50 @@ test_incomplete_round_survives_an_early_wake() {
   pass "an incomplete read round survives an early wake and restart until a scan completes"
 }
 
+# The bash timeout fallback cannot record a group before job control creates
+# it, so an owned call refuses before creating anything: no child, no job, no
+# group, no record. The unowned fallback is unchanged, and through the watcher's
+# read the refusal leaves the crew unknown on every retry.
+test_owned_bash_timeout_refuses_before_any_group() {
+  local dir state fakebin out got
+  dir=$(make_case crew-state-bash-refusal); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/primitive.out"
+  FM_TIMEOUT_MECHANISM_OVERRIDE=bash bash -c '
+    . "$1/bin/fm-timeout-lib.sh"; d=$2
+    [ "$(fm_timeout_mechanism)" = bash ] || { echo mechanism-not-bash; exit 1; }
+    started=$(date +%s)
+    FM_TIMEOUT_GROUP_RECORD="$d/record" fm_run_timed 5 sh -c "touch \"\$0\"; sleep 30" "$d/owned-ran"
+    echo "owned_rc=$? owned_secs=$(( $(date +%s) - started ))"
+    pgrep -P "$$" > "$d/children" 2>/dev/null
+    echo "children=$(wc -l < "$d/children" | tr -d " ") jobs=$(jobs -p | wc -l | tr -d " ")"
+    # Control: unowned, the fallback still runs and bounds the command.
+    fm_run_timed 1 sh -c "touch \"\$0\"; sleep 30" "$d/unowned-ran"
+    echo "unowned_rc=$?"
+  ' _ "$ROOT" "$dir" > "$out" 2>&1
+  grep -Fx 'owned_rc=125 owned_secs=0' "$out" >/dev/null || fail "the owned bash call did not refuse at once: $(cat "$out")"
+  grep -Fx 'children=0 jobs=0' "$out" >/dev/null || fail "the owned bash call left a child or job behind: $(cat "$out")"
+  [ ! -e "$dir/owned-ran" ] || fail "the owned bash call ran its command"
+  [ ! -s "$dir/record" ] || fail "the owned bash call wrote a group record: $(cat "$dir/record")"
+  grep -Fx 'unowned_rc=124' "$out" >/dev/null || fail "the unowned bash fallback no longer bounds its command: $(cat "$out")"
+  [ -e "$dir/unowned-ran" ] || fail "control: the unowned bash fallback did not run its command"
+  # Through the watcher's owned read: a reader whose nested call is refused
+  # prints no verdict, so the crew is unknown, on a retry too, and nothing ran.
+  cat > "$fakebin/fm-crew-state.sh" <<SH
+#!/usr/bin/env bash
+. "$ROOT/bin/fm-timeout-lib.sh"
+fm_run_timed 5 sh -c 'touch "\$0"; sleep 30' "$dir/reader-ran" || exit 3
+printf '%s\n' 'state: done · source: status-log · verified'
+SH
+  chmod +x "$fakebin/fm-crew-state.sh"
+  got=$(FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" \
+    FM_CREW_STATE_RETRY_SECS=0 FM_CREW_STATE_READ_SECS=5 bash -c '
+      . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"
+      crew_absorb_class bashcrew; printf " "; crew_absorb_class bashcrew' _ "$ROOT")
+  [ "$got" = "unknown unknown" ] || fail "a refused nested bash call did not leave the crew unknown on read and retry (got $got)"
+  [ ! -e "$dir/reader-ran" ] || fail "the reader's nested bash call ran its command"
+  [ ! -s "$state/.crew-state-nested-crew-state-bashcrew" ] || fail "a nested bash group was recorded: $(cat "$state/.crew-state-nested-crew-state-bashcrew")"
+  pass "an owned bash timeout refuses before creating any group, the unowned fallback is unchanged, and the crew stays unknown"
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -7303,3 +7347,4 @@ test_unavailable_gate_read_keeps_the_wedge_timer
 test_interrupted_group_registration_never_runs
 test_owned_read_skips_the_forge_and_records_groups
 test_incomplete_round_survives_an_early_wake
+test_owned_bash_timeout_refuses_before_any_group

@@ -85,7 +85,9 @@ FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 #     children process groups the outer kill cannot reach, so the read sets
 #     FM_TIMEOUT_GROUP_RECORD=.crew-state-nested-<slot>, and each such child
 #     records its group there before it leaves the reader's group or runs, or
-#     does not run at all. The file lives outside the reclaimable slot, and no
+#     does not run at all; the bash timeout fallback, which cannot publish
+#     first, refuses such a call before creating any group (status 125), so
+#     the reader gets a failed call, never an unrecorded group. The file lives outside the reclaimable slot, and no
 #     new read of that crew starts while any recorded group is still alive.
 #     The read also sets FM_CREW_STATE_NO_FORGE=1: the watcher's consumers use
 #     only the state and source, never the passed-run PR detail a forge read
