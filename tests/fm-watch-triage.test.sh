@@ -7230,15 +7230,35 @@ SH
   chmod +x "$fakebin/gerrit-axi"
   # A hermetic no-mistakes: the reader looks one up for a ship branch whenever
   # the command exists, and whether the host has one on PATH must not change
-  # the fixture. It logs its own pid, which is also the group fm_nm_bounded
-  # records for it (the perl child records itself, then execs this), so C3 can
-  # tell those legitimately published lookups from anything else.
+  # the fixture. It logs "<process group> <pid> <args>": the group is what
+  # fm_nm_bounded records for it on every mechanism (perl: the child that
+  # leads the group and execs this; GNU/BSD timeout: the timeout process that
+  # leads the group, with this as its child), so C3 can tell those
+  # legitimately published lookups from anything else.
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
-printf '%s %s\n' "$$" "$*" >> "$FM_TEST_NM_LOG"
+pg=$(ps -o pgid= -p "$$" | tr -d ' ')
+printf '%s %s %s\n' "$pg" "$$" "$*" >> "$FM_TEST_NM_LOG"
 exit 0
 SH
   chmod +x "$fakebin/no-mistakes"
+  # SIMULATED GNU timeout (fixture only, used by the second C3 run): like GNU
+  # timeout without --foreground it leads a new process group and runs the
+  # command as its child, so the recorded group differs from the command's pid.
+  # It is not GNU coreutils; it exercises fm_nm_bounded's GNU branch shape on a
+  # host that has no GNU timeout.
+  mkdir -p "$dir/simgnu"
+  cat > "$dir/simgnu/timeout" <<'PL'
+#!/usr/bin/perl
+my $t = shift; $t =~ s/s$//;
+setpgrp(0, 0);
+my $pid = fork; die "fork" unless defined $pid;
+if (!$pid) { exec @ARGV or exit 127 }
+local $SIG{ALRM} = sub { kill 'TERM', $pid; exit 124 };
+alarm $t; waitpid $pid, 0;
+exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+PL
+  chmod +x "$dir/simgnu/timeout"
   printf 'idle at the prompt' > "$dir/pane.txt"
   printf 'window=test:fm-gdone\nkind=ship\nmode=direct-PR\nworktree=%s\nproject=fp\nbackend=tmux\nharness=grok\n' "$dir/wt" > "$state/gdone.meta"
   printf 'done: PR https://gerrit.example.test/c/fp/+/12 published for review\n' > "$state/gdone.status"
@@ -7247,14 +7267,41 @@ SH
 # gerrit_reader <dir> <mechanism> <revision> [record]: one real reader call.
 gerrit_reader() {
   local dir=$1
-  PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+  PATH="${GERRIT_EXTRA_PATH:+$GERRIT_EXTRA_PATH:}$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
     FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_STATE_OVERRIDE="$dir/state" FM_TEST_GERRIT_LOG="$dir/gerrit.log" \
     FM_TEST_NM_LOG="$dir/nm.log" FM_TIMEOUT_MECHANISM_OVERRIDE="$2" FM_TEST_GERRIT_REVISION="$3" env ${4:+"FM_TIMEOUT_GROUP_RECORD=$4"} \
     perl -e 'alarm 60; exec @ARGV' "$ROOT/bin/fm-crew-state.sh" gdone 2>"$dir/reader.err"
 }
 
+# gerrit_c3_check <dir> <head> <label> <record>: control C3 (see the test
+# below). Bash fallback with a group record, exactly as an owned read would run
+# it: the nested Gerrit read is refused before it starts (no call, no record),
+# and the reader turns that into an ordinary blocked verdict - the defect the
+# entry guard exists for. The reader's no-mistakes lookups run through
+# fm_nm_bounded, which picks its own mechanism (GNU/BSD timeout if present,
+# else perl) and so does publish their groups; exactly those, one per lookup,
+# may appear in the record.
+gerrit_c3_check() {
+  local dir=$1 head=$2 label=$3 record=$4 line nm_before nm_c3 group gerrit_before
+  gerrit_before=$(wc -l < "$dir/gerrit.log" | tr -d ' ')
+  nm_before=$(wc -l < "$dir/nm.log" 2>/dev/null | tr -d ' '); nm_before=${nm_before:-0}
+  line=$(gerrit_reader "$dir" bash "$head" "$record")
+  case "$line" in "state: blocked · source: status-log"*"could not be read"*) ;;
+    *) fail "control C3 $label: a refused nested Gerrit read did not surface as blocked: $line $(cat "$dir/reader.err")" ;; esac
+  [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq "$gerrit_before" ] || fail "control C3 $label: the refused nested read still reached Gerrit"
+  nm_c3=$(sed -n "$((nm_before + 1)),\$p" "$dir/nm.log" 2>/dev/null)
+  printf '%s\n' "$nm_c3" > "$dir/nm-c3-$label.log"
+  [ -n "$nm_c3" ] || fail "control C3 $label: fixture: the reader made no no-mistakes lookup"
+  [ "$(wc -l < "$record" | tr -d ' ')" -eq "$(printf '%s\n' "$nm_c3" | wc -l | tr -d ' ')" ] \
+    || fail "control C3 $label: the record holds other than one group per no-mistakes lookup: $(tr '\n' ' ' < "$record") / $(printf '%s' "$nm_c3" | tr '\n' ' ')"
+  while read -r group; do
+    printf '%s\n' "$nm_c3" | grep -q "^$group " \
+      || fail "control C3 $label: the refused nested read recorded a group ($group is no no-mistakes lookup's group)"
+  done < "$record"
+}
+
 test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
-  local dir state fakebin out key since head line nm_before nm_c3 group
+  local dir state fakebin out key since head line
   dir=$(make_case crew-state-gerrit-bash); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
   gerrit_done_fixture "$dir"
   head=$(git -C "$dir/wt" rev-parse HEAD)
@@ -7269,25 +7316,14 @@ test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
   case "$line" in "state: blocked · source: status-log"*"is not the published content of https://gerrit.example.test/c/fp/+/12"*) ;;
     *) fail "control C2: a mismatched Gerrit revision did not block the delivery: $line" ;; esac
   [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq 2 ] || fail "control C2: the reader did not read the Gerrit change"
-  # C3: bash fallback with a group record, exactly as an owned read would run
-  # it: the nested Gerrit read is refused before it starts (no call, no
-  # record), and the reader turns that into an ordinary blocked verdict - the
-  # defect the entry guard exists for. The reader's no-mistakes lookups run
-  # through fm_nm_bounded, which picks its own (perl) mechanism and so does
-  # publish their groups; those, and only those, may appear in the record.
-  nm_before=$(wc -l < "$dir/nm.log" 2>/dev/null | tr -d ' '); nm_before=${nm_before:-0}
-  line=$(gerrit_reader "$dir" bash "$head" "$dir/c3.record")
-  case "$line" in "state: blocked · source: status-log"*"could not be read"*) ;;
-    *) fail "control C3: a refused nested Gerrit read did not surface as blocked: $line $(cat "$dir/reader.err")" ;; esac
-  [ "$(wc -l < "$dir/gerrit.log" | tr -d ' ')" -eq 2 ] || fail "control C3: the refused nested read still reached Gerrit"
-  nm_c3=$(sed -n "$((nm_before + 1)),\$p" "$dir/nm.log" 2>/dev/null)
-  [ -n "$nm_c3" ] || fail "control C3: fixture: the reader made no no-mistakes lookup"
-  [ "$(wc -l < "$dir/c3.record" | tr -d ' ')" -eq "$(printf '%s\n' "$nm_c3" | wc -l | tr -d ' ')" ] \
-    || fail "control C3: the record holds other than one group per no-mistakes lookup: $(cat "$dir/c3.record") / $nm_c3"
-  while read -r group; do
-    printf '%s\n' "$nm_c3" | grep -q "^$group " \
-      || fail "control C3: the refused nested read recorded a group ($group is not a no-mistakes lookup)"
-  done < "$dir/c3.record"
+  gerrit_c3_check "$dir" "$head" host "$dir/c3.record"
+  # The same check through fm_nm_bounded's GNU-timeout branch, SIMULATED with
+  # the fixture's own timeout (this proves the group identity logic for that
+  # shape, not GNU coreutils itself): the recorded group must be the timeout
+  # process's, which differs from the fake no-mistakes' own pid.
+  GERRIT_EXTRA_PATH="$dir/simgnu" gerrit_c3_check "$dir" "$head" simulated-gnu "$dir/c3-gnu.record"
+  awk '$1 != $2 { found = 1 } END { exit !found }' "$dir/nm-c3-simulated-gnu.log" \
+    || fail "control C3 simulated-gnu: fixture: the lookup ran in its own group, not as the timeout process's child"
   # The watcher's owned read on the bash fallback: unknown, nothing changed.
   printf '%s' "$(seen_sig "$state/gdone.status")" > "$state/.seen-gdone_status"
   key=test_fm-gdone
