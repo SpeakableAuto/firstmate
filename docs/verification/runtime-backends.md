@@ -6,6 +6,45 @@ This record contains reusable version-scoped evidence for active runtime guarant
 The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
 
+## Progress-audit wall-clock boundary
+
+The audit's bounded read and tick contract is owned by `bin/fm-progress-audit-bound-lib.sh`, with classification and publication owned by `bin/fm-progress-audit.sh`.
+Verified on 2026-11-05 (review-round cases re-run 2026-11-06) with Darwin 25.1.0, Bash 3.2.57, the host Perl timeout mechanism, and the forced Bash fallback:
+
+```sh
+bash bin/fm-test-run.sh tests/fm-progress-audit.test.sh tests/fm-timeout-lib.test.sh
+```
+
+The audit regression exercises the real watcher against isolated task homes, a deliberately stalled Git executable, and a pre-existing sentinel job.
+Its timeout cases preserve old task and storage signatures, retain confirmed partial status evidence, refuse recovery, and let a subsequent healthy tick resume classification.
+A deferred-runner fixture verifies bounded return without a blocking reap, duplicate suppression while ownership remains unresolved, and resumption after the owned processes exit.
+An independent whole-tick stall verifies the watcher boundary even when no classification completes.
+Review-round fixtures verify that unverified/ambiguous endpoints and unknown run-step outcomes keep their stall judgement, newly confirmed storage roots are surfaced while prior roots are kept, a held tick wakes firstmate once per window without signalling its recorded process, and a held nested crew runner does not suppress audits of other crews.
+Observed regression output (exit 0; earlier cases in the file omitted):
+
+```text
+ok - stalled audit-owned Git is bounded, watcher continues, signatures and unrelated jobs survive
+ok - a healthy subsequent tick resumes normal monitoring after timeout
+ok - account and recover preserve partial evidence and refuse actions on both timeout mechanisms
+ok - unreaped audit runner returns promptly, suppresses duplicates, and resumes after safe reap
+ok - whole synchronous tick has an independent wall-clock bound and preserves unrelated jobs
+ok - every supported backend preserves a failed current-state read as unknown without lifecycle actions
+ok - unverified and ambiguous endpoints keep their stall judgement
+ok - incomplete evidence adds confirmed storage roots, keeps prior ones, and is surfaced once
+ok - a held tick wakes firstmate once per window without killing its recorded process
+ok - a held nested crew runner never suppresses later audits of other crews
+ok - an unknown run-step outcome keeps its stall judgement
+```
+
+These checks do not reproduce uninterruptible kernel I/O or prove an installed fleet's behavior.
+The reachable operational-home filesystem assumption and process-group limitations remain those stated by the runner and timeout library.
+
+The integration inspection covers the shared `fm-watch.sh` boundary used by Claude and Cursor hooks, Codex checkpoints, OpenCode and omp extensions, Pi supervision, Grok's tracked watcher, and the generic primary fallback.
+It changes no vendor output classifier, key binding, hook, or harness lifecycle operation; live model sessions are not needed to establish this boundary.
+For task runtimes, `fm_backend_agent_state` dispatches tmux and Herdr read-only classifiers and reports `unverified` for other backends.
+Synthetic metadata covers tmux, Herdr, zellij, Orca, and cmux through the audit's endpoint/current-state test seams, including a failing current-state read that must remain unknown.
+No real backend endpoint or Herdr lifecycle is exercised by this regression.
+
 ## Harness detection precedence
 
 Firstmate's own harness comes from two kinds of evidence, and `bin/fm-harness.sh` owns how they combine: an environment marker names its harness, and the nearest harness process in the parent chain proves who owns the process tree.

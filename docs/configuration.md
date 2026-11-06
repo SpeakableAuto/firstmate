@@ -87,7 +87,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Task metadata, append-only status events, and endpoint signals.
 - Watcher and wake-queue coordination, away-mode state, and generated Relay artifacts.
 - Inactive terminal-outcome receipts under `state/terminal-outcomes/`.
-- Progress-audit signatures under `state/.progress-audit/` and per-task recovery ledgers `state/<id>.recovery` (`bin/fm-progress-audit.sh`).
+- Progress-audit signatures and bounded-read ownership records (`.owned-*`, `bin/fm-progress-audit-bound-lib.sh`) under `state/.progress-audit/`, and per-task recovery ledgers `state/<id>.recovery` (`bin/fm-progress-audit.sh`).
 - Enabled extension working namespaces under `state/extensions/`.
 - Parent-side remote ledger copies under `state/secondmate-summary-cache/`.
 - Parent-side remote quota failure back-offs under `state/quota-remote/` (`bin/fm-quota-snapshot.sh`).
@@ -2789,7 +2789,7 @@ FM_INACTIVE_RECONCILE_SECS=900  # 60..1800-second watcher cadence and inactivity
 FM_INACTIVE_RECONCILE_BUDGET_SECS=10  # 1..30-second scan deadline; wedged-scan kill backstop follows one second later
 FM_PROGRESS_WINDOW_SECS=2400  # 300..7200 seconds a ship or scout may land no push, commit, status event or report before the progress audit calls it stalled
 FM_PROGRESS_AUDIT_SECS=600    # 60..1800-second watcher cadence of the progress audit's roll-call
-FM_PROGRESS_AUDIT_BUDGET_SECS=20   # 1..60 seconds of endpoint and current-state reads one progress-audit tick may start; the rest wait for the next tick
+FM_PROGRESS_AUDIT_BUDGET_SECS=20   # 1..60 seconds for audit evidence (tick reads stop 2 seconds early, so 3+ is needed to read any crew); whole-tick and cleanup margins are owned by bin/fm-progress-audit-bound-lib.sh
 FM_PROGRESS_AUDIT_WAKE_ITEMS=8     # 1..50 crews named in one progress-audit wake before it points at the full account
 FM_PROGRESS_LONG_IDLE_SECS=86400   # 7200..2592000 seconds idle after which the progress audit escalates a record for hand reconciliation instead of relaunching it
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or Relay dispatch)
