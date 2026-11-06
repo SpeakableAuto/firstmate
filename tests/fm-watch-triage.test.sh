@@ -6616,6 +6616,137 @@ test_paused_until_that_passed_is_rechecked_before_the_cadence() {
   pass "a declared wait whose until time has passed is rechecked at once, then held to the cadence"
 }
 
+# --- a slow or hung worktree drive: bounded crew-state reads -----------------
+# fm-crew-state.sh reads Git in each crew's worktree. On a slow or hung drive
+# that read blocks, and the stale scan reaches it for every parked or held crew,
+# so the beacon touched at the top of the cycle aged past the guard's grace.
+# hung_crew_state <fakebin>: replace the case's fake reader with one that blocks
+# for 30 seconds before answering, like Git on a hung drive.
+hung_crew_state() {  # <fakebin>
+  cat > "$1/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "${1:-}" >> "$FM_FAKE_CREW_STATE_LOG"
+sleep 30
+printf '%s\n' 'state: paused · source: status-log · answered after the drive recovered'
+SH
+  chmod +x "$1/fm-crew-state.sh"
+}
+
+test_crew_state_read_is_bounded() {
+  local dir fakebin started elapsed got log
+  dir=$(make_case crew-state-read-bound); fakebin="$dir/fakebin"; log="$dir/reads.log"
+  # Responsive reader: the verdict passes through unchanged.
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: paused · source: status-log · waiting' crew_absorb_class a)
+  [ "$got" = paused ] || fail "a responsive crew-state read was not classed paused (got $got)"
+  hung_crew_state "$fakebin"
+  started=$(date +%s)
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_READ_SECS=1 crew_absorb_class a)
+  elapsed=$(( $(date +%s) - started ))
+  [ "$got" = unknown ] || fail "a timed-out crew-state read was not classed unknown (got $got)"
+  [ "$elapsed" -lt 8 ] || fail "a hung crew-state read was not bounded (${elapsed}s)"
+  FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_READ_SECS=1 \
+    crew_gate_awaits_human_decision a >/dev/null && fail "a timed-out read was read as a human-owed gate"
+  # A spent cycle budget skips the read entirely and still answers unknown.
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_CREW_STATE_LOG="$log" \
+    FM_CREW_STATE_DEADLINE=$(( $(date +%s) - 1 )) crew_absorb_class a)
+  [ "$got" = unknown ] || fail "a read past the cycle deadline was not classed unknown (got $got)"
+  [ ! -s "$log" ] || fail "a read past the cycle deadline still ran the reader"
+  pass "a crew-state read is bounded, and a timed-out or skipped read is unknown, never paused or none"
+}
+
+# hung_paused_fixture <name>: a declared-pause crew whose stale pane is due for
+# classification, with a reader that hangs. Prints the case dir.
+hung_paused_fixture() {  # <name>
+  local dir state fakebin window key statusf
+  dir=$(make_case "$1"); state="$dir/state"; fakebin="$dir/fakebin"
+  window="test:fm-held"
+  printf 'idle, holding for upstream' > "$dir/pane.txt"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/held.meta"
+  statusf="$state/held.status"
+  printf 'paused: holding for the upstream tool release\n' > "$statusf"
+  printf '%s' "$(seen_sig "$statusf")" > "$state/.seen-held_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf '%s' "$(hash_text "idle, holding for upstream")" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  hung_crew_state "$fakebin"
+  printf '%s\n' "$dir"
+}
+
+hung_paused_watch() {  # <dir> [extra env assignments...]
+  local dir=$1
+  shift
+  PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW="test:fm-held" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$dir/state" \
+    FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_CREW_STATE_READ_SECS=1 env "$@" "$WATCH" > "$dir/watch.out" &
+  HUNG_PID=$!
+}
+
+# The actual scan path: with the notice already raised (fresh marker), a hung
+# reader no longer holds the cycle. The watcher keeps completing cycles, judges
+# nothing on the missing verdict, and records why.
+test_hung_crew_state_keeps_the_watcher_cycling() {
+  local dir state key
+  dir=$(hung_paused_fixture hung-crew-state-cycles); state="$dir/state"
+  key=test_fm-held
+  date +%s > "$state/.crew-state-unavailable"
+  hung_paused_watch "$dir"
+  if ! wait_poll_cycle "$state" "$HUNG_PID" 150 || ! wait_poll_cycle "$state" "$HUNG_PID" 150; then
+    reap "$HUNG_PID"; fail "the watcher did not keep cycling through a hung crew-state read: $(cat "$dir/watch.out")"
+  fi
+  reap "$HUNG_PID"
+  [ ! -s "$dir/watch.out" ] || fail "an unknown crew state printed a wake while the notice was fresh: $(cat "$dir/watch.out")"
+  [ ! -s "$state/.wake-queue" ] || fail "an unknown crew state enqueued a wake while the notice was fresh"
+  [ ! -e "$state/.paused-$key" ] || fail "an unknown crew state was recorded as a declared pause"
+  [ ! -e "$state/.stale-$key" ] || fail "an unknown crew state advanced the stale suppressor (absorbed on no evidence)"
+  [ ! -e "$state/.stale-since-$key" ] || fail "an unknown crew state started the wedge timer"
+  grep -F 'crew state unknown' "$state/.watch-triage.log" >/dev/null \
+    || fail "the unknown crew state was not recorded in the triage log"
+  pass "a hung crew-state read is bounded in the stale scan: cycles continue and nothing is judged on it"
+}
+
+# Counterpart: the first unknown in a resurface window reaches firstmate once,
+# so a hung drive cannot leave a crew silently unsupervised.
+test_hung_crew_state_surfaces_once() {
+  local dir state drain_out
+  dir=$(hung_paused_fixture hung-crew-state-surfaces); state="$dir/state"; drain_out="$dir/drain.out"
+  hung_paused_watch "$dir"
+  wait_for_exit "$HUNG_PID" 100 || { reap "$HUNG_PID"; fail "an unknown crew state never reached firstmate"; }
+  grep -F 'check: crew-state: current-state read for held timed out' "$dir/watch.out" >/dev/null \
+    || fail "the unknown crew-state notice was not printed: $(cat "$dir/watch.out")"
+  grep -F 'possible wedge' "$dir/watch.out" >/dev/null && fail "an unknown crew state was escalated as a wedge"
+  [ -e "$state/.crew-state-unavailable" ] || fail "the notice throttle marker was not recorded"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the crew-state notice failed"
+  grep -F 'crew-state' "$drain_out" >/dev/null || fail "the crew-state notice was not queued durably"
+  pass "an unknown crew state reaches firstmate once per resurface window, never as a wedge"
+}
+
+# No fake freshness: the beacon is only touched at the top of a cycle. While one
+# bounded read is blocked, the beacon visibly ages, so a watcher wedged anywhere
+# the bound does not reach would still go stale for the guard.
+test_beacon_not_refreshed_inside_a_blocked_read() {
+  local dir state i m now age max=0
+  dir=$(hung_paused_fixture hung-crew-state-beacon); state="$dir/state"
+  date +%s > "$state/.crew-state-unavailable"
+  hung_paused_watch "$dir" FM_CREW_STATE_READ_SECS=5
+  wait_live "$HUNG_PID" 20 || { reap "$HUNG_PID"; fail "the watcher exited before its first read"; }
+  i=0
+  while [ "$i" -lt 80 ]; do
+    m=$(file_mtime "$state/.last-watcher-beat")
+    if [ -n "$m" ]; then
+      now=$(date +%s); age=$(( now - m ))
+      [ "$age" -le "$max" ] || max=$age
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  reap "$HUNG_PID"
+  [ "$max" -ge 3 ] || fail "the beacon was refreshed while a crew-state read was blocked (max age ${max}s)"
+  [ "$max" -lt 10 ] || fail "the beacon aged past the read bound (max age ${max}s)"
+  pass "the beacon is not refreshed inside a blocked read, and ages only as long as the bound"
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -6765,3 +6896,7 @@ test_paused_until_near_future_is_quiet_before_the_cadence
 test_paused_until_beyond_the_cadence_is_quiet_until_that_time
 test_paused_until_eight_days_ahead_stays_quiet
 test_paused_until_that_passed_is_rechecked_before_the_cadence
+test_crew_state_read_is_bounded
+test_hung_crew_state_keeps_the_watcher_cycling
+test_hung_crew_state_surfaces_once
+test_beacon_not_refreshed_inside_a_blocked_read

@@ -399,6 +399,11 @@ case "$SECONDMATE_LIVENESS_WINDOW_SECS" in ''|*[!0-9]*|0) SECONDMATE_LIVENESS_WI
 # held for the captain while the away-posture record exists, which is never
 # rechecked (away_record_present below).
 PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
+# Seconds of bounded crew-state reading one poll cycle may spend (see the
+# deadline set after the beacon touch). Default 120 leaves most of the default
+# 300-second guard grace for the rest of the cycle.
+CREW_STATE_CYCLE_BUDGET_SECS=${FM_CREW_STATE_CYCLE_BUDGET_SECS:-120}
+case "$CREW_STATE_CYCLE_BUDGET_SECS" in ''|*[!0-9]*|0) CREW_STATE_CYCLE_BUDGET_SECS=120 ;; esac
 # A declared wait that names WHEN it clears (`paused: ... until <UTC ISO 8601>`,
 # status_paused_until in fm-classify-lib.sh) is condition-aware: it is not
 # rechecked before that time, even when that time lies beyond the flat cadence,
@@ -1741,6 +1746,23 @@ clear_pause_tracking() {  # <window-key>
   clear_stale_hash_tracking "$key"
 }
 
+# crew_state_unknown <window> <task>: pause_state_class answered unknown because
+# the bounded crew-state read timed out or this cycle's read budget was spent
+# (bin/fm-classify-lib.sh crew_state_read). Callers leave every stale, pause and
+# wedge record exactly as it was, so the same pane is judged again next cycle on
+# a real verdict rather than absorbed, re-alarmed or escalated on no evidence.
+# A persisting condition still reaches firstmate, once per PAUSE_RESURFACE_SECS,
+# so a hung worktree drive cannot keep a crew unsupervised in silence.
+crew_state_unknown() {  # <window> <task>
+  local msg
+  triage_log "crew state unknown (bounded read timed out or cycle budget spent): $1; no crew outcome inferred"
+  [ "$(age_of "$STATE/.crew-state-unavailable")" -ge "$PAUSE_RESURFACE_SECS" ] || return 0
+  msg="check: crew-state: current-state read for $2 timed out or was skipped (its worktree drive may be slow or hung); no crew outcome inferred, inspect it directly"
+  fm_wake_append check crew-state "$msg" || exit 1
+  date +%s > "$STATE/.crew-state-unavailable"
+  wake "$msg"
+}
+
 # Reconcile a declared pause or captain-held status with authoritative crew state.
 # After fm-crew-state has fallen back to stopped or unknown, paused classification is
 # recovered only for a confidently dead ordinary crew, or for a secondmate, whose
@@ -1775,6 +1797,12 @@ pause_state_class() {  # <window> <task>
   if [ "$class" = working ]; then
     rm -f "$recheck_file"
     printf 'working'
+    return
+  fi
+  # A read that hit its bound proves nothing, least of all the dead agent the
+  # paused recovery below needs, so it stays unknown and the caller defers.
+  if [ "$class" = unknown ]; then
+    printf 'unknown'
     return
   fi
   if [ "$kind" != secondmate ]; then
@@ -2716,6 +2744,12 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+  # Every bounded crew-state read in this cycle shares one budget, so a pass over
+  # many parked or held crews on a slow drive still ends well inside the guard's
+  # grace. The beacon is not touched again mid-cycle: a watcher stuck anywhere
+  # else must still go stale.
+  FM_CREW_STATE_DEADLINE=$(( $(date +%s) + CREW_STATE_CYCLE_BUDGET_SECS ))
+  export FM_CREW_STATE_DEADLINE
 
   # A handling successor must surface rows added after its inherited baseline
   # before slower fleet checks can hold this cycle for minutes.
@@ -3151,8 +3185,9 @@ EOF
         # firstmate. Detection itself is unchanged from above.
         if [ "$kind" = secondmate ]; then
           case "$(pause_state_class "$w" "$task")" in
-            paused) handle_paused_stale "$w" "$task" "$h" ;;
-            *)      clear_pause_tracking "$key" ;;
+            paused)  handle_paused_stale "$w" "$task" "$h" ;;
+            unknown) crew_state_unknown "$w" "$task" ;;
+            *)       clear_pause_tracking "$key" ;;
           esac
         elif afk_present; then
           # Daemon owns triage: one-shot per distinct stale hash, as before,
@@ -3251,6 +3286,9 @@ EOF
               paused)
                 handle_paused_stale "$w" "$task" "$h"
                 ;;
+              unknown)
+                crew_state_unknown "$w" "$task"
+                ;;
               *)
                 surface_nonterminal_stale "$w" "$h"
                 ;;
@@ -3260,6 +3298,7 @@ EOF
             if [ -e "$pf" ] || status_is_paused_or_captain_held "$(status_declared_wait_line "$STATE/$task.status")"; then
               case "$(pause_state_class "$w" "$task")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
+                unknown) crew_state_unknown "$w" "$task" ;;
                 working) clear_pause_state "$key"
                          printf '%s' "$h" > "$sf"
                          wedge_timer_check "$w" "$ssf" "non-terminal stale (provably working after a declared pause)" "$ewf" "$task" "$h"
@@ -3314,6 +3353,7 @@ EOF
           # hash reaches surface_nonterminal_stale below, so the whole declared
           # wait would re-alarm far inside PAUSE_RESURFACE_SECS.
           none)   clear_stale_hash_tracking "$key" ;;
+          unknown) crew_state_unknown "$w" "$task" ;;
           *)      clear_pause_tracking "$key" ;;
         esac
       elif [ "$paused_bound" -ne 0 ] && [ -e "$pf" ]; then

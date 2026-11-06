@@ -60,6 +60,35 @@ _FM_CLASSIFY_UNAME_S=${_FM_UNAME:-$(uname -s 2>/dev/null)}
 # or no-mistakes install; absent, it points at the real sibling script.
 FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 
+# crew_state_read <id>: print one fm-crew-state.sh verdict line under a hard
+# bound, or return 1 having learned nothing. A worktree on a slow or hung drive
+# makes that reader's Git calls block, and a caller looping over every parked or
+# held crew would otherwise stall for as long as the drive does.
+# FM_CREW_STATE_READ_SECS (default 10, whole seconds 1..60) bounds one read.
+# FM_CREW_STATE_DEADLINE, when a caller sets it to an epoch, skips every read at
+# or past that time, so many bounded reads in one pass still end in finite time.
+# Output goes through a temporary file rather than a pipe: a reader stuck in
+# kernel I/O can outlive its kill, and would then hold a pipe open forever.
+# The reader's own exit status is ignored, as callers always did; only the bound
+# or the deadline makes this return 1.
+crew_state_read() {  # <id>
+  local id=$1 secs=${FM_CREW_STATE_READ_SECS:-10} deadline=${FM_CREW_STATE_DEADLINE:-} now tmp rc=0
+  case "$secs" in ''|*[!0-9]*|0) secs=10 ;; esac
+  [ "$secs" -le 60 ] || secs=60
+  case "$deadline" in
+    ''|*[!0-9]*) ;;
+    *) now=$(date +%s); [ "$now" -lt "$deadline" ] || return 1 ;;
+  esac
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-crew-state.XXXXXX") || return 1
+  fm_run_timed "$secs" "$FM_CREW_STATE_BIN" "$id" > "$tmp" 2>/dev/null < /dev/null || rc=$?
+  if fm_timed_out "$rc"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
 # fm_run_timed, the shared hard bound the worktree write probe below puts around
 # its one filesystem walk. bin/fm-timeout-lib.sh owns bounded execution for this
 # repo, so nothing here re-derives the coreutils/BSD/perl selection. That library
@@ -2492,7 +2521,11 @@ status_span_has_actionable() {  # <status-file> <start-offset>
 #   paused  - the crew's authoritative current state is a declared external-wait
 #             pause (paused:), which is EXPECTED to idle;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
-#             torn-down/unknown crew, or an unreadable verdict).
+#             torn-down/unknown crew, or an unreadable verdict);
+#   unknown - crew_state_read below produced no verdict at all: the read hit its
+#             bound or the caller's cycle budget was already spent. Nothing about
+#             the crew was learned, so a caller must neither absorb nor judge it
+#             on this answer.
 # One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state
 # authoritatively (not the status log) is what keeps run-step precedence: a crew
 # that appended paused: but then STARTED a run reports working, never paused.
@@ -2502,7 +2535,7 @@ status_span_has_actionable() {  # <status-file> <start-offset>
 crew_absorb_class() {  # <id>
   local id=$1 line state src
   [ -n "$id" ] || { printf 'none'; return; }
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  line=$(crew_state_read "$id") || { printf 'unknown'; return; }
   case "$line" in state:*) ;; *) printf 'none'; return ;; esac
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi
@@ -2564,7 +2597,7 @@ FM_GATE_HUMAN_DECISION='ask-user: authority decision'
 crew_gate_awaits_human_decision() {  # <id> -> <run-id> on stdout
   local id=$1 line state src rest part human='' run=''
   [ -n "$id" ] || return 1
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  line=$(crew_state_read "$id") || return 1
   case "$line" in state:*) ;; *) return 1 ;; esac
   state=${line#state: }; state=${state%% *}
   [ "$state" = parked ] || return 1
