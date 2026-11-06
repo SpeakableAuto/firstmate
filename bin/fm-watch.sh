@@ -404,6 +404,7 @@ PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT
 # 300-second guard grace for the rest of the cycle.
 CREW_STATE_CYCLE_BUDGET_SECS=${FM_CREW_STATE_CYCLE_BUDGET_SECS:-120}
 case "$CREW_STATE_CYCLE_BUDGET_SECS" in ''|*[!0-9]*|0) CREW_STATE_CYCLE_BUDGET_SECS=120 ;; esac
+export -n FM_CREW_STATE_DEADLINE 2>/dev/null || true
 # A declared wait that names WHEN it clears (`paused: ... until <UTC ISO 8601>`,
 # status_paused_until in fm-classify-lib.sh) is condition-aware: it is not
 # rechecked before that time, even when that time lies beyond the flat cadence,
@@ -2747,9 +2748,9 @@ while :; do
   # Every bounded crew-state read in this cycle shares one budget, so a pass over
   # many parked or held crews on a slow drive still ends well inside the guard's
   # grace. The beacon is not touched again mid-cycle: a watcher stuck anywhere
-  # else must still go stale.
+  # else must still go stale. Not exported: the readers run in this shell's own
+  # subshells, and a detached child outliving the cycle must not inherit it.
   FM_CREW_STATE_DEADLINE=$(( $(date +%s) + CREW_STATE_CYCLE_BUDGET_SECS ))
-  export FM_CREW_STATE_DEADLINE
 
   # A handling successor must surface rows added after its inherited baseline
   # before slower fleet checks can hold this cycle for minutes.
