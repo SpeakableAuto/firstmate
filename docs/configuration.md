@@ -87,7 +87,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Task metadata, append-only status events, and endpoint signals.
 - Watcher and wake-queue coordination, away-mode state, and generated Relay artifacts.
 - Inactive terminal-outcome receipts under `state/terminal-outcomes/`.
-- Progress-audit signatures under `state/.progress-audit/` and per-task recovery ledgers `state/<id>.recovery` (`bin/fm-progress-audit.sh`).
+- Progress-audit signatures and bounded-read ownership records (`.owned-*`, `bin/fm-progress-audit-bound-lib.sh`) under `state/.progress-audit/`, and per-task recovery ledgers `state/<id>.recovery` (`bin/fm-progress-audit.sh`).
 - Enabled extension working namespaces under `state/extensions/`.
 - Parent-side remote ledger copies under `state/secondmate-summary-cache/`.
 - Parent-side remote quota failure back-offs under `state/quota-remote/` (`bin/fm-quota-snapshot.sh`).
