@@ -1934,6 +1934,15 @@ if [ "$RELAUNCH" -eq 1 ]; then
     fi
   fi
   RELAUNCH_WT=$(fm_meta_get "$RELAUNCH_META" worktree)
+  # A copy on a stalled machine drive refuses here, within the placement
+  # deadline, before any unbounded read of it below (bin/fm-placement.py).
+  if [ -n "$RELAUNCH_WT" ]; then
+    RELAUNCH_REACH=$(python3 "$SCRIPT_DIR/fm-placement.py" reachable "$CONFIG" "$RELAUNCH_WT") || RELAUNCH_REACH='{}'
+    if ! printf '%s\n' "$RELAUNCH_REACH" | jq -e '.status == "pass"' >/dev/null 2>&1; then
+      echo "error: placement refused: $(printf '%s\n' "$RELAUNCH_REACH" | jq -r '.reason // "the recorded worktree drive check failed"' 2>/dev/null); refusing to relaunch task $ID" >&2
+      exit 1
+    fi
+  fi
   [ -n "$RELAUNCH_WT" ] && [ -d "$RELAUNCH_WT" ] || {
     echo "error: task $ID's recorded worktree '${RELAUNCH_WT:-none}' is missing; refusing to relaunch without the local copy its work lives in" >&2
     exit 1

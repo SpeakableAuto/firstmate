@@ -492,7 +492,7 @@ pass 'crew count requires positive liveness or launch grace and refuses only unr
 # listdir under one directory in a real kernel wait (opening a FIFO that never
 # gets a writer). It proves the parent never waits on such a read; it does not
 # reproduce a stalled disk's kernel I/O, whose reader may not die on a signal.
-python3 - "$TOOL" "$TMP_ROOT" <<'PY'
+python3 - "$TOOL" "$TMP_ROOT" "$ROOT/tests/fixtures/stalled-drive" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -503,8 +503,6 @@ import time
 
 tool = sys.argv[1]
 base = Path(sys.argv[2]).resolve() / 'stalled'
-site = base / 'site'
-site.mkdir(parents=True)
 drive = base / 'drive'
 relative = ['Build/Tmp', 'Caches/npm']
 for name in relative + ['pool/slot']:
@@ -515,45 +513,7 @@ fifo = base / 'never-written'
 os.mkfifo(fifo)
 log = base / 'stalled.log'
 escaped = base / 'escaped.pid'
-(site / 'sitecustomize.py').write_text('''
-import os
-_prefix = os.environ.get("FM_TEST_STALL_PREFIX")
-_mount = os.environ.get("FM_TEST_FAKE_MOUNT")
-if _prefix:
-    _open = os.open
-    def _stall(path):
-        try:
-            path = os.fsdecode(os.fspath(path))
-        except TypeError:
-            return
-        if path != _prefix and not path.startswith(_prefix + "/"):
-            return
-        fd = _open(os.environ["FM_TEST_STALL_LOG"], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        os.write(fd, ("%d %s\\n" % (os.getpid(), path)).encode())
-        os.close(fd)
-        record = os.environ.get("FM_TEST_STALL_ESCAPE")
-        if record and not os.path.exists(record):
-            # A descendant in its own session keeps every inherited pipe open.
-            import subprocess
-            child = subprocess.Popen(["sleep", "60"], start_new_session=True)
-            with open(record, "w") as stream:
-                stream.write(str(child.pid))
-        _open(os.environ["FM_TEST_STALL_FIFO"], os.O_RDONLY)
-    class _Stalled:
-        # An instance, not a function, so Python 3.9 pathlib's accessor
-        # class attributes (stat = os.stat) never bind it as a method.
-        def __init__(self, real):
-            self.real = real
-        def __call__(self, path=".", *args, **kwargs):
-            _stall(path)
-            return self.real(path, *args, **kwargs)
-    for _name in ("stat", "lstat", "statvfs", "access", "open", "scandir", "listdir"):
-        setattr(os, _name, _Stalled(getattr(os, _name)))
-if _mount:
-    import pathlib
-    _is_mount = pathlib.Path.is_mount
-    pathlib.Path.is_mount = lambda self: os.fspath(self) == _mount or _is_mount(self)
-''')
+site = Path(sys.argv[3])
 config = base / 'config'
 config.mkdir()
 (config / 'crew-placement.json').write_text(json.dumps(dict(
@@ -691,6 +651,7 @@ jq -n --arg hash "$hash" '{version:1,workload:"backend",requires_drive:true,prio
 printf '## Queued\n- [ ] drive-task - Drive fixture (impact: P1)\n' > "$STALL_HOME/data/backlog.md"
 python3 - "$ROOT" "$TMP_ROOT" "$STALL_HOME" "$SPAWN_PROJECT" "$SPAWN_BIN" <<'PY'
 import json
+import shutil
 import os
 from pathlib import Path
 import signal
@@ -700,7 +661,7 @@ import time
 
 root, base, home, project, fakebin = sys.argv[1], Path(sys.argv[2]).resolve() / 'stalled', sys.argv[3], sys.argv[4], sys.argv[5]
 BOUND = 60
-stall = dict(PYTHONPATH=str(base / 'site'), FM_TEST_FAKE_MOUNT=str(base / 'drive'),
+stall = dict(PYTHONPATH=root + '/tests/fixtures/stalled-drive', FM_TEST_FAKE_MOUNT=str(base / 'drive'),
              FM_TEST_STALL_PREFIX=str(base / 'drive'), FM_TEST_STALL_FIFO=str(base / 'never-written'),
              FM_TEST_STALL_LOG=str(base / 'stalled.log'), FM_PLACEMENT_DRIVE_SECS='2')
 failures = []
@@ -748,15 +709,26 @@ def spawn(name, env):
     return got + (readers, decision)
 
 
-# Control: the same spawn with the drive answering passes quota and every drive check.
+# The spawn project names the fixture pool, so a healthy spawn is admitted.
+Path(project, 'treehouse.toml').write_text('root = ' + json.dumps(str(base / 'drive' / 'pool')) + '\n')
+# finish-first needs tasks-axi; without it on PATH that one check is the only refusal allowed.
+backlog_tool = shutil.which('tasks-axi', path=spawn_env['PATH'])
+print(f'tasks-axi for finish-first: {backlog_tool or "absent, finish-first refusal tolerated"}')
+
+
+def admitted(name, got):
+    decision = got[4]
+    allowed = [] if backlog_tool else ['finish-first']
+    if decision['failed'] != allowed or (backlog_tool and decision['admitted'] is not True):
+        failures.append(f'{name} was not admitted: failed={decision["failed"]} ' + json.dumps(decision['checks']))
+    if got[3]:
+        failures.append(f'{name} reached the stall')
+
+
+# Control: the same spawn with the drive answering is admitted through the bounded checks.
 got = spawn('healthy spawn', dict(spawn_env, FM_TEST_STALL_PREFIX=str(base / 'not-the-drive')))
 if got:
-    checks = got[4]['checks']
-    for key in ('fit', 'quota', 'drive', 'data-disk'):
-        if checks[key]['status'] != 'pass':
-            failures.append(f'healthy spawn control failed {key}: {json.dumps(checks[key])}')
-    if got[3]:
-        failures.append('healthy spawn control reached the stall')
+    admitted('healthy spawn', got)
 got = spawn('stalled spawn', spawn_env)
 if got:
     rc, out, elapsed, readers, decision = got
@@ -829,10 +801,7 @@ for name, env, cap in [('stalled spawn, default deadline', defaults, False),
 # The next attempt on an answering drive is not refused by the earlier stall.
 got = spawn('healthy spawn after the stall', dict(spawn_env, FM_TEST_STALL_PREFIX=str(base / 'not-the-drive')))
 if got:
-    checks = got[4]['checks']
-    for key in ('fit', 'quota', 'drive', 'data-disk'):
-        if checks[key]['status'] != 'pass':
-            failures.append(f'healthy spawn after the stall failed {key}: {json.dumps(checks[key])}')
+    admitted('healthy spawn after the stall', got)
 leftover = sorted(p.name for p in Path(os.environ.get('TMPDIR', '/tmp')).glob('fm-placement-attempt.*')
                   if p.stat().st_mtime >= started_at)
 if leftover:

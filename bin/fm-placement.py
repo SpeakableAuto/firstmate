@@ -4,6 +4,7 @@
 Usage: fm-placement.py assess CONFIG DATA ID HARNESS MODEL EFFORT
        fm-placement.py memory
        fm-placement.py worktree CONFIG PROJECT [WORKTREE]
+       fm-placement.py reachable CONFIG PATH
        fm-placement.py record STATE ID [spawn|recheck]
        fm-placement.py waits STATE
        fm-placement.py drop STATE ID
@@ -26,6 +27,9 @@ urgent-live counts the named live tasks it marks, from backlog JSON on stdin.
 pool, assess and worktree read the machine drive and data volume only in a
 child process (see bounded() below); FM_PLACEMENT_DRIVE_SECS (default 10) is
 that read's deadline, after which placement refuses the drive and moves on.
+reachable checks, under the same bound, that a task copy recorded under the
+machine drive still answers (relaunch calls it before touching that copy);
+a path outside the drive is not read at all.
 FM_PLACEMENT_ATTEMPT_MEMO names one attempt's note (fm-spawn.sh and
 fm-dispatch-resolve.sh set it): once a read times out, later reads in the same
 attempt refuse at once instead of waiting their own deadline.
@@ -177,6 +181,37 @@ def drive_ready(drive):
     return real_directory(drive) and drive.is_mount() and os.access(drive, os.W_OK)
 
 
+def reach(path):
+    """Touch a task copy the way a relaunch first does: stat, list, its .git."""
+    os.stat(path)
+    os.listdir(path)
+    os.path.lexists(os.path.join(path, ".git"))
+    return True
+
+
+def reachable(config, target):
+    """A recorded task copy under the machine drive must answer within the bound.
+
+    The comparison is lexical, so a copy outside the drive costs no read; a
+    relative or symlinked spelling outside the drive is not checked.
+    """
+    path = config / "crew-placement.json"
+    drive = read(path).get("drive") if path.exists() else None
+    if not drive:
+        return result(True, "no machine drive configured")
+    root = os.path.normpath(drive)
+    spelled = os.path.normpath(target) if os.path.isabs(target) else ""
+    if spelled and spelled != root and not spelled.startswith(root.rstrip("/") + "/"):
+        return result(True, f"not on the machine drive: {target}")
+    try:
+        bounded("reach", target)
+    except Stalled as stalled:
+        return failure(f"{DRIVE_UNAVAILABLE}: {drive} (task copy {target} check {stalled})", f"stalled:{drive}")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return result(True, f"task copy read finished: {error}")
+    return result(True, f"task copy answers: {target}")
+
+
 def free_gib(path):
     stat = os.statvfs(path)
     return stat.f_bavail * stat.f_frsize / 1024**3
@@ -185,7 +220,7 @@ def free_gib(path):
 def probe(name):
     """Child side of bounded(): JSON arguments on stdin, one JSON answer out."""
     function = {"external": external_checks, "treehouse": treehouse_root,
-                "drive": drive_ready, "free": free_gib}[name]
+                "drive": drive_ready, "free": free_gib, "reach": reach}[name]
     try:
         answer = {"value": function(*json.load(sys.stdin))}
     except (OSError, ValueError, KeyError, TypeError) as error:
@@ -661,6 +696,9 @@ def main():
         except Stalled as stalled:
             output = failure(f"treehouse-root: {DRIVE_UNAVAILABLE}: {profile.get('drive')} (pool root check {stalled})",
                              f"treehouse-root:{project}:stalled")
+    elif operation == "reachable":
+        config, target = args
+        output = reachable(Path(config), target)
     elif operation == "assess":
         config, data, task, harness, model, effort = args
         output = assess(Path(config), Path(data), task, harness, model, effort)

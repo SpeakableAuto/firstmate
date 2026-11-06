@@ -992,9 +992,14 @@ preflight_relaunch_admission() {
 # refuses outright when any of it cannot be established.
 CHECKPOINT_LINES=()
 safe_checkpoint() {
-  local wt_real wt_top wt_top_real head head_ref head_ref_status status_output dirty children marker child_meta
+  local wt_real wt_top wt_top_real head head_ref head_ref_status status_output dirty children marker child_meta reach
   CHECKPOINT_LINES=()
   [ -n "$WT" ] || die "task $ID has no recorded worktree; refusing to relaunch without a recorded local copy to preserve"
+  # A copy on a stalled machine drive refuses here, within the placement
+  # deadline, before any unbounded read of it below (bin/fm-placement.py).
+  reach=$(python3 "$SCRIPT_DIR/fm-placement.py" reachable "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$WT") || reach='{}'
+  printf '%s\n' "$reach" | jq -e '.status == "pass"' >/dev/null 2>&1 \
+    || die "placement refused: $(printf '%s\n' "$reach" | jq -r '.reason // "the recorded worktree drive check failed"' 2>/dev/null); refusing to relaunch before touching task $ID's copy"
   [ -d "$WT" ] || die "task $ID's recorded worktree $WT is missing; refusing to relaunch and lose track of its work"
   wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || die "task $ID's recorded worktree $WT cannot be resolved"
   wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null) \
