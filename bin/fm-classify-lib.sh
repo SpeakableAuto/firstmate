@@ -85,9 +85,10 @@ FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 #     children process groups the outer kill cannot reach, so the read sets
 #     FM_TIMEOUT_GROUP_RECORD=.crew-state-nested-<slot>, and each such child
 #     records its group there before it leaves the reader's group or runs, or
-#     does not run at all; the bash timeout fallback, which cannot publish
-#     first, refuses such a call before creating any group (status 125), so
-#     the reader gets a failed call, never an unrecorded group. The file lives outside the reclaimable slot, and no
+#     does not run at all. The bash timeout fallback cannot publish first, so
+#     where it is the resolved mechanism the owned read is unavailable before
+#     the reader starts (and the fallback itself refuses an owned call, status
+#     125, before creating any group). The file lives outside the reclaimable slot, and no
 #     new read of that crew starts while any recorded group is still alive.
 #     The read also sets FM_CREW_STATE_NO_FORGE=1: the watcher's consumers use
 #     only the state and source, never the passed-run PR detail a forge read
@@ -123,6 +124,14 @@ crew_state_read() {  # <id>
   retry=$((10#$retry))
   now=$(date +%s)
   [ -z "$own" ] || declare -F fm_progress_audit_run >/dev/null || own=
+  # An owned read needs every nested bound to publish its group first, which
+  # the bash timeout fallback cannot do (bin/fm-timeout-lib.sh). On a host left
+  # with only that mechanism the read is unavailable before anything starts:
+  # running the reader would let a refused nested call surface as an ordinary
+  # verdict (a refused delivery check reads as blocked) instead of unknown.
+  if [ -n "$own" ] && [ "$(fm_timeout_mechanism)" = bash ]; then
+    return 1
+  fi
   case "$deadline" in
     ''|*[!0-9]*) ;;
     *)

@@ -7146,20 +7146,45 @@ test_incomplete_round_survives_an_early_wake() {
 test_owned_bash_timeout_refuses_before_any_group() {
   local dir state fakebin out got
   dir=$(make_case crew-state-bash-refusal); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/primitive.out"
+  # Every command fm_run_bash_timeout executes is traced (DEBUG trap with
+  # function tracing), so the owned call is shown to stop before mktemp, job
+  # control or any launch, not merely to leave nothing behind afterwards. The
+  # unowned control's trace shows the same instrumentation does see them.
   FM_TIMEOUT_MECHANISM_OVERRIDE=bash bash -c '
     . "$1/bin/fm-timeout-lib.sh"; d=$2
     [ "$(fm_timeout_mechanism)" = bash ] || { echo mechanism-not-bash; exit 1; }
+    traced() {  # <trace-file> <command...>
+      local out=$1; shift
+      set -T
+      trap '\''[ "${FUNCNAME[0]:-}" = fm_run_bash_timeout ] && printf "%s\n" "$BASH_COMMAND" >> "$TRACE_OUT"'\'' DEBUG
+      TRACE_OUT=$out "$@"
+      local rc=$?
+      trap - DEBUG; set +T
+      return "$rc"
+    }
     started=$(date +%s)
-    FM_TIMEOUT_GROUP_RECORD="$d/record" fm_run_timed 5 sh -c "touch \"\$0\"; sleep 30" "$d/owned-ran"
+    FM_TIMEOUT_GROUP_RECORD="$d/record" traced "$d/owned.trace" fm_run_bash_timeout 5 sh -c "touch \"\$0\"; sleep 30" "$d/owned-ran"
     echo "owned_rc=$? owned_secs=$(( $(date +%s) - started ))"
     pgrep -P "$$" > "$d/children" 2>/dev/null
     echo "children=$(wc -l < "$d/children" | tr -d " ") jobs=$(jobs -p | wc -l | tr -d " ")"
     # Control: unowned, the fallback still runs and bounds the command.
-    fm_run_timed 1 sh -c "touch \"\$0\"; sleep 30" "$d/unowned-ran"
+    traced "$d/unowned.trace" fm_run_bash_timeout 1 sh -c "touch \"\$0\"; sleep 30" "$d/unowned-ran"
     echo "unowned_rc=$?"
   ' _ "$ROOT" "$dir" > "$out" 2>&1
   grep -Fx 'owned_rc=125 owned_secs=0' "$out" >/dev/null || fail "the owned bash call did not refuse at once: $(cat "$out")"
   grep -Fx 'children=0 jobs=0' "$out" >/dev/null || fail "the owned bash call left a child or job behind: $(cat "$out")"
+  [ -s "$dir/owned.trace" ] || fail "instrumentation: the owned call produced no trace"
+  # The first traced line is the caller's own call (the trap fires on entry).
+  grep -v 'TRACE_OUT=' "$dir/owned.trace" | grep -E 'mktemp|set -m|set \+m' >/dev/null \
+    && fail "the owned bash call reached a launch step before refusing: $(cat "$dir/owned.trace")"
+  # Exactly: its local declaration, shift, the record test, return 125.
+  [ "$(grep -vc 'TRACE_OUT=' "$dir/owned.trace")" -eq 4 ] \
+    || fail "the owned bash call ran more than its refusal: $(cat "$dir/owned.trace")"
+  grep -F 'return 125' "$dir/owned.trace" >/dev/null || fail "the owned bash call did not stop at its refusal: $(cat "$dir/owned.trace")"
+  grep -F 'mktemp' "$dir/unowned.trace" >/dev/null \
+    || fail "instrumentation: the unowned control's trace missed mktemp: $(cat "$dir/unowned.trace")"
+  grep -F 'set -m' "$dir/unowned.trace" >/dev/null \
+    || fail "instrumentation: the unowned control's trace missed job control: $(cat "$dir/unowned.trace")"
   [ ! -e "$dir/owned-ran" ] || fail "the owned bash call ran its command"
   [ ! -s "$dir/record" ] || fail "the owned bash call wrote a group record: $(cat "$dir/record")"
   grep -Fx 'unowned_rc=124' "$out" >/dev/null || fail "the unowned bash fallback no longer bounds its command: $(cat "$out")"
@@ -7181,6 +7206,46 @@ SH
   [ ! -e "$dir/reader-ran" ] || fail "the reader's nested bash call ran its command"
   [ ! -s "$state/.crew-state-nested-crew-state-bashcrew" ] || fail "a nested bash group was recorded: $(cat "$state/.crew-state-nested-crew-state-bashcrew")"
   pass "an owned bash timeout refuses before creating any group, the unowned fallback is unchanged, and the crew stays unknown"
+}
+
+# The real reader on a host whose only timeout mechanism is the bash fallback:
+# an idle direct-PR ship whose done: names a Gerrit change needs a bounded live
+# verification the fallback cannot run owned. The watcher must hold that crew
+# unknown - no stale wake, and its stale hash, wedge timer and write tracking
+# untouched - rather than act on a "blocked" verdict the refusal would produce.
+test_real_reader_gerrit_done_on_bash_fallback_stays_unknown() {
+  local dir state fakebin out capture_file key since
+  dir=$(make_case crew-state-gerrit-bash); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  mkdir -p "$dir/wt"
+  git -C "$dir/wt" init -q
+  git -C "$dir/wt" -c user.email=t@example.test -c user.name=t commit -q --allow-empty -m init
+  printf 'finished, change published' > "$capture_file"
+  printf 'window=test:fm-gdone\nkind=ship\nmode=direct-PR\nworktree=%s\nproject=fp\nbackend=tmux\n' "$dir/wt" > "$state/gdone.meta"
+  printf 'done: published https://gerrit.example.test/c/fp/+/12\n' > "$state/gdone.status"
+  printf '%s' "$(seen_sig "$state/gdone.status")" > "$state/.seen-gdone_status"
+  key=test_fm-gdone
+  printf '%s' "$(hash_text 'finished, change published')" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  since=$(( $(date +%s) - 100 ))
+  printf '%s\n' "$since" > "$state/.stale-since-$key"
+  date +%s > "$state/.writing-since-$key"
+  date +%s > "$state/.crew-state-unavailable"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW=test:fm-gdone FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$ROOT/bin/fm-crew-state.sh" \
+    FM_TIMEOUT_MECHANISM_OVERRIDE=bash FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_CREW_STATE_READ_SECS=5 "$WATCH" > "$out" &
+  HUNG_PID=$!
+  if ! wait_poll_cycle "$state" "$HUNG_PID" 200 || ! wait_poll_cycle "$state" "$HUNG_PID" 200; then
+    reap "$HUNG_PID"; fail "the watcher acted on the refused Gerrit verification: $(cat "$out")"
+  fi
+  reap "$HUNG_PID"
+  grep -F 'stale: test:fm-gdone' "$out" >/dev/null && fail "a stale wake was raised on a read that could not run"
+  [ ! -e "$state/.stale-$key" ] || fail "the stale hash was committed on a read that could not run"
+  [ "$(cat "$state/.stale-since-$key" 2>/dev/null)" = "$since" ] || fail "the wedge timer was changed on a read that could not run"
+  [ -e "$state/.writing-since-$key" ] || fail "write tracking was cleared on a read that could not run"
+  grep -F 'crew state unknown' "$state/.watch-triage.log" >/dev/null || fail "the unavailable read was not recorded"
+  pass "the real reader's Gerrit done check on the bash fallback leaves the crew unknown and its stale records untouched"
 }
 
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
@@ -7348,3 +7413,4 @@ test_interrupted_group_registration_never_runs
 test_owned_read_skips_the_forge_and_records_groups
 test_incomplete_round_survives_an_early_wake
 test_owned_bash_timeout_refuses_before_any_group
+test_real_reader_gerrit_done_on_bash_fallback_stays_unknown
