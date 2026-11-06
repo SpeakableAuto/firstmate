@@ -64,21 +64,58 @@ FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 # bound, or return 1 having learned nothing. A worktree on a slow or hung drive
 # makes that reader's Git calls block, and a caller looping over every parked or
 # held crew would otherwise stall for as long as the drive does.
-# FM_CREW_STATE_READ_SECS (default 10, whole seconds 1..60) bounds one read.
-# FM_CREW_STATE_DEADLINE, when a caller sets it to an epoch, skips every read at
-# or past that time, so many bounded reads in one pass still end in finite time.
-# Output goes through a temporary file rather than a pipe: a reader stuck in
-# kernel I/O can outlive its kill, and would then hold a pipe open forever.
-# The reader's own exit status is ignored, as callers always did; only the bound
-# or the deadline makes this return 1.
+# FM_CREW_STATE_READ_SECS (default 10, whole seconds 1..60) bounds one read;
+# zero, zero-padded zero or anything else invalid falls back to the default,
+# because a zero bound disables the timeout instead of tightening it.
+# FM_CREW_STATE_DEADLINE, when a caller sets it to an epoch, is a read-admission
+# deadline: no new read starts at or past it (a read already running keeps its
+# own bound).
+# FM_CREW_STATE_OWN_STATE, when a caller sets it to its state directory, adds two
+# protections for a caller that reads repeatedly (the watcher):
+#   - ownership: the read runs through fm_progress_audit_run
+#     (bin/fm-progress-audit-bound-lib.sh) in slot crew-state-<id>, so a reader
+#     that survives its kill in uninterruptible I/O keeps its ownership record,
+#     and no second read for that crew starts until the first is gone; nothing
+#     here signals a recorded process;
+#   - retry backoff: a timed-out read stamps .crew-state-backoff-<id>, and that
+#     crew is not read again for FM_CREW_STATE_RETRY_SECS (default 300), so crews
+#     on a hung drive cannot spend every cycle's budget ahead of healthy ones.
+# Without it, a single bounded read writes to a temporary file rather than a
+# pipe, so a surviving reader cannot hold the caller's output open.
+# The reader's own exit status is ignored, as callers always did; only the
+# bound, the deadline, ownership or backoff makes this return 1.
 crew_state_read() {  # <id>
-  local id=$1 secs=${FM_CREW_STATE_READ_SECS:-10} deadline=${FM_CREW_STATE_DEADLINE:-} now tmp rc=0
-  case "$secs" in ''|*[!0-9]*|0) secs=10 ;; esac
+  local id=$1 secs=${FM_CREW_STATE_READ_SECS:-10} deadline=${FM_CREW_STATE_DEADLINE:-}
+  local own=${FM_CREW_STATE_OWN_STATE:-} retry=${FM_CREW_STATE_RETRY_SECS:-300} now tmp rc=0 slot stamp
+  case "$secs" in ''|*[!0-9]*) secs=10 ;; esac
+  secs=$((10#$secs))
+  [ "$secs" -ge 1 ] || secs=10
   [ "$secs" -le 60 ] || secs=60
+  case "$retry" in ''|*[!0-9]*) retry=300 ;; esac
+  retry=$((10#$retry))
+  now=$(date +%s)
   case "$deadline" in
     ''|*[!0-9]*) ;;
-    *) now=$(date +%s); [ "$now" -lt "$deadline" ] || return 1 ;;
+    *) [ "$now" -lt "$((10#$deadline))" ] || return 1 ;;
   esac
+  if [ -n "$own" ] && declare -F fm_progress_audit_run >/dev/null; then
+    slot="crew-state-$(printf '%s' "$id" | tr -c 'A-Za-z0-9._-' '_')"
+    stamp="$own/.crew-state-backoff-$slot"
+    if [ -s "$stamp" ]; then
+      read -r rc < "$stamp" 2>/dev/null || rc=0
+      case "$rc" in ''|*[!0-9]*) rc=0 ;; esac
+      [ "$((now - rc))" -ge "$retry" ] || return 1
+    fi
+    rc=0
+    tmp=$(fm_progress_audit_run "$own" "$slot" "$secs" "$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || rc=$?
+    if fm_timed_out "$rc"; then
+      printf '%s\n' "$now" > "$stamp" 2>/dev/null || true
+      return 1
+    fi
+    rm -f "$stamp"
+    printf '%s\n' "$tmp"
+    return 0
+  fi
   tmp=$(mktemp "${TMPDIR:-/tmp}/fm-crew-state.XXXXXX") || return 1
   fm_run_timed "$secs" "$FM_CREW_STATE_BIN" "$id" > "$tmp" 2>/dev/null < /dev/null || rc=$?
   if fm_timed_out "$rc"; then
@@ -2593,11 +2630,12 @@ FM_GATE_HUMAN_DECISION='ask-user: authority decision'
 # then tie a decision to this gate.
 # Same cost and the same caveat as crew_absorb_class: one fm-crew-state.sh read,
 # which may make a bounded no-mistakes call, so callers take it only where they
-# already accept that cost.
+# already accept that cost. Returns 2, not 1, when crew_state_read produced no
+# verdict, so a caller can tell "not a human gate" from "could not look".
 crew_gate_awaits_human_decision() {  # <id> -> <run-id> on stdout
   local id=$1 line state src rest part human='' run=''
   [ -n "$id" ] || return 1
-  line=$(crew_state_read "$id") || return 1
+  line=$(crew_state_read "$id") || return 2
   case "$line" in state:*) ;; *) return 1 ;; esac
   state=${line#state: }; state=${state%% *}
   [ "$state" = parked ] || return 1

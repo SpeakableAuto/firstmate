@@ -6713,7 +6713,7 @@ test_hung_crew_state_surfaces_once() {
   dir=$(hung_paused_fixture hung-crew-state-surfaces); state="$dir/state"; drain_out="$dir/drain.out"
   hung_paused_watch "$dir"
   wait_for_exit "$HUNG_PID" 100 || { reap "$HUNG_PID"; fail "an unknown crew state never reached firstmate"; }
-  grep -F 'check: crew-state: current-state read for held timed out' "$dir/watch.out" >/dev/null \
+  grep -F 'check: crew-state: current-state read unavailable this cycle for: held' "$dir/watch.out" >/dev/null \
     || fail "the unknown crew-state notice was not printed: $(cat "$dir/watch.out")"
   grep -F 'possible wedge' "$dir/watch.out" >/dev/null && fail "an unknown crew state was escalated as a wedge"
   [ -e "$state/.crew-state-unavailable" ] || fail "the notice throttle marker was not recorded"
@@ -6745,6 +6745,147 @@ test_beacon_not_refreshed_inside_a_blocked_read() {
   [ "$max" -ge 3 ] || fail "the beacon was refreshed while a crew-state read was blocked (max age ${max}s)"
   [ "$max" -lt 10 ] || fail "the beacon aged past the read bound (max age ${max}s)"
   pass "the beacon is not refreshed inside a blocked read, and ages only as long as the bound"
+}
+
+# selective_crew_state <fakebin>: a reader that blocks for 30 seconds for any
+# task id starting with "hung" and answers FM_FAKE_CREW_STATE for the rest, so
+# one fixture holds crews on a hung drive next to crews on a healthy one.
+selective_crew_state() {  # <fakebin>
+  cat > "$1/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "${1:-}" >> "$FM_FAKE_CREW_STATE_LOG"
+case "${1:-}" in hung*) sleep 30 ;; esac
+printf '%s\n' "${FM_FAKE_CREW_STATE:-state: unknown · source: none · fake default}"
+SH
+  chmod +x "$1/fm-crew-state.sh"
+}
+
+# Zero and zero-padded zero would disable the timeout, so they fall back to the
+# default bound instead of reaching the runner.
+test_crew_state_read_rejects_zero_bounds() {
+  local dir fakebin v started elapsed got
+  dir=$(make_case crew-state-zero-bound); fakebin="$dir/fakebin"
+  hung_crew_state "$fakebin"
+  for v in 00 000; do
+    started=$(date +%s)
+    got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_READ_SECS=$v crew_absorb_class a)
+    elapsed=$(( $(date +%s) - started ))
+    [ "$got" = unknown ] || fail "FM_CREW_STATE_READ_SECS=$v did not bound the read (got $got)"
+    [ "$elapsed" -lt 20 ] || fail "FM_CREW_STATE_READ_SECS=$v left the read unbounded (${elapsed}s)"
+  done
+  pass "zero and zero-padded zero read bounds fall back to the default bound"
+}
+
+# With ownership on, a reader still recorded as alive blocks another read of the
+# same crew (no accumulation behind a stuck drive), and a timed-out crew backs
+# off while other crews are still read.
+test_crew_state_read_ownership_and_backoff() {
+  local dir state fakebin log holder got slotdir
+  dir=$(make_case crew-state-owned); state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/reads.log"
+  selective_crew_state "$fakebin"
+  # A surviving reader from an earlier call: its owner, runner and group are a
+  # live process this test owns.
+  sleep 60 & holder=$!
+  slotdir="$state/.progress-audit/.owned-crew-state-held"
+  mkdir -p "$slotdir"
+  printf '%s\n' "$holder" > "$slotdir/owner"; printf '%s\n' "$holder" > "$slotdir/runner"
+  printf '%s\n' "$(ps -o pgid= -p "$holder" | tr -d ' ')" > "$slotdir/group"
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" \
+    FM_FAKE_CREW_STATE_LOG="$log" FM_CREW_STATE_READ_SECS=1 bash -c '
+      . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"; crew_absorb_class held' _ "$ROOT")
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  [ "$got" = unknown ] || fail "a still-owned reader did not make the next read unknown (got $got)"
+  [ ! -s "$log" ] || fail "a second reader started while the first was still owned"
+  [ -d "$slotdir" ] || fail "the surviving reader's ownership record was discarded"
+  # Backoff: the first timed-out read stamps the crew; the next is skipped at no
+  # cost, while a healthy crew is still read.
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" \
+    FM_FAKE_CREW_STATE_LOG="$log" FM_CREW_STATE_READ_SECS=1 \
+    FM_FAKE_CREW_STATE='state: paused · source: status-log · waiting' bash -c '
+      . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"
+      crew_absorb_class hunga; printf " "; crew_absorb_class hunga; printf " "; crew_absorb_class ok' _ "$ROOT")
+  [ "$got" = "unknown unknown paused" ] || fail "backoff did not skip the hung crew and still read the healthy one (got $got)"
+  [ "$(grep -c '^hunga$' "$log")" -eq 1 ] || fail "a backed-off crew was read again inside its backoff"
+  FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_READ_SECS=1 \
+    crew_gate_awaits_human_decision hungb >/dev/null
+  [ "$?" -eq 2 ] || fail "a timed-out gate read was not reported as unavailable (status 2)"
+  pass "an owned reader blocks a second read, a timed-out crew backs off, and an unread gate is reported unavailable"
+}
+
+# Fairness on the actual scan: a healthy crew listed after a hung one is skipped
+# when the hung read spends the cycle's admission budget, then classified on a
+# later cycle once the hung crew backs off. The hung crew's terminal stale is
+# never committed on no verdict.
+test_hung_crew_does_not_starve_a_later_crew() {
+  local dir state fakebin out capture_file hung_key ok_key
+  dir=$(make_case crew-state-fair); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  selective_crew_state "$fakebin"
+  printf 'finished, awaiting review' > "$capture_file"
+  printf 'window=test:fm-hung\nkind=ship\n' > "$state/hung.meta"
+  printf 'window=test:fm-ok\nkind=ship\n' > "$state/ok.meta"
+  printf 'done: PR https://example.test/pr/1\n' > "$state/hung.status"
+  printf 'done: PR https://example.test/pr/2\n' > "$state/ok.status"
+  printf '%s' "$(seen_sig "$state/hung.status")" > "$state/.seen-hung_status"
+  printf '%s' "$(seen_sig "$state/ok.status")" > "$state/.seen-ok_status"
+  hung_key=test_fm-hung; ok_key=test_fm-ok
+  printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-$hung_key"
+  printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-$ok_key"
+  printf '1\n' > "$state/.count-$hung_key"; printf '1\n' > "$state/.count-$ok_key"
+  date +%s > "$state/.crew-state-unavailable"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-hung\nfm-ok')" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_CREW_STATE_READ_SECS=1 FM_CREW_STATE_CYCLE_BUDGET_SECS=1 "$WATCH" > "$out" &
+  HUNG_PID=$!
+  wait_for_exit "$HUNG_PID" 150 || { reap "$HUNG_PID"; fail "the healthy crew behind a hung one was never classified: $(cat "$out")"; }
+  grep -Fx 'stale: test:fm-ok' "$out" >/dev/null || fail "the healthy crew's terminal stale did not surface: $(cat "$out")"
+  grep -F 'stale: test:fm-hung' "$out" >/dev/null && fail "the hung crew was surfaced as stale on no verdict"
+  [ ! -e "$state/.stale-$hung_key" ] || fail "the hung crew's terminal stale was committed on no verdict"
+  grep -F 'crew state unknown' "$state/.watch-triage.log" >/dev/null || fail "the skipped reads were not recorded"
+  pass "a hung crew backs off and cannot starve a later crew, and its terminal stale is not committed on no verdict"
+}
+
+# Progress-conditioned beacon: a scan that keeps finishing windows refreshes the
+# beacon at each completed window once it is old enough, while each single
+# blocked read still lets it age.
+test_beacon_follows_completed_scan_work() {
+  local dir state fakebin capture_file i m now age max=0 n
+  dir=$(make_case crew-state-progress-beat); state="$dir/state"; fakebin="$dir/fakebin"
+  capture_file="$dir/pane.txt"
+  selective_crew_state "$fakebin"
+  printf 'idle, holding' > "$capture_file"
+  date +%s > "$state/.crew-state-unavailable"
+  for n in hunga hungb hungc; do
+    printf 'window=test:fm-%s\nkind=ship\n' "$n" > "$state/$n.meta"
+    printf 'done: PR https://example.test/pr/%s\n' "$n" > "$state/$n.status"
+    printf '%s' "$(seen_sig "$state/$n.status")" > "$state/.seen-${n}_status"
+    printf '%s' "$(hash_text 'idle, holding')" > "$state/.hash-test_fm-$n"
+    printf '1\n' > "$state/.count-test_fm-$n"
+  done
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-hunga\nfm-hungb\nfm-hungc')" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_CREW_STATE_READ_SECS=3 FM_WATCHER_PROGRESS_BEAT_SECS=1 "$WATCH" > "$dir/watch.out" &
+  HUNG_PID=$!
+  wait_live "$HUNG_PID" 20 || { reap "$HUNG_PID"; fail "the watcher exited before its scan"; }
+  i=0
+  while [ "$i" -lt 120 ]; do
+    m=$(file_mtime "$state/.last-watcher-beat")
+    if [ -n "$m" ]; then
+      now=$(date +%s); age=$(( now - m ))
+      [ "$age" -le "$max" ] || max=$age
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  reap "$HUNG_PID"
+  # Three blocked 3s reads in one cycle: without progress checkpoints the beacon
+  # would age past 9s; with them it ages about one read at a time.
+  [ "$max" -ge 2 ] || fail "the beacon was refreshed inside a blocked read (max age ${max}s)"
+  [ "$max" -le 6 ] || fail "the beacon did not follow completed scan work (max age ${max}s)"
+  pass "the beacon follows completed scan work and still ages inside a blocked read"
 }
 
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
@@ -6900,3 +7041,7 @@ test_crew_state_read_is_bounded
 test_hung_crew_state_keeps_the_watcher_cycling
 test_hung_crew_state_surfaces_once
 test_beacon_not_refreshed_inside_a_blocked_read
+test_crew_state_read_rejects_zero_bounds
+test_crew_state_read_ownership_and_backoff
+test_hung_crew_does_not_starve_a_later_crew
+test_beacon_follows_completed_scan_work

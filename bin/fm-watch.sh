@@ -403,8 +403,15 @@ PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT
 # deadline set after the beacon touch). Default 120 leaves most of the default
 # 300-second guard grace for the rest of the cycle.
 CREW_STATE_CYCLE_BUDGET_SECS=${FM_CREW_STATE_CYCLE_BUDGET_SECS:-120}
-case "$CREW_STATE_CYCLE_BUDGET_SECS" in ''|*[!0-9]*|0) CREW_STATE_CYCLE_BUDGET_SECS=120 ;; esac
-export -n FM_CREW_STATE_DEADLINE 2>/dev/null || true
+case "$CREW_STATE_CYCLE_BUDGET_SECS" in ''|*[!0-9]*) CREW_STATE_CYCLE_BUDGET_SECS=120 ;; esac
+CREW_STATE_CYCLE_BUDGET_SECS=$((10#$CREW_STATE_CYCLE_BUDGET_SECS))
+[ "$CREW_STATE_CYCLE_BUDGET_SECS" -ge 1 ] || CREW_STATE_CYCLE_BUDGET_SECS=120
+export -n FM_CREW_STATE_DEADLINE FM_CREW_STATE_OWN_STATE 2>/dev/null || true
+FM_CREW_STATE_OWN_STATE=$STATE
+WATCHER_PROGRESS_BEAT_SECS=${FM_WATCHER_PROGRESS_BEAT_SECS:-60}
+case "$WATCHER_PROGRESS_BEAT_SECS" in ''|*[!0-9]*) WATCHER_PROGRESS_BEAT_SECS=60 ;; esac
+WATCHER_PROGRESS_BEAT_SECS=$((10#$WATCHER_PROGRESS_BEAT_SECS))
+[ "$WATCHER_PROGRESS_BEAT_SECS" -ge 1 ] || WATCHER_PROGRESS_BEAT_SECS=60
 # A declared wait that names WHEN it clears (`paused: ... until <UTC ISO 8601>`,
 # status_paused_until in fm-classify-lib.sh) is condition-aware: it is not
 # rechecked before that time, even when that time lies beyond the flat cadence,
@@ -1340,9 +1347,16 @@ wedge_wait_evidence() {  # <task> -> one wait_record on stdout
     return 0
   fi
   [ -e "$CONFIG/wedge-defer-parked-gate" ] || return 1
-  if status_has_open_needs_decision "$statusf" \
-    && run=$(crew_gate_awaits_human_decision "$task") \
-    && status_has_open_needs_decision "$statusf" "$run"; then
+  status_has_open_needs_decision "$statusf" || return 1
+  run=$(crew_gate_awaits_human_decision "$task") || {
+    # Could not look: defer on the recheck cadence rather than escalate a
+    # wedge the gate read might have explained.
+    [ "$?" -eq 2 ] || return 1
+    wait_record 'gate unverified (crew-state read unavailable)' 'current-state read timed out or was skipped' \
+      supervisor 'inspect the crew directly; its worktree drive may be slow or hung' ''
+    return 0
+  }
+  if status_has_open_needs_decision "$statusf" "$run"; then
     wait_record 'verified wait at a parked gate' "awaiting firstmate's ask-user decision" \
       supervisor "decide the gate's ask-user finding and relay the decision to the crewmate" ''
     return 0
@@ -1752,16 +1766,32 @@ clear_pause_tracking() {  # <window-key>
 # (bin/fm-classify-lib.sh crew_state_read). Callers leave every stale, pause and
 # wedge record exactly as it was, so the same pane is judged again next cycle on
 # a real verdict rather than absorbed, re-alarmed or escalated on no evidence.
-# A persisting condition still reaches firstmate, once per PAUSE_RESURFACE_SECS,
-# so a hung worktree drive cannot keep a crew unsupervised in silence.
+# Every such crew in the cycle is collected, and crew_state_unknown_report
+# raises them together after the scan, once per PAUSE_RESURFACE_SECS, so a hung
+# worktree drive cannot keep any crew unsupervised in silence.
 crew_state_unknown() {  # <window> <task>
+  triage_log "crew state unknown (bounded read timed out, backing off, still owned, or past the read-admission deadline): $1; no crew outcome inferred"
+  case " $CREW_STATE_UNKNOWN_TASKS " in *" ${2:-$1} "*) ;; *) CREW_STATE_UNKNOWN_TASKS="${CREW_STATE_UNKNOWN_TASKS:+$CREW_STATE_UNKNOWN_TASKS }${2:-$1}" ;; esac
+}
+
+crew_state_unknown_report() {
   local msg
-  triage_log "crew state unknown (bounded read timed out or cycle budget spent): $1; no crew outcome inferred"
+  [ -n "$CREW_STATE_UNKNOWN_TASKS" ] || return 0
   [ "$(age_of "$STATE/.crew-state-unavailable")" -ge "$PAUSE_RESURFACE_SECS" ] || return 0
-  msg="check: crew-state: current-state read for $2 timed out or was skipped (its worktree drive may be slow or hung); no crew outcome inferred, inspect it directly"
+  msg="check: crew-state: current-state read unavailable this cycle for: $CREW_STATE_UNKNOWN_TASKS (timed out, backing off or still held; their worktree drive may be slow or hung); no crew outcome inferred, inspect them directly"
   fm_wake_append check crew-state "$msg" || exit 1
   date +%s > "$STATE/.crew-state-unavailable"
   wake "$msg"
+}
+
+# watcher_progress_beat: refresh the liveness beacon at a completed-work
+# checkpoint (one stale-scan window or one check finished), but only once the
+# beacon is WATCHER_PROGRESS_BEAT_SECS old, so a long scan that keeps finishing
+# work stays fresh while a single blocked operation, which never reaches the
+# next checkpoint, still lets the beacon age for the guard.
+watcher_progress_beat() {
+  [ "$(age_of "$STATE/.last-watcher-beat")" -ge "$WATCHER_PROGRESS_BEAT_SECS" ] || return 0
+  touch "$STATE/.last-watcher-beat"
 }
 
 # Reconcile a declared pause or captain-held status with authoritative crew state.
@@ -2745,12 +2775,14 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
-  # Every bounded crew-state read in this cycle shares one budget, so a pass over
-  # many parked or held crews on a slow drive still ends well inside the guard's
-  # grace. The beacon is not touched again mid-cycle: a watcher stuck anywhere
-  # else must still go stale. Not exported: the readers run in this shell's own
-  # subshells, and a detached child outliving the cycle must not inherit it.
+  # No new bounded crew-state read starts after this cycle's read-admission
+  # deadline, so a pass over many parked or held crews on a slow drive cannot
+  # keep starting reads. Mid-cycle the beacon moves only at completed-work
+  # checkpoints (watcher_progress_beat), never during a blocked operation. Not
+  # exported: the readers run in this shell's own subshells, and a detached
+  # child outliving the cycle must not inherit it.
   FM_CREW_STATE_DEADLINE=$(( $(date +%s) + CREW_STATE_CYCLE_BUDGET_SECS ))
+  CREW_STATE_UNKNOWN_TASKS=
 
   # A handling successor must surface rows added after its inherited baseline
   # before slower fleet checks can hold this cycle for minutes.
@@ -2886,6 +2918,7 @@ while :; do
     contribution_check_output=
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
+      watcher_progress_beat
       is_pr_poll=0
       if [ "$(basename "$c")" = x-watch.check.sh ]; then
         if fmx_poll_shim_valid "$c" "$FM_HOME" "$FM_ROOT" \
@@ -3143,6 +3176,7 @@ EOF
   # remembers the hash already classified, or the declaration a busy pane's
   # crossed turn bound already handed to the away-mode daemon).
   while IFS= read -r w; do
+    watcher_progress_beat
     kind=$(window_kind "$w")
     task=$(window_to_task "$w" "$STATE")
     # Steering-inbox loss detection runs before the secondmate stale
@@ -3218,7 +3252,12 @@ EOF
           # authoritative source fm-crew-state.sh itself already prioritizes
           # over the log) a chance to override before trusting the log.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
+            terminal_task=$(window_to_task "$w" "$STATE")
+            terminal_class=$(crew_absorb_class "$terminal_task")
+            if [ "$terminal_class" = unknown ]; then
+              # No verdict: neither override nor commit the terminal stale on it.
+              crew_state_unknown "$w" "$terminal_task"
+            elif [ "$terminal_class" = working ]; then
               printf '%s' "$h" > "$sf"
               date +%s > "$ssf"
               clear_write_tracking "$key"
@@ -3364,6 +3403,7 @@ EOF
       fi
     fi
   done < <(recorded_windows)
+  crew_state_unknown_report
 
   # Heartbeat: the watcher runs a cheap fleet-scan at a regular cadence no matter
   # what. Time-based via .last-heartbeat mtime; interval doubles per consecutive
