@@ -1793,16 +1793,17 @@ crew_state_unknown_report() {
   wake "$msg"
 }
 
-# crew_state_round_start: one read round lasts until a cycle finishes without
-# the read-admission deadline refusing any read. While the last cycle left the
-# round incomplete, the round number is kept and catch-up is on, so
+# crew_state_round_start: one read round lasts until a stale scan completes
+# without the read-admission deadline refusing any read (crew_state_round_finish
+# below is the only place the incomplete marker is removed, so a cycle that
+# wakes or restarts before finishing its scan never discards it). While the
+# round is incomplete, the round number is kept and catch-up is on, so
 # crew_state_read (bin/fm-classify-lib.sh) defers crews already tried in it and
 # spends the budget on crews not yet tried; otherwise a new round starts and
 # catch-up is off. The files persist, so a restarted watcher keeps its place.
 crew_state_round_start() {
   local round
   if [ -e "$STATE/.crew-state-round-incomplete" ]; then
-    rm -f "$STATE/.crew-state-round-incomplete"
     : > "$STATE/.crew-state-catchup"
     return 0
   fi
@@ -1810,6 +1811,14 @@ crew_state_round_start() {
   case "$round" in ''|*[!0-9]*) round=0 ;; esac
   printf '%s\n' "$((10#$round + 1))" > "$STATE/.crew-state-round"
   rm -f "$STATE/.crew-state-catchup"
+}
+
+# crew_state_round_finish: the stale scan just completed. If no read was refused
+# by THIS cycle's deadline, every crew has been tried in the round, so it ends.
+crew_state_round_finish() {
+  [ -e "$STATE/.crew-state-round-incomplete" ] || return 0
+  [ "$(cat "$STATE/.crew-state-round-incomplete" 2>/dev/null)" != "$FM_CREW_STATE_DEADLINE" ] || return 0
+  rm -f "$STATE/.crew-state-round-incomplete"
 }
 
 # watcher_progress_beat: refresh the liveness beacon at a completed-work
@@ -2804,8 +2813,9 @@ while :; do
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
   # No new bounded crew-state read starts after this cycle's read-admission
-  # deadline, so a pass over many parked or held crews on a slow drive cannot
-  # keep starting reads. Mid-cycle the beacon moves only at completed-work
+  # deadline, except the cycle's first eligible read, which is always admitted
+  # so every cycle makes progress; a pass over many parked or held crews on a
+  # slow drive therefore cannot keep starting reads. Mid-cycle the beacon moves only at completed-work
   # checkpoints (watcher_progress_beat), never during a blocked operation. Not
   # exported: the readers run in this shell's own subshells, and a detached
   # child outliving the cycle must not inherit it.
@@ -3432,6 +3442,7 @@ EOF
       fi
     fi
   done < <(recorded_windows)
+  crew_state_round_finish
   crew_state_unknown_report
 
   # Heartbeat: the watcher runs a cheap fleet-scan at a regular cadence no matter

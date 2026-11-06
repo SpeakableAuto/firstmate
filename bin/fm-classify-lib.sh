@@ -69,23 +69,33 @@ FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-crew-state.sh}"
 # because a zero bound disables the timeout instead of tightening it.
 # FM_CREW_STATE_DEADLINE, when a caller sets it to an epoch, is a read-admission
 # deadline: no new read starts at or past it (a read already running keeps its
-# own bound).
-# FM_CREW_STATE_OWN_STATE, when a caller sets it to its state directory, adds two
+# own bound), except that with FM_CREW_STATE_OWN_STATE set the first eligible
+# read of a cycle is admitted even after the deadline (see coverage below), so
+# one read of up to FM_CREW_STATE_READ_SECS can start late. It is not a bound on
+# the whole scan.
+# FM_CREW_STATE_OWN_STATE, when a caller sets it to its state directory, adds
 # protections for a caller that reads repeatedly (the watcher):
 #   - ownership: the read runs through fm_progress_audit_run
 #     (bin/fm-progress-audit-bound-lib.sh) in slot crew-state-<id>, so a reader
 #     that survives its kill in uninterruptible I/O keeps its ownership record,
 #     and no second read for that crew starts until the first is gone; nothing
 #     here signals a recorded process;
-#   - nested readers: fm_nm_bounded (bin/fm-nm-run-lib.sh) gives its own child
-#     a separate process group the outer kill cannot reach, so the read exports
-#     FM_NM_GROUP_RECORD=.crew-state-nested-<slot> and that runner appends each
-#     group it creates; the file lives outside the reclaimable slot, and no new
-#     read of that crew starts while any recorded group is still alive;
+#   - nested readers: the reader's own bounded calls (fm_run_timed in
+#     bin/fm-timeout-lib.sh, fm_nm_bounded in bin/fm-nm-run-lib.sh) give their
+#     children process groups the outer kill cannot reach, so the read sets
+#     FM_TIMEOUT_GROUP_RECORD=.crew-state-nested-<slot>, and each such child
+#     records its group there before it leaves the reader's group or runs, or
+#     does not run at all. The file lives outside the reclaimable slot, and no
+#     new read of that crew starts while any recorded group is still alive.
+#     The read also sets FM_CREW_STATE_NO_FORGE=1: the watcher's consumers use
+#     only the state and source, never the passed-run PR detail a forge read
+#     would add;
 #   - retry backoff: a timed-out read stamps .crew-state-backoff-<id>, and that
 #     crew is not read again for FM_CREW_STATE_RETRY_SECS (default 300);
 #   - coverage: a read refused by the admission deadline marks the round
-#     incomplete (.crew-state-round-incomplete). The watcher keeps the round
+#     incomplete (.crew-state-round-incomplete, holding that cycle's deadline).
+#     The marker stays until a stale scan completes with no refusal, so a cycle
+#     that wakes or restarts early keeps the round. The watcher keeps the round
 #     (.crew-state-round) while the previous cycle left it incomplete, and in
 #     such a catch-up cycle a crew already tried in this round
 #     (.crew-state-tried-<slot>, written by every admitted read) is deferred at
@@ -119,7 +129,7 @@ crew_state_read() {  # <id>
       # every cycle makes progress however long its earlier work took.
       if [ "$now" -ge "$((10#$deadline))" ] \
         && { [ -z "$own" ] || [ "$(cat "$own/.crew-state-cycle-read" 2>/dev/null)" = "$deadline" ]; }; then
-        [ -z "$own" ] || : > "$own/.crew-state-round-incomplete" 2>/dev/null || true
+        [ -z "$own" ] || printf '%s\n' "$deadline" > "$own/.crew-state-round-incomplete" 2>/dev/null || true
         return 1
       fi
       ;;
@@ -154,7 +164,7 @@ crew_state_read() {  # <id>
     printf '%s\n' "$deadline" > "$own/.crew-state-cycle-read" 2>/dev/null || true
     rc=0
     tmp=$(fm_progress_audit_run "$own" "$slot" "$secs" \
-      env "FM_NM_GROUP_RECORD=$nested" "$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || rc=$?
+      env "FM_TIMEOUT_GROUP_RECORD=$nested" FM_CREW_STATE_NO_FORGE=1 "$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || rc=$?
     if fm_timed_out "$rc"; then
       printf '%s\n' "$now" > "$stamp" 2>/dev/null || true
       return 1

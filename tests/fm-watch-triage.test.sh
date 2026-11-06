@@ -7026,6 +7026,119 @@ working: still parked at that gate'
   pass "an unavailable parked-gate read holds the escalation and keeps the wedge timer and history"
 }
 
+# Registration interrupted after fork: the record cannot be written (a FIFO no
+# one reads blocks the open), the outer bound fires, and the nested command must
+# never have run outside the outer group, for both nested runners.
+test_interrupted_group_registration_never_runs() {
+  local dir fifo mark runner started record
+  dir=$(make_case crew-state-registration); fifo="$dir/record.fifo"
+  mkfifo "$fifo"
+  # nested_run <record> <runner> <mark>: inside an outer 2s bound, start a 30s
+  # nested bounded command that marks when it runs. As in crew_state_read, the
+  # record is set for the bounded reader only, not for the outer bound.
+  nested_run() {
+    bash -c '
+      . "$1/bin/fm-timeout-lib.sh"
+      fm_run_timed 2 env FM_TIMEOUT_GROUP_RECORD="$4" bash -c '\''
+        . "$3/bin/fm-timeout-lib.sh"; . "$3/bin/fm-nm-run-lib.sh"
+        if [ "$1" = fm_nm_bounded ]; then
+          fm_nm_bounded "$PWD" 30 sh -c "touch \"\$0\"; sleep 30" "$2"
+        else
+          fm_run_timed 30 sh -c "touch \"\$0\"; sleep 30" "$2"
+        fi
+      '\'' _ "$2" "$3" "$1"' _ "$ROOT" "$2" "$3" "$1" >/dev/null 2>&1
+  }
+  for runner in fm_nm_bounded fm_run_timed; do
+    # Control: with a writable record the nested command runs, escapes the
+    # outer bound, and its group is the one recorded.
+    record="$dir/record-$runner"
+    nested_run "$record" "$runner" "$dir/control-$runner"
+    sleep 1
+    [ -e "$dir/control-$runner" ] || fail "$runner: control: the nested command never ran"
+    read -r started < "$record" || fail "$runner: control: no group was recorded"
+    kill -0 -- "-$started" 2>/dev/null || fail "$runner: control: the recorded group is not the escaped one"
+    kill -KILL -- "-$started" 2>/dev/null   # the test's own escaped group
+    # Interrupted: the record cannot be written, the outer bound fires, and the
+    # nested command must never run.
+    mark="$dir/ran-$runner"
+    started=$(date +%s)
+    nested_run "$fifo" "$runner" "$mark"
+    [ "$(( $(date +%s) - started ))" -lt 10 ] || fail "$runner: the outer bound did not end the blocked registration"
+    sleep 1
+    [ ! -e "$mark" ] || fail "$runner: the nested command ran although its group was never recorded"
+  done
+  rm -f "$fifo"
+  pass "a nested group whose registration is interrupted never runs its command"
+}
+
+# The watcher's owned read runs the reader with the forge lookup off and the
+# nested-group record on.
+test_owned_read_skips_the_forge_and_records_groups() {
+  local dir state fakebin log got
+  dir=$(make_case crew-state-no-forge); state="$dir/state"; fakebin="$dir/fakebin"; log="$dir/env.log"
+  cat > "$fakebin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'no_forge=%s record=%s\n' "${FM_CREW_STATE_NO_FORGE:-}" "${FM_TIMEOUT_GROUP_RECORD:-}" >> "$FM_TEST_ENV_LOG"
+printf '%s\n' 'state: done · source: run-step · run passed: PR state unknown (forge read skipped)'
+SH
+  chmod +x "$fakebin/fm-crew-state.sh"
+  got=$(FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_CREW_STATE_OWN_STATE="$state" FM_TEST_ENV_LOG="$log" bash -c '
+    . "$1/bin/fm-progress-audit-bound-lib.sh"; . "$1/bin/fm-classify-lib.sh"; crew_absorb_class done' _ "$ROOT")
+  [ "$got" = none ] || fail "a done verdict without forge detail did not class none (got $got)"
+  grep -Fx "no_forge=1 record=$state/.crew-state-nested-crew-state-done" "$log" >/dev/null \
+    || fail "the owned read did not turn the forge lookup off and the group record on: $(cat "$log")"
+  pass "the watcher's owned read skips the forge lookup and records nested groups"
+}
+
+# An early wake after a budget-limited scan must not discard the incomplete
+# round: the restarted watcher wakes on a pending status before its stale scan,
+# and the round, its marker and catch-up all survive for the next watcher.
+test_incomplete_round_survives_an_early_wake() {
+  local dir state fakebin out capture_file n i round_before
+  dir=$(make_case crew-state-round-restart); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  selective_crew_state "$fakebin"
+  printf 'finished, awaiting review' > "$capture_file"
+  for n in hunga zok; do
+    printf 'window=test:fm-%s\nkind=ship\n' "$n" > "$state/$n.meta"
+    printf 'done: PR https://example.test/pr/%s\n' "$n" > "$state/$n.status"
+    printf '%s' "$(seen_sig "$state/$n.status")" > "$state/.seen-${n}_status"
+    printf '%s' "$(hash_text 'finished, awaiting review')" > "$state/.hash-test_fm-$n"
+    printf '1\n' > "$state/.count-test_fm-$n"
+  done
+  date +%s > "$state/.crew-state-unavailable"
+  round_watch() {
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOWS="$(printf 'fm-hunga\nfm-zok')" \
+      FM_FAKE_TMUX_CAPTURE="$capture_file" FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_STATE_OVERRIDE="$state" \
+      FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_CREW_STATE='state: done · source: status-log · PR ready' \
+      FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+      FM_CREW_STATE_READ_SECS=1 FM_CREW_STATE_CYCLE_BUDGET_SECS=1 FM_CREW_STATE_RETRY_SECS=1 "$WATCH" >> "$out" &
+    HUNG_PID=$!
+  }
+  # Watcher A: its first scan reads the hung crew, runs out of budget and
+  # leaves the trailing crew unread.
+  round_watch
+  i=0
+  while [ ! -e "$state/.crew-state-round-incomplete" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  reap "$HUNG_PID"
+  [ -e "$state/.crew-state-round-incomplete" ] || fail "fixture: the budget-limited scan left no incomplete round"
+  round_before=$(cat "$state/.crew-state-round")
+  # Watcher B: a pending captain-relevant status wakes it before its stale scan.
+  printf 'window=test:fm-sig\nkind=ship\n' > "$state/sig.meta"
+  printf 'needs-decision: pick a release target\n' > "$state/sig.status"
+  round_watch
+  wait_for_exit "$HUNG_PID" 100 || { reap "$HUNG_PID"; fail "the restarted watcher did not wake on the pending status"; }
+  # Any ordinary wake before the stale scan finishes is the case (here the
+  # re-arm notice after A was stopped, or the pending status); a completed
+  # scan would instead have read the trailing crew and surfaced it.
+  [ -s "$out" ] || fail "fixture: the restarted watcher exited without a wake"
+  grep -F 'stale: test:fm-zok' "$out" >/dev/null && fail "fixture: the restarted watcher completed its scan"
+  [ -e "$state/.crew-state-round-incomplete" ] || fail "an early wake discarded the incomplete round"
+  [ "$(cat "$state/.crew-state-round")" = "$round_before" ] || fail "an early wake started a new round"
+  [ -e "$state/.crew-state-catchup" ] || fail "an early wake left catch-up off"
+  pass "an incomplete read round survives an early wake and restart until a scan completes"
+}
+
 # CI's stock macOS Bash lane sets FM_TEST_ONLY to run just the bash-3.2
 # churn-deferral regression. The rest of this file is not a 3.2 snapshot suite.
 if [ -n "${FM_TEST_ONLY:-}" ]; then
@@ -7187,3 +7300,6 @@ test_nested_reader_group_blocks_the_next_read
 test_crew_state_helper_failure_is_unknown
 test_coverage_outlasts_expiring_backoffs
 test_unavailable_gate_read_keeps_the_wedge_timer
+test_interrupted_group_registration_never_runs
+test_owned_read_skips_the_forge_and_records_groups
+test_incomplete_round_survives_an_early_wake

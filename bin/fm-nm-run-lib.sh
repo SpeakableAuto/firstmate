@@ -27,21 +27,21 @@ fm_nm_bounded() {  # <dir> <timeout_secs> <command> <args...>
   elif command -v gtimeout >/dev/null 2>&1; then have_timeout=gtimeout
   elif command -v perl >/dev/null 2>&1; then have_timeout=perl
   fi
-  # FM_NM_GROUP_RECORD, when set (bin/fm-classify-lib.sh crew_state_read), names
-  # a file that receives the id of the process group each mechanism creates
-  # here: an enclosing bound's kill cannot reach that group, so its owner must
-  # know it exists. Nothing reads the file to signal anything.
-  if [ -n "${FM_NM_GROUP_RECORD:-}" ] && { [ "$have_timeout" = timeout ] || [ "$have_timeout" = gtimeout ]; }; then
-    # GNU timeout leads its own group; record its pid, which is that group.
-    ( cd "$dir" && { "$have_timeout" "$timeout_secs" "$@" 0<&0 & nm_pid=$!
-      printf '%s\n' "$nm_pid" >> "$FM_NM_GROUP_RECORD" 2>/dev/null || true
-      wait "$nm_pid"; } )
+  # FM_TIMEOUT_GROUP_RECORD, when set (bin/fm-timeout-lib.sh owns the contract,
+  # bin/fm-classify-lib.sh crew_state_read sets it), receives the id of the
+  # process group each mechanism creates here, written before that group leaves
+  # this one or runs the command; if it cannot be written nothing runs (125).
+  if [ -n "${FM_TIMEOUT_GROUP_RECORD:-}" ] && { [ "$have_timeout" = timeout ] || [ "$have_timeout" = gtimeout ]; }; then
+    # The bash that records its pid execs GNU timeout, which leads its group.
+    # shellcheck disable=SC2016  # Expanded by the child shell.
+    ( cd "$dir" && bash -c 'printf "%s\n" "$$" >> "$FM_TIMEOUT_GROUP_RECORD" || exit 125; exec "$@"' _ \
+      "$have_timeout" "$timeout_secs" "$@" )
     return
   fi
   case "$have_timeout" in
     timeout)  ( cd "$dir" && timeout "$timeout_secs" "$@" ) ;;
     gtimeout) ( cd "$dir" && gtimeout "$timeout_secs" "$@" ) ;;
-    perl)     ( cd "$dir" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } setpgrp($pid, $pid); if (my $rec = $ENV{FM_NM_GROUP_RECORD}) { if (open(my $fh, ">>", $rec)) { print $fh "$pid\n"; close $fh } } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$timeout_secs" "$@" ) ;;
+    perl)     ( cd "$dir" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { if (my $rec = $ENV{FM_TIMEOUT_GROUP_RECORD}) { open(my $fh, ">>", $rec) or exit 125; print {$fh} "$$\n" or exit 125; close($fh) or exit 125 } setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$timeout_secs" "$@" ) ;;
     *)        return 1 ;;
   esac
 }
