@@ -1,5 +1,19 @@
 # Changes
 
+## 7 November 2026: a stalled machine drive refuses placement within seconds
+
+PR: https://github.com/SpeakableAuto/firstmate/pull/64
+Placement checks the machine drive (mounted, writable, its required folders, free space, the worktree pool root) before a crew starts, and those reads had no time limit; when the drive stalled, the check waited for an hour and a half and nothing could start.
+Every drive and data-volume read in placement now runs in a separate short-lived process with a 10-second limit (`FM_PLACEMENT_DRIVE_SECS`); on the limit it is stopped and placement refuses with the existing "required machine drive unavailable" reason, so starting a crew and choosing where it runs both move on.
+A reader that cannot be stopped, as can happen with a drive stuck in the operating system, is left behind rather than waited on.
+When a home has a worktree slot cap, spawn also counts and, at the cap, clears the pool's old slots on the drive before placement; both now have the same 10-second limit (`FM_WORKTREE_SLOTS_READ_SECS`) and refuse naming the drive.
+Within one start attempt the first check that hits the limit marks the attempt, so the later checks refuse at once: a stalled drive costs one start about 11 seconds, with or without a slot cap, and the next attempt checks the drive afresh.
+Restarting a crew whose task folder is on the machine drive now checks that folder first under the same limit, so a stalled drive refuses the restart before anything reads the folder or stops the old crew.
+Watch for repeated drive-unavailable refusals: they mean the drive is stalled, which this does not fix, and each start attempt still spends up to 10 seconds finding that out.
+A reader stuck in the operating system can outlive its check; this does not clear it.
+A slot clear stopped by the limit can leave that slot marked as being deleted in the pool's record (Treehouse 2.1.1 marks it before deleting), with the copy itself still intact; the slot count keeps it as held and clearing skips it until Treehouse drops the mark.
+Deployed: no; no operating home was changed.
+
 ## 7 November 2026: bound crew-state reads in the watcher's stale scan
 
 PR: https://github.com/SpeakableAuto/firstmate/pull/63

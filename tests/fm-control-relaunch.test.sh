@@ -2787,6 +2787,79 @@ test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it() {
   pass "relaunch re-reads the backlog item instead of blindly re-running the transition"
 }
 
+# --- a recorded copy on a stalled machine drive ----------------------------
+
+# stall_drive_case <case-dir>: the case's directory is the configured machine
+# drive and its task copy stops answering. Python reads of the copy block in
+# the shared stalled-drive fixture; the case's git blocks any command naming
+# the copy in a real kernel read for at most 30s, so an unbounded relaunch
+# shows as a 30s wait rather than hanging this suite.
+stall_drive_case() {
+  local dir=$1
+  mkdir -p "$dir/home/config"
+  printf '{"version":1,"drive":"%s"}\n' "$dir" > "$dir/home/config/crew-placement.json"
+  mkfifo "$dir/never-written"
+  : > "$dir/stall.log"
+  cat > "$dir/fakebin/git" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" $FM_TEST_STALL_PREFIX "*|*" $FM_TEST_STALL_PREFIX/"*)
+    printf '%s git\n' "$$" >> "$FM_TEST_STALL_LOG"
+    exec 3<> "$FM_TEST_STALL_FIFO"
+    read -r -t 30 -u 3 _ || true
+    exit 128 ;;
+esac
+exec "$FM_REAL_GIT" "$@"
+SH
+  chmod +x "$dir/fakebin/git"
+}
+
+stall_env() {  # <case-dir> <command...>
+  local dir=$1; shift
+  FM_REAL_GIT=$(command -v git) PYTHONPATH="$ROOT/tests/fixtures/stalled-drive" \
+    FM_TEST_STALL_PREFIX="$dir/wt" FM_TEST_STALL_FIFO="$dir/never-written" \
+    FM_TEST_STALL_LOG="$dir/stall.log" FM_PLACEMENT_DRIVE_SECS=2 "$@"
+}
+
+assert_stall_refused() {  # <case-dir> <label> <rc> <elapsed> <out>
+  local dir=$1 label=$2 rc=$3 elapsed=$4 out=$5 reader
+  printf '%s: exit=%s elapsed=%ss\n' "$label" "$rc" "$elapsed"
+  expect_code 1 "$rc" "$label should refuse"$'\n'"$out"
+  assert_contains "$out" "required machine drive unavailable" "$label should name the drive refusal"
+  [ "$elapsed" -le 8 ] || fail "$label took ${elapsed}s, not the 2s drive bound"
+  [ -s "$dir/stall.log" ] || fail "$label never reached the stalled copy"
+  if grep -q ' git$' "$dir/stall.log"; then fail "$label read the copy through git before refusing"; fi
+  sleep 0.5
+  while read -r reader _; do
+    if kill -0 "$reader" 2>/dev/null; then fail "$label left blocked reader $reader running"; fi
+  done < "$dir/stall.log"
+  [ -z "$(cat "$dir/fake/literal")" ] || fail "$label must deliver no launch bytes"
+}
+
+test_relaunch_refuses_a_copy_on_a_stalled_drive_within_the_bound() {
+  local dir out rc started
+  dir=$(new_case stalled-control rl90)
+  add_ship_task "$dir" rl90 claude
+  stall_drive_case "$dir"
+  started=$(date +%s)
+  out=$(stall_env "$dir" run_control "$dir" rl90 relaunch --note "x"); rc=$?
+  assert_stall_refused "$dir" "control relaunch on a stalled copy" "$rc" "$(( $(date +%s) - started ))" "$out"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a stalled copy must not stop the agent"
+  pass "fm-control relaunch: a copy on a stalled machine drive refuses within the bound, before the agent is touched"
+}
+
+test_spawn_relaunch_refuses_a_copy_on_a_stalled_drive_within_the_bound() {
+  local dir out rc started
+  dir=$(new_case stalled-spawn rl91)
+  add_ship_task "$dir" rl91 claude
+  printf 'zsh' > "$dir/fake/command"
+  stall_drive_case "$dir"
+  started=$(date +%s)
+  out=$(stall_env "$dir" run_spawn "$dir" rl91 --relaunch --harness claude); rc=$?
+  assert_stall_refused "$dir" "direct spawn relaunch on a stalled copy" "$rc" "$(( $(date +%s) - started ))" "$out"
+  pass "fm-spawn relaunch: a copy on a stalled machine drive refuses within the bound"
+}
+
 test_relaunch_moves_a_drifted_item_back_in_flight() {
   local dir out rc=0
   command -v tasks-axi >/dev/null 2>&1 || {
@@ -2936,3 +3009,5 @@ test_herdr_reclaim_of_a_secondmate_names_its_own_owner
 test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
+test_relaunch_refuses_a_copy_on_a_stalled_drive_within_the_bound
+test_spawn_relaunch_refuses_a_copy_on_a_stalled_drive_within_the_bound
